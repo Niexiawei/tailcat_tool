@@ -1,6 +1,7 @@
 package core
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -84,13 +85,6 @@ func TestNormalizeRelayReject(t *testing.T) {
 	}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func TestNormalizeRelayRegionLimits(t *testing.T) {
 	t.Run("128 regions accepted", func(t *testing.T) {
 		var sb strings.Builder
@@ -99,7 +93,7 @@ func TestNormalizeRelayRegionLimits(t *testing.T) {
 			if i > 1 {
 				sb.WriteString(",")
 			}
-			sb.WriteString(`"` + itoa(i) + `":{"RegionID":` + itoa(i) + `,"Nodes":[{"Name":"n","RegionID":` + itoa(i) + `,"HostName":"h.example"}]}`)
+			sb.WriteString(`"` + strconv.Itoa(i) + `":{"RegionID":` + strconv.Itoa(i) + `,"Nodes":[{"Name":"n","RegionID":` + strconv.Itoa(i) + `,"HostName":"h.example"}]}`)
 		}
 		sb.WriteString(`}}`)
 		if _, err := NormalizeRelay(sb.String()); err != nil {
@@ -113,7 +107,7 @@ func TestNormalizeRelayRegionLimits(t *testing.T) {
 			if i > 1 {
 				sb.WriteString(",")
 			}
-			sb.WriteString(`"` + itoa(i) + `":{"RegionID":` + itoa(i) + `,"Nodes":[{"Name":"n","RegionID":` + itoa(i) + `,"HostName":"h.example"}]}`)
+			sb.WriteString(`"` + strconv.Itoa(i) + `":{"RegionID":` + strconv.Itoa(i) + `,"Nodes":[{"Name":"n","RegionID":` + strconv.Itoa(i) + `,"HostName":"h.example"}]}`)
 		}
 		sb.WriteString(`}}`)
 		if _, err := NormalizeRelay(sb.String()); err == nil {
@@ -127,25 +121,13 @@ func TestNormalizeRelayRegionLimits(t *testing.T) {
 			if i > 0 {
 				sb.WriteString(",")
 			}
-			sb.WriteString(`{"Name":"n` + itoa(i) + `","RegionID":1,"HostName":"h.example"}`)
+			sb.WriteString(`{"Name":"n` + strconv.Itoa(i) + `","RegionID":1,"HostName":"h.example"}`)
 		}
 		sb.WriteString(`]}}}`)
 		if _, err := NormalizeRelay(sb.String()); err == nil {
 			t.Fatal("33 nodes accepted")
 		}
 	})
-}
-
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	var digits []byte
-	for i > 0 {
-		digits = append([]byte{byte('0' + i%10)}, digits...)
-		i /= 10
-	}
-	return string(digits)
 }
 
 func TestRelayOfficialHasNoMap(t *testing.T) {
