@@ -25,6 +25,7 @@ Swift 原版在 `tailcat-tool-swift/`（独立 git 仓库，被本仓库 git-ign
 6. **面向用户的文案是中文**，集中在 `internal/core/messages.go` 与各视图里，测试逐字断言。改文案要同步改测试。
 7. **不要引入外部 `tailcat` 进程、不要解析它的 stderr、不要恢复 socat/`bridges/` 那套 CLI 模式**——那条链路已被移除，理由是它需要外部二进制且端口就绪存在 5 秒竞态。
 8. **用户可见的改动必须写进 `docs/CHANGELOG.md`，且与代码在同一次提交里。** 规则见下文「变更记录」。
+9. **GUI 优先用 onevra 的 `components`，不要自己拼。** 规则见下文「GUI 组件优先级」。
 
 ## 开发命令
 
@@ -71,6 +72,43 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 - **视图**：`ui.NewTester(vm.SidebarView, 280, 720)`，用 `HasText` / `Click` / `Texts` 断言；不要依赖像素。
 - **无网络**：探测测试注入 `ManagerOptions.Prober`；转发测试注入 `ChannelOpener`；任何测试都不许真连 DERP。
 
+## GUI 组件优先级
+
+**任何界面元素，先查 onevra 有没有现成组件；有就必须用，不许用 `ui.Row` / `ui.Column` / `ui.ButtonBase` 自己拼一个等价物。**
+
+升级路径固定：`onevra components` → `onevra shells/theme/icons` → mygo `ui` 基元。只有第三层才是合法退路，且必须在提交信息里写清"为什么没有现成组件、缺什么能力"。
+
+| 需要 | 用 |
+|---|---|
+| 单选（互斥选项） | `components.Radio` |
+| 分组折叠 / 手风琴 | `components.Accordion`（`group.Item`） |
+| 单块折叠 | `components.Collapsible` |
+| 开关 | `components.Switch` |
+| 复选 | `components.Checkbox` |
+| 分段切换 | `components.Tabs` + `TabsSegmented` |
+| 按钮 | `components.Button`（`ButtonPrimary`/`ButtonSecondary`/`ButtonOutline`/`ButtonGhost`） |
+| 图标按钮 | `components.IconButton` |
+| 表格 | `components.Table` / `TableVirtualized` |
+| 下拉选择 | `components.Select` / `NativeSelect` / `Picker` |
+| 数值 | `components.NumberInput` / `Stepper` / `Slider` |
+| 文本输入 | `components.TextBox` |
+| 提示 | `components.Badge` / `Toast` / `Tooltip` |
+| 加载 | `components.Spinner` / `Skeleton` |
+| 进度 | `components.Progress` |
+| 弹窗 | `components.Dialog`（内联渲染，不开独立窗口） |
+| 图标 | `onevra/icons/lucide` |
+| 滚动区 | `components.ScrollView`；整块布局滚动用 `ui.Scroll` |
+
+写新视图前的三步：
+
+1. `ls $(go env GOMODCACHE)/github.com/oneo-me/onevra/source@*/components` 看清单，`go doc` 看签名与选项；
+2. 在 `examples/gallery` 里搜同名 `control_*.go`，照官方用法写；
+3. 用到的新组件同时加进 `internal/compat/compat_test.go` 的编译期断言，否则上游改签名 CI 不会红。
+
+**反例（已发生过，不要重复）**：用两个 ghost 按钮加 `●`/`○` 冒充 radio；用手写 `sectionHeader` 文字冒充分组；把 footer 塞进列表末尾而不是用 `shell.LeftToolbar`。
+
+**布局约定**：`shells/sidebar` 的 `Left` / `Content` 必须用 `sidebar.HeaderHeight(c)` 作上内边距（否则被浮动标题栏压住）；固定底栏用 `LeftToolbar`，不要让列表和 footer 抢高度；行式元素用 `FillWidth()`，**`Fill()` 会同时占满高度**，行高失控通常就是它。
+
 ## 常见改动 cookbook
 
 **给设备加一个字段**：`internal/core/session.go` 的 `Profile`（JSON tag 用 camelCase，可空加 `omitempty`）→ `SaveDeviceRequest`/`SaveTemporaryDeviceRequest` → `SaveDevice`/`saveDirectDevice` 赋值 → 编辑器 `EditorInput`/`EditorValues` 与 `Validate` → `internal/app/editor.go` 的字段与 `openEditor`。迁移兼容：未知字段被忽略，不需要写升级代码。
@@ -90,6 +128,8 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 - **不要用别人的本地端口**：`portChanged` 里的 P2 只作线索展示，不接管。
 - **不要删/覆盖已存在的身份文件**（`TestIdentityNeverReplacesCorruptFile`）。
 - **不要在持有 `m.mu` 时调用会再上锁的方法**（`detectInterference`、`recordTask`、`validateTarget` 之类），历史上这里死锁过两次。
+- **不要自己实现 onevra 已有的组件**（radio、accordion、switch、tabs、table、dialog…）。见「GUI 组件优先级」。
+- **行式元素不要用 `Fill()`**：它同时占满宽高，会让列表行被拉伸。用 `FillWidth()`。
 - **不要 `panic` 来表达用户错误**：用 `core.Error` / `core.Errorf`，它们是面向用户的文案。
 
 ## 提交
@@ -118,6 +158,7 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 - `docs/build-notes.md`：依赖版本、体积与构建耗时实测，升级依赖后要更新。
 - `docs/CHANGELOG.md`：面向用户的变更记录，**每次改行为都要加一条**（见「变更记录」）。
 - `docs/superpowers/plans/2026-11-15-tailcat-manager-go-port.md`：原始实施计划（历史文档，任务编号已不代表当前结构）。
+- `docs/superpowers/plans/2026-11-15-gui-layout-and-direct-device-fixes.md`：本轮 GUI 布局与直连设备显示的修复方案（T0–T6）。
 - `.superpowers/sdd/<plan>/progress.md`：执行账本（git-ignore），记录每一处偏离计划的裁决。
 
 ## 当前已知缺口
