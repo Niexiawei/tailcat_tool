@@ -73,7 +73,8 @@ func (vm *ViewModel) consoleHint(session core.Session) string {
 
 // newConsole builds the console for one transport state.
 func (vm *ViewModel) newConsole(session core.Session, key string) (*consoleHost, error) {
-	if key != "idle" {
+	// The demo never runs real commands, so it gets the idle console too.
+	if key != "idle" && !vm.Demo {
 		if adbPath := vm.Manager.Tools().FindToolPath(core.ToolADB, vm.Locate); adbPath != "" {
 			term, err := newTerminal(terminal.Options{
 				Command: []string{adbPath, "-s", session.Serial, "shell"},

@@ -9,6 +9,7 @@ import (
 	"net"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
 	"github.com/oneo-me/onevra/source/icons/lucide"
@@ -51,6 +52,11 @@ var (
 	_ = ui.Scroll
 	_ = ui.Element.FillWidth
 	_ = ui.Element.Grow
+	_ = terminal.New
+	_ = terminal.View
+	_ = ui.NewRouter
+	_ = (*ui.Router).Push
+	_ = (*ui.Router).View
 )
 
 // onevra: shells, theme, components and icons.
@@ -63,6 +69,7 @@ var (
 	_                   = components.Accordion
 	_                   = (*components.AccordionGroup).Item
 	_                   = sidebar.HeaderHeight
+	_                   = components.Breadcrumbs
 	_                   = components.Switch
 	_                   = components.Tabs
 	_                   = components.TabsSegmented
