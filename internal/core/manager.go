@@ -52,6 +52,8 @@ type Manager struct {
 	retryCounts map[uuid.UUID]int
 	nextRetries map[uuid.UUID]time.Time
 	taskCancels map[uuid.UUID]context.CancelFunc
+	taskDone    map[uuid.UUID]chan struct{}
+	pinger      *Pinger
 
 	notice              string
 	nextTemporaryNumber int
@@ -113,6 +115,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		retryCounts:     map[uuid.UUID]int{},
 		nextRetries:     map[uuid.UUID]time.Time{},
 		taskCancels:     map[uuid.UUID]context.CancelFunc{},
+		taskDone:        map[uuid.UUID]chan struct{}{},
 		monitorInterval: interval,
 		connectPoll:     pollInterval,
 		ctx:             ctx,
@@ -130,6 +133,7 @@ func NewManager(opts ManagerOptions) *Manager {
 	if m.forwarder == nil {
 		m.forwarder = &Forwarder{}
 	}
+	m.pinger = &Pinger{Identities: m.identities}
 	for _, p := range m.profiles {
 		m.sessions[p.ID] = NewSession()
 	}
@@ -333,12 +337,12 @@ func (m *Manager) Connect(ctx context.Context, id uuid.UUID) error {
 	m.notify()
 	m.mu.Unlock()
 
-	oldJobs := m.cancelDeviceTasks(id)
+	oldTasks := m.cancelDeviceTasks(id)
 
 	if previous != nil {
 		_ = previous.conn.Close(ctx)
 	}
-	waitFor(oldJobs)
+	waitDones(oldTasks)
 	if addrErr != nil {
 		return m.failConnect(id, generation, addrErr)
 	}
@@ -486,7 +490,7 @@ func (m *Manager) Disconnect(ctx context.Context, id uuid.UUID) {
 	m.mu.Unlock()
 
 	jobs := m.cancelDeviceTasks(id)
-	waitFor(jobs)
+	waitDones(jobs)
 
 	if runtime != nil {
 		_ = runtime.conn.Close(ctx)
@@ -694,25 +698,30 @@ func (m *Manager) RecheckConnections() {
 	}
 }
 
-func waitFor(cancels []context.CancelFunc) {
-	for _, cancel := range cancels {
-		cancel()
-	}
-}
-
-// cancelDeviceTasks cancels the running tasks of one device.
-func (m *Manager) cancelDeviceTasks(id uuid.UUID) []context.CancelFunc {
+// cancelDeviceTasks cancels the running tasks of one device and returns the
+// channels that close when each task has stopped.
+func (m *Manager) cancelDeviceTasks(id uuid.UUID) []chan struct{} {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var cancels []context.CancelFunc
+	var dones []chan struct{}
 	for i := range m.tasks {
-		if m.tasks[i].DeviceID == id && m.tasks[i].State == TaskRunning {
-			if cancel, ok := m.taskCancels[m.tasks[i].ID]; ok {
-				cancels = append(cancels, cancel)
-			}
+		if m.tasks[i].DeviceID != id || m.tasks[i].State != TaskRunning {
+			continue
+		}
+		if cancel, ok := m.taskCancels[m.tasks[i].ID]; ok {
+			cancel()
+		}
+		if done, ok := m.taskDone[m.tasks[i].ID]; ok {
+			dones = append(dones, done)
 		}
 	}
-	return cancels
+	return dones
+}
+
+func waitDones(dones []chan struct{}) {
+	for _, done := range dones {
+		<-done
+	}
 }
 
 // errNoSuchDevice is returned by helpers when the device vanished mid-flight.

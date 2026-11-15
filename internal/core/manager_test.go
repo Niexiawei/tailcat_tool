@@ -16,20 +16,20 @@ import (
 type fakeRunner struct {
 	mu      sync.Mutex
 	calls   []Command
-	handler func(c Command) (Result, error)
+	handler func(ctx context.Context, c Command) (Result, error)
 }
 
 func (f *fakeRunner) Start(context.Context, Command, func(string)) (*Proc, error) {
 	return nil, Error("Start is not used by these tests")
 }
 
-func (f *fakeRunner) Run(_ context.Context, c Command, onOutput func(string)) (Result, error) {
+func (f *fakeRunner) Run(ctx context.Context, c Command, onOutput func(string)) (Result, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, c)
 	handler := f.handler
 	f.mu.Unlock()
 	if handler != nil {
-		return handler(c)
+		return handler(ctx, c)
 	}
 	return Result{}, nil
 }
@@ -44,7 +44,7 @@ func (f *fakeRunner) commandLog() []string {
 	return out
 }
 
-func (f *fakeRunner) setHandler(h func(c Command) (Result, error)) {
+func (f *fakeRunner) setHandler(h func(ctx context.Context, c Command) (Result, error)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.handler = h
@@ -122,7 +122,7 @@ func newManagerFixture(t *testing.T, opts ...func(*ManagerOptions)) *managerFixt
 		t.Fatal(err)
 	}
 	profile := Profile{ID: id, Name: "E245", RemotePort: 5555}
-	runner := &fakeRunner{handler: func(c Command) (Result, error) {
+	runner := &fakeRunner{handler: func(_ context.Context, c Command) (Result, error) {
 		if contains(c.Args, "get-state") {
 			return Result{Output: "device\n"}, nil
 		}
@@ -205,7 +205,7 @@ func TestConnectRejectsBadAddress(t *testing.T) {
 
 func TestConnectUnauthorized(t *testing.T) {
 	f := newManagerFixture(t)
-	f.runner.setHandler(func(c Command) (Result, error) {
+	f.runner.setHandler(func(_ context.Context, c Command) (Result, error) {
 		if contains(c.Args, "get-state") {
 			return Result{ExitCode: 1, Output: "error: device unauthorized\n"}, nil
 		}
@@ -310,7 +310,7 @@ func TestRetryDelaySchedule(t *testing.T) {
 
 func TestUnauthorizedDoesNotRetry(t *testing.T) {
 	f := newManagerFixture(t, func(o *ManagerOptions) { o.MonitorInterval = 5 * time.Millisecond })
-	f.runner.setHandler(func(c Command) (Result, error) {
+	f.runner.setHandler(func(_ context.Context, c Command) (Result, error) {
 		if contains(c.Args, "get-state") {
 			return Result{ExitCode: 1, Output: "error: device unauthorized\n"}, nil
 		}
@@ -331,7 +331,7 @@ func TestUnauthorizedDoesNotRetry(t *testing.T) {
 
 func TestOfflineRetriesAreBounded(t *testing.T) {
 	f := newManagerFixture(t, func(o *ManagerOptions) { o.MonitorInterval = 5 * time.Millisecond })
-	f.runner.setHandler(func(c Command) (Result, error) {
+	f.runner.setHandler(func(_ context.Context, c Command) (Result, error) {
 		if contains(c.Args, "get-state") {
 			return Result{ExitCode: 1, Output: "error: device offline\n"}, nil
 		}
