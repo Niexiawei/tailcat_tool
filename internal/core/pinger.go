@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -11,6 +12,9 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/key"
 )
+
+// ErrProbeTimeout means the probe got no answer before its deadline.
+var ErrProbeTimeout = Error("探测超时")
 
 // PingOutcome is what one link probe learned.
 type PingOutcome struct {
@@ -97,6 +101,9 @@ func (p *Pinger) Ping(ctx context.Context, deviceID uuid.UUID, address string, s
 	if err != nil {
 		if ctx.Err() != nil {
 			return PingOutcome{}, ErrCancelled
+		}
+		if probeCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
+			return PingOutcome{}, ErrProbeTimeout
 		}
 		return PingOutcome{}, Errorf("链路探测失败：%v", err)
 	}

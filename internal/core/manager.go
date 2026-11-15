@@ -54,6 +54,7 @@ type Manager struct {
 	taskCancels map[uuid.UUID]context.CancelFunc
 	taskDone    map[uuid.UUID]chan struct{}
 	pinger      *Pinger
+	checker     *Checker
 
 	notice              string
 	nextTemporaryNumber int
@@ -134,6 +135,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		m.forwarder = &Forwarder{}
 	}
 	m.pinger = &Pinger{Identities: m.identities}
+	m.checker = NewChecker(m.pinger)
 	for _, p := range m.profiles {
 		m.sessions[p.ID] = NewSession()
 	}
