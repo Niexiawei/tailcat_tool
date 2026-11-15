@@ -38,6 +38,9 @@ func main() {
 			demo = true
 		}
 	}
+	// Every string this app owns is Chinese; this also makes the component
+	// library's own labels (toast close, breadcrumb overflow) Chinese.
+	mygo.App.SetLocale("zh-Hans")
 	mygo.App.WhenReady(func() {
 		env := buildEnvironment()
 		if demo {

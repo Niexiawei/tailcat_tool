@@ -552,3 +552,53 @@ func TestFailedConnectClearsDeviceInformation(t *testing.T) {
 		t.Fatalf("the previous device's identity survived a failed connect: %+v", session)
 	}
 }
+
+// blockingRecorder stalls every history write until released, standing in for
+// a busy SQLite writer.
+type blockingRecorder struct {
+	block chan struct{}
+}
+
+func (b *blockingRecorder) RecordTask(TaskRecord) error { return nil }
+
+func (b *blockingRecorder) RecordLog(LogRecord) error {
+	<-b.block
+	return nil
+}
+
+func (b *blockingRecorder) RecordReachability([]ReachabilityRecord) error { return nil }
+
+func (b *blockingRecorder) RecentTasks(int) ([]Task, error) { return nil, nil }
+
+func (b *blockingRecorder) Close() error { return nil }
+
+func TestSlowRecorderNeverBlocksTheManager(t *testing.T) {
+	block := make(chan struct{})
+	f := newManagerFixture(t, func(o *ManagerOptions) {
+		o.Recorder = &blockingRecorder{block: block}
+	})
+	defer close(block)
+
+	logged := make(chan struct{})
+	go func() {
+		defer close(logged)
+		f.m.log(f.id, "正在建立独立 Tailcat 转发通道")
+	}()
+	select {
+	case <-logged:
+	case <-time.After(2 * time.Second):
+		t.Fatal("logging blocked on the history store")
+	}
+
+	// The window reads the manager lock every frame; it must stay free.
+	read := make(chan struct{})
+	go func() {
+		defer close(read)
+		_ = f.m.Session(f.id)
+	}()
+	select {
+	case <-read:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the manager lock was held by the history store")
+	}
+}

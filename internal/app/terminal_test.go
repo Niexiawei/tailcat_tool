@@ -193,3 +193,44 @@ func TestConsoleKeyFollowsModeAndState(t *testing.T) {
 		t.Fatalf("key = %q, want idle", got)
 	}
 }
+
+func TestADBConsoleErrorPathCompletes(t *testing.T) {
+	vm, _ := newRunnerViewModel(t, func(c core.Command) (core.Result, error) {
+		for _, arg := range c.Args {
+			if arg == "get-state" {
+				return core.Result{Output: "device\n"}, nil
+			}
+		}
+		return core.Result{ExitCode: 1, Output: "adb.exe: unknown command cat"}, nil
+	})
+	profile := vm.Manager.Profiles()[0]
+	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	defer vm.Manager.Disconnect(context.Background(), profile.ID)
+
+	console := newLineConsole("", nil)
+	console.onLine = func(line string) {
+		vm.runADBLine(profile, vm.Manager.Session(profile.ID), console, line)
+	}
+	defer console.Close()
+	readConsole(t, console)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = console.Write([]byte("cat /proc/meminfo\r"))
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a failing adb command hung the console")
+	}
+	if got := readConsole(t, console); !strings.Contains(got, "unknown command") {
+		t.Fatalf("the adb error was not shown: %q", got)
+	}
+	queued := vm.drainToasts()
+	if len(queued) != 1 || queued[0].Type != components.ToastError {
+		t.Fatalf("toasts = %+v", queued)
+	}
+}

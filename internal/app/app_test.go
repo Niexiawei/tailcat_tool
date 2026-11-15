@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo/ui"
@@ -444,4 +445,37 @@ func newRunnerViewModel(t *testing.T, fn func(core.Command) (core.Result, error)
 	})
 	vm := NewViewModel(m, func(string) (string, bool) { return "", false })
 	return vm, func() []string { return runner.calls }
+}
+
+func TestTaskPanelSitsBelowThePage(t *testing.T) {
+	vm := newTestViewModel(t)
+	profile := vm.Manager.Profiles()[0]
+	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	defer vm.Manager.Disconnect(context.Background(), profile.ID)
+	taskID, err := vm.Manager.BeginADBTask(context.Background(), profile.ID, "adb cat", []string{"cat", "/proc/meminfo"}, time.Minute)
+	if err != nil {
+		t.Fatalf("BeginADBTask() error: %v", err)
+	}
+	vm.Manager.WaitTask(taskID)
+
+	vm.OpenDevice(profile.ID)
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	panel, ok := tt.Find("设备任务")
+	if !ok {
+		t.Fatalf("the task panel is missing; texts = %v", tt.Texts())
+	}
+	crumb, ok := tt.Find("我的设备")
+	if !ok {
+		t.Fatalf("the breadcrumb is missing; texts = %v", tt.Texts())
+	}
+	// The panel used to be a second full-height column, so it laid out at the
+	// top and painted over the breadcrumb and the title.
+	if panel.Y < crumb.Y+crumb.H {
+		t.Fatalf("the task panel (y=%.0f) overlaps the page header (y=%.0f h=%.0f)", panel.Y, crumb.Y, crumb.H)
+	}
+	if title, ok := tt.Find("E245"); !ok || title.W == 0 || title.H == 0 {
+		t.Fatalf("the device title was clipped away: %+v", title)
+	}
 }

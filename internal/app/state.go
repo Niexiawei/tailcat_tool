@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/google/uuid"
 	"github.com/oneo-me/onevra/source/components"
@@ -112,7 +111,9 @@ func (vm *ViewModel) queueToast(t ui.Toast) {
 	vm.toasts = append(vm.toasts, t)
 	vm.toastsMu.Unlock()
 	if vm.Invalidate != nil {
-		mygo.RunOnMain(vm.Invalidate)
+		// Window.Invalidate coalesces and posts itself: no round trip to the
+		// main thread, which used to block command goroutines mid-frame.
+		vm.Invalidate()
 	}
 }
 

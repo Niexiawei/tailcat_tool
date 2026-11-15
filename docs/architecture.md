@@ -215,7 +215,7 @@ type Recorder interface {
 | 设备配置、DERP 预设 | `<配置目录>/configuration.json` | 0700 / 0600 | 原子写（临时文件 + rename），pretty 2 空格，`profiles → tools → relayPresets` 字段顺序稳定；拒绝符号链接 |
 | `tc...` 连接地址 | 系统凭据库 | 由系统管理 | macOS Keychain / Windows Credential Manager / Linux Secret Service；上限 2560 字节（Windows 的最小上限，全平台统一） |
 | 设备身份私钥 | `<配置目录>/Identities/<名字>.private.json` | 0700 / 0600 | 名字形如 `<uuid>-connection` / `<uuid>-probe`；格式与 `tailcat --key=` 完全一致 |
-| 历史（任务/日志/连通测试） | `<配置目录>/history.db` | 0600 | SQLite，纯 Go 驱动；删掉即清空历史，不影响使用 |
+| 历史（任务/日志/连通测试） | `<配置目录>/history.db` | 0600 | SQLite，纯 Go 驱动；删掉即清空历史，不影响使用。**写入绝不在管理器锁内进行**：通道日志先进内存队列（容量 256，满则丢弃），由独立协程写库；历史库自己的提交队列满时也直接跳过。界面每帧都要读管理器锁，任何写库都可能在磁盘繁忙时冻结窗口 |
 
 `直连（本地 ADB）` 设备的目标地址（IP:端口 或 USB 序列号）存在配置里——**它不是凭据**；凭据库只放 `tc...`。
 

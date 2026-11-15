@@ -35,7 +35,7 @@ func (vm *ViewModel) OpenMainWindow() *sidebar.Shell {
 func watchRedraws(m interface{ Changed() <-chan struct{} }, window *mygo.Window) {
 	go func() {
 		for range m.Changed() {
-			mygo.RunOnMain(func() { window.Invalidate() })
+			window.Invalidate()
 		}
 	}()
 }

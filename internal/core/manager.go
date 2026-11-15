@@ -41,10 +41,13 @@ type Manager struct {
 	profiles        []Profile
 	temporary       []Profile
 	tempCredentials map[uuid.UUID]string
-	sessions        map[uuid.UUID]Session
-	tasks           []Task
-	relayPresets    []RelayPreset
-	tools           ToolSettings
+	// logs carries channel log records to the recorder off the manager lock,
+	// so a slow history store can never freeze the window.
+	logs         chan LogRecord
+	sessions     map[uuid.UUID]Session
+	tasks        []Task
+	relayPresets []RelayPreset
+	tools        ToolSettings
 
 	generations map[uuid.UUID]uuid.UUID
 	runtimes    map[uuid.UUID]*runtimeState
@@ -109,6 +112,7 @@ func NewManager(opts ManagerOptions) *Manager {
 	}
 	m := &Manager{
 		changed:             make(chan struct{}, 1),
+		logs:                make(chan LogRecord, 256),
 		config:              opts.Config,
 		credentials:         opts.Credentials,
 		identities:          opts.Identities,
@@ -147,7 +151,6 @@ func NewManager(opts ManagerOptions) *Manager {
 		m.forwarder = &Forwarder{}
 	}
 	m.recorder = opts.Recorder
-	m.recorder = opts.Recorder
 	m.pinger = &Pinger{Identities: m.identities}
 	prober := opts.Prober
 	if prober == nil {
@@ -157,7 +160,20 @@ func NewManager(opts ManagerOptions) *Manager {
 	for _, p := range m.profiles {
 		m.sessions[p.ID] = NewSession()
 	}
+	go m.writeLogs()
 	return m
+}
+
+// writeLogs hands queued channel logs to the recorder off the manager lock.
+func (m *Manager) writeLogs() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case record := <-m.logs:
+			_ = m.recorder.RecordLog(record)
+		}
+	}
 }
 
 // Notice is the last one-line message for the UI banner (may be empty).
@@ -315,7 +331,12 @@ func (m *Manager) logLocked(id uuid.UUID, text string) {
 		}
 	})
 	if m.recorder != nil {
-		_ = m.recorder.RecordLog(LogRecord{DeviceID: id, At: at, Text: text})
+		// Non-blocking: this runs under the manager lock, and the UI reads
+		// that lock every frame.
+		select {
+		case m.logs <- LogRecord{DeviceID: id, At: at, Text: text}:
+		default:
+		}
 	}
 }
 

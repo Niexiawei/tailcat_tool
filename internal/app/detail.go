@@ -16,8 +16,12 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 	for _, toast := range vm.drainToasts() {
 		c.AddToast(toast)
 	}
-	vm.routedPage(c)
-	vm.TaskPanel(c)
+	ui.Column(c).Fill().Children(func() {
+		ui.Column(c).FillWidth().Grow(1).Children(func() {
+			vm.routedPage(c)
+		})
+		vm.TaskPanel(c)
+	})
 	vm.EditorView(c)
 	vm.TransferView(c)
 	vm.SettingsView(c)

@@ -86,8 +86,14 @@ func (s *Store) submit(job func(*sql.DB) error) error {
 	if s.closed {
 		return core.Error("历史库已关闭")
 	}
-	s.queue <- job
-	return nil
+	// Never block the caller: history is best effort, and a caller may hold
+	// a lock the window reads every frame.
+	select {
+	case s.queue <- job:
+		return nil
+	default:
+		return core.Error("历史库繁忙，已跳过这条记录")
+	}
 }
 
 // RecordTask stores one task.
