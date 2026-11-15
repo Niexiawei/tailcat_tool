@@ -156,6 +156,7 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 
 - `docs/architecture.md`：架构、状态机、两种连接方式、干预检测、安全设计、**决策记录（含每条的代价）**、已知缺口。改设计前先读第 15、16 节。
 - `docs/build-notes.md`：依赖版本、体积与构建耗时实测，升级依赖后要更新。
+- `docs/ui-and-console.md`：界面布局、路由、内嵌终端、提示与线程模型；**动界面前先读第 2、8、10 节**（槽位约定、锁与线程、陷阱清单）。
 - `docs/CHANGELOG.md`：面向用户的变更记录，**每次改行为都要加一条**（见「变更记录」）。
 - `docs/superpowers/plans/2026-11-15-tailcat-manager-go-port.md`：原始实施计划（历史文档，任务编号已不代表当前结构）。
 - `docs/superpowers/plans/2026-11-15-gui-layout-and-direct-device-fixes.md`：本轮 GUI 布局与直连设备显示的修复方案（T0–T6）。

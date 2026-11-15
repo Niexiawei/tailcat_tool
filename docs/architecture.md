@@ -376,6 +376,7 @@ Swift 版对"用户在本机 adb 里动了我们的连接"是无感的：它只�
 - 顶部窗口操作只在列表页出现；设备页只保留设备自身的动作。
 - 终端页用 `github.com/egoist/mygo/plugins/terminal`（libghostty-vt，运行期加载，无 cgo）。两种模式：**设备 Shell** 已连接时命令是 `adb -s <serial> shell`；**ADB 命令**按行执行任意 adb 子命令，走 `Manager.RunADB`（复用任务机制：超时、脱敏、限流、历史）。未连接时两种模式都挂一个 `lineConsole`（内存 `io.ReadWriteCloser`），它在终端里打印「设备未连接」、本地回显输入、回车时不执行而是打印原因并弹错误提示。
 控制台按「设备 + 连接状态 + 模式」缓存；页面卸载（`Element.OnUnmount`）或程序结束（`Terminal.Done`）时关闭并重建，避免出现 `[Process exited]` 的死终端。
+- 布局槽位、页面路由、内嵌终端、提示机制、线程与锁的细节见 [`ui-and-console.md`](ui-and-console.md)。
 - 视图是**状态的函数**：`ViewModel` 持有选择、表单草稿、对话框开关，管理器是唯一事实来源；`Changed()` → `Invalidate()`。
 - 组件映射：`components.Text/Button/TextBox/Switch/Tabs/Table/Dialog/Icon`、`lucide` 图标、`ui.Column/Row/ButtonBase`。
 - 弹窗（编辑设备、上传下载、工具设置、连通测试、外部干预）用 `components.Dialog` 内联渲染，不是独立系统窗口。
