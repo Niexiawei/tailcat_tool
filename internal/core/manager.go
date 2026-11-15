@@ -55,6 +55,7 @@ type Manager struct {
 	taskDone    map[uuid.UUID]chan struct{}
 	attention   map[uuid.UUID]Attention
 	pinger      *Pinger
+	recorder    Recorder
 	checker     *Checker
 
 	notice              string
@@ -82,7 +83,10 @@ type ManagerOptions struct {
 	Forwarder     ChannelOpener
 	// Prober replaces the link probe; tests inject a fake so no network is
 	// touched.
-	Prober          Prober
+	Prober Prober
+	// Recorder persists tasks, logs and reachability results; nil keeps
+	// everything in memory.
+	Recorder        Recorder
 	Locate          LocateTool
 	MonitorInterval time.Duration
 	// ConnectPollInterval is the delay between get-state polls while
@@ -140,12 +144,14 @@ func NewManager(opts ManagerOptions) *Manager {
 	if m.forwarder == nil {
 		m.forwarder = &Forwarder{}
 	}
+	m.recorder = opts.Recorder
+	m.recorder = opts.Recorder
 	m.pinger = &Pinger{Identities: m.identities}
 	prober := opts.Prober
 	if prober == nil {
 		prober = m.pinger
 	}
-	m.checker = NewChecker(prober)
+	m.checker = NewChecker(prober).WithRecorder(opts.Recorder)
 	for _, p := range m.profiles {
 		m.sessions[p.ID] = NewSession()
 	}
@@ -299,12 +305,16 @@ func (m *Manager) logLocked(id uuid.UUID, text string) {
 	if len(text) > 8192 {
 		text = text[len(text)-8192:]
 	}
+	at := time.Now()
 	m.setStateLocked(id, func(s *Session) {
-		s.Logs = append(s.Logs, SessionLog{At: time.Now(), Text: text})
+		s.Logs = append(s.Logs, SessionLog{At: at, Text: text})
 		if len(s.Logs) > 200 {
 			s.Logs = append(s.Logs[:0], s.Logs[len(s.Logs)-200:]...)
 		}
 	})
+	if m.recorder != nil {
+		_ = m.recorder.RecordLog(LogRecord{DeviceID: id, At: at, Text: text})
+	}
 }
 
 func (m *Manager) log(id uuid.UUID, text string) {
@@ -560,6 +570,9 @@ func (m *Manager) Shutdown(ctx context.Context) {
 	m.tempCredentials = map[uuid.UUID]string{}
 	m.notify()
 	m.mu.Unlock()
+	if m.recorder != nil {
+		_ = m.recorder.Close()
+	}
 }
 
 func (m *Manager) stopMonitorLocked(id uuid.UUID) {

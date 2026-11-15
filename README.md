@@ -34,6 +34,7 @@ go run ./cmd/tailcat-manager --demo
 - 配置：macOS `~/Library/Application Support/TailcatManager/configuration.json`；Linux `${XDG_CONFIG_HOME:-~/.config}/TailcatManager/`；Windows `%AppData%\TailcatManager\`。目录 0700、文件 0600。
 - 连接地址只进系统凭据库，**不写配置文件**。
 - 设备身份：`<配置目录>/Identities/<uuid>-connection.private.json` 与 `-probe.private.json`，格式与 `tailcat --key=` 一致。
+- 历史：`<配置目录>/history.db`（SQLite，纯 Go 驱动 `modernc.org/sqlite`），只存任务、通道日志、连通测试结果；配置、凭据、私钥都不进这个库。删掉它就等于清空历史，不影响使用。
 
 ## 与 Swift 版的差异
 

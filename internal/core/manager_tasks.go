@@ -166,8 +166,8 @@ func (m *Manager) startTask(id uuid.UUID, title string, target operationTarget, 
 	m.taskCancels[taskID] = cancel
 	done := make(chan struct{})
 	m.taskDone[taskID] = done
-	m.notify()
 	m.mu.Unlock()
+	m.recordTask(taskID)
 
 	go func() {
 		defer close(done)
@@ -237,7 +237,6 @@ func tailStringBytes(s string, limit int) string {
 
 func (m *Manager) updateTask(id uuid.UUID, mutate func(*Task)) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	for i := range m.tasks {
 		if m.tasks[i].ID == id {
 			mutate(&m.tasks[i])
@@ -245,6 +244,54 @@ func (m *Manager) updateTask(id uuid.UUID, mutate func(*Task)) {
 		}
 	}
 	m.notify()
+	m.mu.Unlock()
+	m.recordTask(id)
+}
+
+// recordTask writes the task's current state to history when one is wired.
+func (m *Manager) recordTask(id uuid.UUID) {
+	m.mu.Lock()
+	var record TaskRecord
+	found := false
+	for i := range m.tasks {
+		if m.tasks[i].ID == id {
+			task := m.tasks[i]
+			record = TaskRecord{
+				ID: task.ID, DeviceID: task.DeviceID, DeviceName: task.DeviceName,
+				Serial: task.Serial, Title: task.Title, Started: task.Started,
+				Ended: time.Now(), State: task.State, Output: task.Output,
+			}
+			found = true
+			break
+		}
+	}
+	recorder := m.recorder
+	m.mu.Unlock()
+	if found && recorder != nil {
+		_ = recorder.RecordTask(record)
+	}
+}
+
+// LoadHistory seeds the task panel with tasks from a previous run.
+func (m *Manager) LoadHistory(tasks []Task) {
+	if len(tasks) == 0 {
+		return
+	}
+	m.mu.Lock()
+	seen := map[uuid.UUID]bool{}
+	for _, task := range m.tasks {
+		seen[task.ID] = true
+	}
+	for _, task := range tasks {
+		if !seen[task.ID] {
+			m.tasks = append(m.tasks, task)
+		}
+	}
+	for len(m.tasks) > maxTaskHistory {
+		m.tasks = m.tasks[1:]
+	}
+	m.notify()
+	m.mu.Unlock()
 }
 
 // CancelTask stops a running task.

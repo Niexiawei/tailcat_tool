@@ -63,7 +63,8 @@ type Prober interface {
 
 // Checker runs a batch of probes, three at a time.
 type Checker struct {
-	prober Prober
+	prober   Prober
+	recorder Recorder
 
 	mu      sync.Mutex
 	results []ReachabilityResult
@@ -75,6 +76,25 @@ type Checker struct {
 // NewChecker returns a checker that uses prober.
 func NewChecker(prober Prober) *Checker {
 	return &Checker{prober: prober}
+}
+
+// WithRecorder persists each finished batch.
+func (c *Checker) WithRecorder(recorder Recorder) *Checker {
+	c.recorder = recorder
+	return c
+}
+
+func (c *Checker) records() []ReachabilityRecord {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]ReachabilityRecord, 0, len(c.results))
+	for _, r := range c.results {
+		out = append(out, ReachabilityRecord{
+			DeviceID: r.ID, Name: r.Name, State: string(r.State),
+			Latency: r.Latency, Route: r.Route, Detail: r.Detail, CheckedAt: r.CheckedAt,
+		})
+	}
+	return out
 }
 
 // Results returns a copy of the current table.
@@ -137,6 +157,9 @@ func (c *Checker) Start(profiles []Profile, temporaryIDs map[uuid.UUID]bool,
 			}
 			c.running = false
 			c.mu.Unlock()
+			if c.recorder != nil {
+				c.recorder.RecordReachability(c.records())
+			}
 			close(done)
 		}()
 

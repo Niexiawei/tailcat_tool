@@ -12,6 +12,7 @@ import (
 	"github.com/Niexiawei/tailcat-tool/internal/app"
 	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/Niexiawei/tailcat-tool/internal/credstore"
+	"github.com/Niexiawei/tailcat-tool/internal/history"
 	"github.com/Niexiawei/tailcat-tool/internal/platform"
 	"github.com/egoist/mygo"
 )
@@ -79,6 +80,20 @@ func buildEnvironment() app.Environment {
 		notice = "未检测到系统凭据库，连接地址仅在本次运行中保留"
 	}
 
+	// History is optional: if the file cannot be opened the app keeps
+	// everything in memory and says so once.
+	// The history file needs its directory to exist before SQLite opens it.
+	_ = os.MkdirAll(configDir, 0o700)
+	var recorder core.Recorder
+	historyPath := filepath.Join(configDir, "history.db")
+	if store, err := history.Open(historyPath); err != nil {
+		if notice == "" {
+			notice = "历史库无法打开，本次运行的历史不会保存：" + err.Error()
+		}
+	} else {
+		recorder = store
+	}
+
 	runner := core.NewExecRunner()
 	manager := core.NewManager(core.ManagerOptions{
 		Config:        store,
@@ -87,7 +102,13 @@ func buildEnvironment() app.Environment {
 		Identities:    core.NewIdentityStore(filepath.Join(configDir, "Identities")),
 		Runner:        runner,
 		Locate:        platform.FindTool,
+		Recorder:      recorder,
 	})
+	if recorder != nil {
+		if recent, err := recorder.RecentTasks(50); err == nil {
+			manager.LoadHistory(recent)
+		}
+	}
 	if notice != "" {
 		fmt.Fprintln(os.Stderr, notice)
 	}
