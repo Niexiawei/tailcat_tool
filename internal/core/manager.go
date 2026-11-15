@@ -53,6 +53,9 @@ type Manager struct {
 	nextRetries map[uuid.UUID]time.Time
 	taskCancels map[uuid.UUID]context.CancelFunc
 
+	notice              string
+	nextTemporaryNumber int
+
 	monitorInterval time.Duration
 	connectPoll     time.Duration
 	ctx             context.Context
@@ -131,6 +134,21 @@ func NewManager(opts ManagerOptions) *Manager {
 		m.sessions[p.ID] = NewSession()
 	}
 	return m
+}
+
+// Notice is the last one-line message for the UI banner (may be empty).
+func (m *Manager) Notice() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.notice
+}
+
+// SetNotice replaces the banner text; an empty string clears it.
+func (m *Manager) SetNotice(text string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.notice = text
+	m.notify()
 }
 
 // Changed reports that state moved; the UI redraws on it.
