@@ -13,7 +13,7 @@ go build ./cmd/tailcat-manager        # 当前平台
 CGO_ENABLED=0 GOOS=linux go build ./cmd/tailcat-manager
 ```
 
-界面演示（模拟设备，不执行真实命令、不读地址簿、不碰凭据库）：
+界面演示（模拟设备，不执行真实命令、不碰凭据库）：
 
 ```sh
 go run ./cmd/tailcat-manager --demo
@@ -32,8 +32,8 @@ go run ./cmd/tailcat-manager --demo
 ## 数据位置
 
 - 配置：macOS `~/Library/Application Support/TailcatManager/configuration.json`；Linux `${XDG_CONFIG_HOME:-~/.config}/TailcatManager/`；Windows `%AppData%\TailcatManager\`。目录 0700、文件 0600。
-- 连接地址只进系统凭据库，**不写配置文件**。macOS 沿用 Swift 版的 Keychain service 与账号命名，旧条目可直接读取。
-- 设备身份：`<配置目录>/Identities/<uuid>-connection.private.json` 与 `-probe.private.json`，格式与 `tailcat --key=` 完全一致，已有的身份文件继续可用。
+- 连接地址只进系统凭据库，**不写配置文件**。
+- 设备身份：`<配置目录>/Identities/<uuid>-connection.private.json` 与 `-probe.private.json`，格式与 `tailcat --key=` 一致。
 
 ## 与 Swift 版的差异
 

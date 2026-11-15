@@ -68,7 +68,7 @@ func (p *Pinger) lane(deviceID uuid.UUID) *sync.Mutex {
 // Ping probes one device with its dedicated probe identity.
 func (p *Pinger) Ping(ctx context.Context, deviceID uuid.UUID, address string, seconds int, relay RelayConfig) (PingOutcome, error) {
 	if !Plausible(address) {
-		return PingOutcome{}, Error("没有有效连接凭据，请编辑设备或导入地址簿")
+		return PingOutcome{}, Error("没有有效连接凭据，请编辑设备后重试")
 	}
 	mu := p.lane(deviceID)
 	mu.Lock()

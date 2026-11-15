@@ -212,7 +212,7 @@ func (c *Checker) check(ctx context.Context, index int, profile Profile,
 	if !Plausible(credential) {
 		c.setRow(index, func(r *ReachabilityResult) {
 			r.State = ReachFailed
-			r.Detail = truncateDetail("没有有效连接凭据，请编辑设备或导入地址簿")
+			r.Detail = truncateDetail("没有有效连接凭据，请编辑设备后重试")
 		})
 		return
 	}

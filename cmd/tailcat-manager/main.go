@@ -61,9 +61,6 @@ func buildEnvironment() app.Environment {
 		notice = "配置读取失败，已使用默认设置：" + err.Error()
 		cfg = core.Configuration{}
 	}
-	if cfg.Tools.AddressBookDir == "" {
-		cfg.Tools.AddressBookDir = platform.DefaultAddressBookDir()
-	}
 	if cfg.Tools.ADB == "" {
 		if path, ok := platform.FindTool("adb"); ok {
 			cfg.Tools.ADB = path

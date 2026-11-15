@@ -25,8 +25,7 @@ func TestFindToolMissing(t *testing.T) {
 
 func TestDefaultDirsAreAbsolute(t *testing.T) {
 	for name, dir := range map[string]string{
-		"config":  DefaultConfigDir(),
-		"address": DefaultAddressBookDir(),
+		"config": DefaultConfigDir(),
 	} {
 		if !filepath.IsAbs(dir) {
 			t.Fatalf("%s dir = %q, want an absolute path", name, dir)

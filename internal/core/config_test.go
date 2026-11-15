@@ -10,10 +10,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// A configuration file written by the Swift build must load unchanged, and the
-// fields this build no longer has (the external tailcat path) must be ignored
-// rather than rejected.
-const swiftConfiguration = `{
+// A configuration file with keys this build does not know (an external
+// tailcat path, an address book directory, an imported username) must still
+// load: unknown fields are ignored, not rejected.
+const foreignConfiguration = `{
   "profiles": [
     {
       "id": "6F1C0F1A-3B7E-4C55-9F4B-2A8F0D5C1234",
@@ -37,10 +37,10 @@ const swiftConfiguration = `{
   }
 }`
 
-func TestConfigReadsSwiftFile(t *testing.T) {
+func TestConfigIgnoresUnknownKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "configuration.json")
-	if err := os.WriteFile(path, []byte(swiftConfiguration), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(foreignConfiguration), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := NewConfigStore(dir)
@@ -52,7 +52,7 @@ func TestConfigReadsSwiftFile(t *testing.T) {
 		t.Fatalf("got %d profiles, want 2", len(cfg.Profiles))
 	}
 	first := cfg.Profiles[0]
-	if first.Name != "E245" || first.LegacyUsername != "car1" || first.RemotePort != 5555 {
+	if first.Name != "E245" || first.RemotePort != 5555 {
 		t.Fatalf("first profile = %+v", first)
 	}
 	if first.PreferredPort == nil || *first.PreferredPort != 5556 {
@@ -63,9 +63,6 @@ func TestConfigReadsSwiftFile(t *testing.T) {
 	}
 	if cfg.Tools.ADB != "/opt/homebrew/bin/adb" || cfg.Tools.Scrcpy != "/opt/homebrew/bin/scrcpy" {
 		t.Fatalf("tools = %+v", cfg.Tools)
-	}
-	if cfg.Tools.AddressBookDir != "/Users/me/.local/state/tailcat-adb" {
-		t.Fatalf("address book dir = %q", cfg.Tools.AddressBookDir)
 	}
 	if len(cfg.RelayPresets) != 0 {
 		t.Fatalf("relay presets should default to empty, got %v", cfg.RelayPresets)
@@ -84,7 +81,7 @@ func TestConfigRoundTrip(t *testing.T) {
 			RemotePort:    5555,
 			RelaySource:   "https://example.com/derpmap.json",
 		}},
-		Tools: ToolSettings{ADB: "/usr/bin/adb", Scrcpy: "/usr/bin/scrcpy", AddressBookDir: "/tmp/book"},
+		Tools: ToolSettings{ADB: "/usr/bin/adb", Scrcpy: "/usr/bin/scrcpy"},
 		RelayPresets: []RelayPreset{{
 			ID:     mustUUID(t, "11111111-2222-3333-4444-555555555555"),
 			Name:   "内网中继",

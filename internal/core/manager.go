@@ -359,7 +359,7 @@ func (m *Manager) Connect(ctx context.Context, id uuid.UUID) error {
 		return m.failConnect(id, generation, addrErr)
 	}
 	if !Plausible(address) {
-		return m.failConnect(id, generation, Error("设备没有有效连接凭据，请编辑设备或重新导入地址簿"))
+		return m.failConnect(id, generation, Error("设备没有有效连接凭据，请编辑设备后重试"))
 	}
 	if adbPath == "" {
 		return m.failConnect(id, generation, Error("未找到 ADB，请在设置中指定可执行文件的绝对路径"))

@@ -51,13 +51,6 @@ func (vm *ViewModel) toolbar(c *ui.Context) {
 		if components.Button(c, "添加设备", components.ButtonGhost).Clicked() {
 			vm.openEditor(&EditorRequest{})
 		}
-		if components.Button(c, "导入地址簿", components.ButtonGhost).Clicked() {
-			if n, err := vm.Manager.ImportLegacy(); err != nil {
-				vm.Notice = err.Error()
-			} else {
-				vm.Notice = "已导入 " + itoa(n) + " 台设备"
-			}
-		}
 		if components.Button(c, "工具设置", components.ButtonGhost).Clicked() {
 			vm.openSettings()
 		}

@@ -99,7 +99,6 @@ func (m *Manager) SaveDevice(req SaveDeviceRequest) (uuid.UUID, error) {
 	replaced := false
 	for i := range updated {
 		if updated[i].ID == id {
-			profile.LegacyUsername = updated[i].LegacyUsername
 			updated[i] = profile
 			replaced = true
 		}
@@ -278,66 +277,6 @@ func (m *Manager) RemoveDevice(ctx context.Context, id uuid.UUID) error {
 	}
 	m.notify()
 	return nil
-}
-
-// ImportLegacy reads the tailcat-adb address book and adds unknown devices.
-func (m *Manager) ImportLegacy() (int, error) {
-	book, err := ReadLegacyBook(m.Tools().AddressBookDir)
-	if err != nil {
-		return 0, err
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	known := map[string]bool{}
-	for _, p := range m.profiles {
-		if p.LegacyUsername != "" {
-			known[p.LegacyUsername] = true
-		}
-	}
-	var added []Profile
-	written := make([]uuid.UUID, 0, len(book.Entries))
-	saved := m.profiles
-	for _, entry := range book.Entries {
-		if known[entry.Username] {
-			continue
-		}
-		profile := Profile{
-			ID:             uuid.New(),
-			Name:           entry.Username,
-			LegacyUsername: entry.Username,
-			RemotePort:     5555,
-		}
-		if err := m.credentials.Write(entry.Address, profile.ID); err != nil {
-			for _, id := range written {
-				_ = m.credentials.Delete(id)
-			}
-			return 0, err
-		}
-		written = append(written, profile.ID)
-		added = append(added, profile)
-	}
-	if len(added) == 0 {
-		return 0, nil
-	}
-	m.profiles = append(append([]Profile(nil), m.profiles...), added...)
-	if err := m.persistLocked(); err != nil {
-		m.profiles = saved
-		for _, id := range written {
-			_ = m.credentials.Delete(id)
-		}
-		return 0, err
-	}
-	for _, p := range added {
-		m.sessions[p.ID] = NewSession()
-	}
-	notice := "已导入 " + itoaSmall(len(added)) + " 台设备，已存在的条目保留"
-	if book.Skipped > 0 {
-		notice += "；跳过 " + itoaSmall(book.Skipped) + " 个无效条目"
-	}
-	m.notice = notice
-	m.notify()
-	return len(added), nil
 }
 
 // UpdateTools stores new tool paths. It refuses while a channel is live so a

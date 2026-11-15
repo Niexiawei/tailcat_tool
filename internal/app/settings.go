@@ -22,7 +22,6 @@ func (vm *ViewModel) SettingsView(c *ui.Context) {
 			components.Text(c, "工具设置").FontSize(18).Bold()
 			field(c, "ADB", &vm.SettingsDraft.ADB, false)
 			field(c, "scrcpy（可选）", &vm.SettingsDraft.Scrcpy, false)
-			field(c, "地址簿目录", &vm.SettingsDraft.AddressBookDir, false)
 			for _, component := range core.AllTools() {
 				path := vm.SettingsDraft.FindToolPath(component, vm.Locate)
 				if path == "" {

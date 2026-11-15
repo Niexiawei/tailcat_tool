@@ -23,12 +23,3 @@ func DefaultConfigDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, "Library", "Application Support", appDirName)
 }
-
-// DefaultAddressBookDir is the tailcat-adb CLI's state directory.
-func DefaultAddressBookDir() string {
-	if env := os.Getenv("XDG_STATE_HOME"); env != "" && filepath.IsAbs(env) {
-		return filepath.Join(env, "tailcat-adb")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "state", "tailcat-adb")
-}

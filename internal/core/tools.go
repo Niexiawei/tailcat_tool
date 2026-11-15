@@ -35,9 +35,8 @@ func (c ToolComponent) Required() bool { return c == ToolADB }
 
 // ToolSettings holds the resolved absolute paths.
 type ToolSettings struct {
-	ADB            string `json:"adb"`
-	Scrcpy         string `json:"scrcpy"`
-	AddressBookDir string `json:"addressBookDirectory"`
+	ADB    string `json:"adb"`
+	Scrcpy string `json:"scrcpy"`
 }
 
 // Get returns the configured path for a component.

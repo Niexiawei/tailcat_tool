@@ -217,38 +217,6 @@ func TestRemoveDeviceDisconnectsFirst(t *testing.T) {
 	}
 }
 
-func TestImportLegacyDedupByLegacyUsername(t *testing.T) {
-	root := t.TempDir()
-	users := filepath.Join(root, "users")
-	if err := os.MkdirAll(users, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(users, "car1"), []byte(sampleAddress), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(users, "car2"), []byte("tc"+strings.Repeat("Q", 24)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	f := newManagerFixture(t, func(o *ManagerOptions) {
-		o.Configuration.Tools.AddressBookDir = root
-		o.Config = NewConfigStore(t.TempDir())
-	})
-	n, err := f.m.ImportLegacy()
-	if err != nil {
-		t.Fatalf("ImportLegacy() error: %v", err)
-	}
-	if n != 2 {
-		t.Fatalf("imported %d devices, want 2", n)
-	}
-	again, err := f.m.ImportLegacy()
-	if err != nil {
-		t.Fatalf("second ImportLegacy() error: %v", err)
-	}
-	if again != 0 {
-		t.Fatalf("second import added %d devices, want 0", again)
-	}
-}
-
 func TestSaveRelayPresetRules(t *testing.T) {
 	store := NewConfigStore(t.TempDir())
 	f := newManagerFixture(t, func(o *ManagerOptions) { o.Config = store })

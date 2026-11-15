@@ -52,9 +52,6 @@ type Profile struct {
 	ID uuid.UUID `json:"id"`
 	// Name is the user-visible label.
 	Name string `json:"name"`
-	// LegacyUsername is the tailcat-adb address book entry this device was
-	// imported from, if any. It only narrows credential lookups.
-	LegacyUsername string `json:"legacyUsername,omitempty"`
 	// PreferredPort is the fixed local port, or nil for automatic allocation.
 	PreferredPort *int `json:"preferredPort,omitempty"`
 	// RemotePort is the ADB port on the device side.

@@ -64,7 +64,7 @@ func NewDemoEnvironment() Environment {
 	manager := core.NewManager(core.ManagerOptions{
 		Configuration: core.Configuration{
 			Profiles: profiles,
-			Tools:    core.ToolSettings{ADB: self, Scrcpy: "", AddressBookDir: "/demo/tailcat-adb"},
+			Tools:    core.ToolSettings{ADB: self},
 		},
 		Credentials: creds,
 		Identities:  core.NewIdentityStore(demoIdentityDir()),
