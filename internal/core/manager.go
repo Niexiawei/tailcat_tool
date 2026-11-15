@@ -73,12 +73,15 @@ type runtimeState struct {
 
 // ManagerOptions wires a Manager. Only Runner and Credentials are required.
 type ManagerOptions struct {
-	Config          *ConfigStore
-	Configuration   Configuration
-	Credentials     CredentialStore
-	Identities      *IdentityStore
-	Runner          Runner
-	Forwarder       ChannelOpener
+	Config        *ConfigStore
+	Configuration Configuration
+	Credentials   CredentialStore
+	Identities    *IdentityStore
+	Runner        Runner
+	Forwarder     ChannelOpener
+	// Prober replaces the link probe; tests inject a fake so no network is
+	// touched.
+	Prober          Prober
 	Locate          LocateTool
 	MonitorInterval time.Duration
 	// ConnectPollInterval is the delay between get-state polls while
@@ -136,7 +139,11 @@ func NewManager(opts ManagerOptions) *Manager {
 		m.forwarder = &Forwarder{}
 	}
 	m.pinger = &Pinger{Identities: m.identities}
-	m.checker = NewChecker(m.pinger)
+	prober := opts.Prober
+	if prober == nil {
+		prober = m.pinger
+	}
+	m.checker = NewChecker(prober)
 	for _, p := range m.profiles {
 		m.sessions[p.ID] = NewSession()
 	}

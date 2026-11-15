@@ -13,10 +13,11 @@ import (
 // own: the manager is the single source of truth and the window redraws when
 // it says something changed.
 type ViewModel struct {
-	Manager  *core.Manager
-	Locate   core.LocateTool
-	Install  func(core.ToolComponent)
-	Activate func(deviceID string)
+	Manager      *core.Manager
+	Locate       core.LocateTool
+	Install      func(core.ToolComponent)
+	Activate     func(deviceID string)
+	OpenTerminal func(deviceID uuid.UUID) error
 
 	// Selection is the device the detail pane shows.
 	Selection uuid.UUID
@@ -28,6 +29,26 @@ type ViewModel struct {
 	Notice string
 	// PendingEditor is the device form that is open, nil when closed.
 	PendingEditor *EditorRequest
+
+	// Form state. MyGo views are functions of state, so every text field is a
+	// field here.
+	EditorDraft      EditorInput
+	EditorError      string
+	EditorPresetName string
+
+	TransferOpen       bool
+	TransferUpload     bool
+	TransferLocalPath  string
+	TransferRemotePath string
+	TransferError      string
+
+	SettingsOpen  bool
+	SettingsDraft core.ToolSettings
+	SettingsError string
+
+	ReachabilityOpen bool
+	ShellCommand     string
+	AttentionOpen    bool
 }
 
 // EditorRequest asks the editor to open on a device, or on a new one.

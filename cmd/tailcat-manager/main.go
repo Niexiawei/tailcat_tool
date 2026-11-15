@@ -31,8 +31,18 @@ func main() {
 			running.Show()
 		}
 	})
+	demo := false
+	for _, arg := range os.Args[1:] {
+		if arg == "--demo" {
+			demo = true
+		}
+	}
 	mygo.App.WhenReady(func() {
-		running = app.New(buildEnvironment())
+		env := buildEnvironment()
+		if demo {
+			env = app.NewDemoEnvironment()
+		}
+		running = app.New(env)
 		running.Start(trayIcon)
 	})
 	if err := mygo.App.Run(); err != nil {
