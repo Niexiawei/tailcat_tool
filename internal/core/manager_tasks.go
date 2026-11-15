@@ -63,6 +63,29 @@ func (m *Manager) BeginScreen(ctx context.Context, id uuid.UUID) (uuid.UUID, err
 	}), nil
 }
 
+// RunADB runs one adb command for a device and returns its output. It goes
+// through the task machinery, so it is redacted, bounded and recorded like
+// every other command, and the target is validated twice as usual.
+func (m *Manager) RunADB(ctx context.Context, id uuid.UUID, args []string, timeout time.Duration) (string, error) {
+	if len(args) == 0 {
+		return "", nil
+	}
+	taskID, err := m.BeginADBTask(ctx, id, "adb "+strings.Join(args, " "), args, timeout)
+	if err != nil {
+		return "", err
+	}
+	m.WaitTask(taskID)
+	for _, task := range m.Tasks() {
+		if task.ID == taskID {
+			if task.State == TaskFailed {
+				return "", Error(strings.TrimSpace(task.Output))
+			}
+			return task.Output, nil
+		}
+	}
+	return "", nil
+}
+
 // TerminalCommand validates the target and returns what a terminal needs.
 func (m *Manager) TerminalCommand(ctx context.Context, id uuid.UUID) (string, string, error) {
 	target, err := m.operationTarget(ctx, id)

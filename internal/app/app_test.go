@@ -68,10 +68,50 @@ func sidebarTester(vm *ViewModel, width, height int) *ui.Tester {
 	}, width, height)
 }
 
+func TestToolbarOnlyOnTheIndexPage(t *testing.T) {
+	vm := newTestViewModel(t)
+	profile := vm.Manager.Profiles()[0]
+
+	index := ui.NewTester(vm.ContentView, 900, 700)
+	if !index.HasText("测试全部设备") || !index.HasText("工具设置") {
+		t.Fatalf("the index page lost the window actions; texts = %v", index.Texts())
+	}
+
+	vm.OpenDevice(profile.ID)
+	device := ui.NewTester(vm.ContentView, 900, 700)
+	for _, unwanted := range []string{"测试全部设备", "临时连接", "工具设置"} {
+		if device.HasText(unwanted) {
+			t.Fatalf("the device page still shows %q; texts = %v", unwanted, device.Texts())
+		}
+	}
+}
+
+func TestDirectDeviceHidesTheProbe(t *testing.T) {
+	profile := core.Profile{ID: uuid.New(), Name: "本地", DirectADB: true, DirectTarget: "127.0.0.1:5554"}
+	m := core.NewManager(core.ManagerOptions{
+		Configuration: core.Configuration{Profiles: []core.Profile{profile}, Tools: core.ToolSettings{ADB: os.Args[0]}},
+		Credentials:   core.NewMemoryCredentialStore(),
+		Identities:    core.NewIdentityStore(t.TempDir()),
+		Runner:        stubRunner{},
+		Locate:        func(string) (string, bool) { return "", false },
+	})
+	vm := NewViewModel(m, func(string) (string, bool) { return "", false })
+	vm.OpenDevice(profile.ID)
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if tt.HasText("探测链路") {
+		t.Fatalf("a direct device still offers the Tailcat probe; texts = %v", tt.Texts())
+	}
+	if !tt.HasText("刷新信息") {
+		t.Fatalf("the refresh action is gone too; texts = %v", tt.Texts())
+	}
+}
+
 func TestSidebarGroups(t *testing.T) {
 	vm := newTestViewModel(t)
 	tt := sidebarTester(vm, 280, 720)
-	for _, want := range []string{"我的设备", "E245", "临时设备", "新建临时连接"} {
+	// The footer no longer offers the temporary connection: it lives in
+	// the toolbar, which only the index page shows.
+	for _, want := range []string{"我的设备", "E245", "临时设备"} {
 		if !tt.HasText(want) {
 			t.Fatalf("sidebar lacks %q; texts = %v", want, tt.Texts())
 		}
@@ -365,4 +405,43 @@ func TestMissingDevicePage(t *testing.T) {
 	if !tt.HasText("设备不存在") {
 		t.Fatalf("no page for a device that is gone; texts = %v", tt.Texts())
 	}
+}
+
+// recordingRunner answers adb through fn and remembers every command line.
+type recordingRunner struct {
+	fn    func(core.Command) (core.Result, error)
+	calls []string
+}
+
+func (r *recordingRunner) Start(context.Context, core.Command, func(string)) (*core.Proc, error) {
+	return nil, core.Error("Start is not used in view tests")
+}
+
+func (r *recordingRunner) Run(_ context.Context, c core.Command, _ func(string)) (core.Result, error) {
+	r.calls = append(r.calls, strings.Join(c.Args, " "))
+	return r.fn(c)
+}
+
+// newRunnerViewModel builds a view model whose manager answers adb with fn.
+func newRunnerViewModel(t *testing.T, fn func(core.Command) (core.Result, error)) (*ViewModel, func() []string) {
+	t.Helper()
+	runner := &recordingRunner{fn: fn}
+	creds := core.NewMemoryCredentialStore()
+	profile := core.Profile{ID: uuid.New(), Name: "E245", RemotePort: 5555}
+	if err := creds.Write(testAddress, profile.ID); err != nil {
+		t.Fatal(err)
+	}
+	m := core.NewManager(core.ManagerOptions{
+		Configuration: core.Configuration{
+			Profiles: []core.Profile{profile},
+			Tools:    core.ToolSettings{ADB: os.Args[0]},
+		},
+		Credentials:     creds,
+		Identities:      core.NewIdentityStore(t.TempDir()),
+		Runner:          runner,
+		Locate:          func(string) (string, bool) { return "", false },
+		MonitorInterval: 3600 * 1e9,
+	})
+	vm := NewViewModel(m, func(string) (string, bool) { return "", false })
+	return vm, func() []string { return runner.calls }
 }

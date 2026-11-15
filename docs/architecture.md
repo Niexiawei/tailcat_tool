@@ -373,7 +373,9 @@ Swift 版对"用户在本机 adb 里动了我们的连接"是无感的：它只�
 - 侧栏用满 shell 的三个槽位：`Left` = `HeaderHeight` 上内边距 + `ui.Scroll` + `components.Accordion`（我的设备 / 临时设备，标题带数量）；`LeftToolbar` = 固定底栏（通道数、工具健康、新建临时连接）；`Content` 同样以 `HeaderHeight` 起头。行式元素一律 `FillWidth()`——`Fill()` 会同时占满高度。
 - 内容区分页由 `ui.Router` 驱动：`/devices` 是设备列表页，`/devices/{id}` 是设备页（顶部 `components.Breadcrumbs`），侧栏点击与面包屑都是 `Router.Push`，路由是选中状态的来源——进入某页即选中该设备。详情页的编辑入口与终端页都在设备页上。
 - 侧栏不参与路由，只负责导航；设备列表页显示无选中设备。
-- 终端页用 `github.com/egoist/mygo/plugins/terminal`（libghostty-vt，运行期加载，无 cgo）。已连接时命令是 `adb -s <serial> shell`；未连接时挂一个 `idleShell`（内存 `io.ReadWriteCloser`），它在终端里打印「设备未连接」、本地回显输入、回车时不执行而是打印原因并弹错误提示。控制台按「设备 + 连接状态」缓存，状态变化时重建旧实例。
+- 顶部窗口操作只在列表页出现；设备页只保留设备自身的动作。
+- 终端页用 `github.com/egoist/mygo/plugins/terminal`（libghostty-vt，运行期加载，无 cgo）。两种模式：**设备 Shell** 已连接时命令是 `adb -s <serial> shell`；**ADB 命令**按行执行任意 adb 子命令，走 `Manager.RunADB`（复用任务机制：超时、脱敏、限流、历史）。未连接时两种模式都挂一个 `lineConsole`（内存 `io.ReadWriteCloser`），它在终端里打印「设备未连接」、本地回显输入、回车时不执行而是打印原因并弹错误提示。
+控制台按「设备 + 连接状态 + 模式」缓存；页面卸载（`Element.OnUnmount`）或程序结束（`Terminal.Done`）时关闭并重建，避免出现 `[Process exited]` 的死终端。
 - 视图是**状态的函数**：`ViewModel` 持有选择、表单草稿、对话框开关，管理器是唯一事实来源；`Changed()` → `Invalidate()`。
 - 组件映射：`components.Text/Button/TextBox/Switch/Tabs/Table/Dialog/Icon`、`lucide` 图标、`ui.Column/Row/ButtonBase`。
 - 弹窗（编辑设备、上传下载、工具设置、连通测试、外部干预）用 `components.Dialog` 内联渲染，不是独立系统窗口。

@@ -18,11 +18,10 @@ import (
 // own: the manager is the single source of truth and the window redraws when
 // it says something changed.
 type ViewModel struct {
-	Manager      *core.Manager
-	Locate       core.LocateTool
-	Install      func(core.ToolComponent)
-	Activate     func(deviceID string)
-	OpenTerminal func(deviceID uuid.UUID) error
+	Manager  *core.Manager
+	Locate   core.LocateTool
+	Install  func(core.ToolComponent)
+	Activate func(deviceID string)
 
 	// Router owns the content pages; the sidebar and the breadcrumbs
 	// navigate it, so Back returns to the page before.
@@ -32,8 +31,10 @@ type ViewModel struct {
 
 	// Selection is the device the detail pane shows.
 	Selection uuid.UUID
-	// DetailTab is 0 for the overview and 1 for the log.
+	// DetailTab is 0 for the overview, 1 for the terminal and 2 for the log.
 	DetailTab int
+	// ConsoleTab is ConsoleShell or ConsoleADB inside the terminal tab.
+	ConsoleTab int
 	// Demo marks the simulated environment.
 	Demo bool
 	// Notice is the one-line banner; empty hides it.
@@ -322,9 +323,6 @@ func (vm *ViewModel) SidebarFooter(c *ui.Context) {
 		}
 		if notice := vm.Notice; notice != "" {
 			components.Text(c, notice).FontSize(11)
-		}
-		if components.Button(c, "新建临时连接", components.ButtonGhost).Clicked() {
-			vm.newTemporaryDevice()
 		}
 	})
 }

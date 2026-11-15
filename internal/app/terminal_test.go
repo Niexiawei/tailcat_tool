@@ -7,13 +7,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
+	"github.com/oneo-me/onevra/source/components"
 )
 
-// readIdle collects output until the prompt comes back, so a console that
+// readConsole collects output until the prompt comes back, so a console that
 // prints nothing fails instead of blocking the suite.
-func readIdle(t *testing.T, s *idleShell) string {
+func readConsole(t *testing.T, s *lineConsole) string {
 	t.Helper()
 	done := make(chan string, 1)
 	go func() {
@@ -34,57 +36,115 @@ func readIdle(t *testing.T, s *idleShell) string {
 	case got := <-done:
 		return got
 	case <-time.After(2 * time.Second):
-		t.Fatal("the idle console produced no output")
+		t.Fatal("the console produced no output")
 		return ""
 	}
 }
 
-func TestIdleShellExplainsItself(t *testing.T) {
-	s := newIdleShell(nil)
+func TestLineConsoleShowsBannerAndPrompt(t *testing.T) {
+	s := newLineConsole("说明行", nil)
 	defer s.Close()
-	if got := readIdle(t, s); !strings.Contains(got, IdleConsoleText) {
-		t.Fatalf("the idle console does not explain itself: %q", got)
+	if got := readConsole(t, s); !strings.Contains(got, "说明行") || !strings.HasSuffix(got, "$ ") {
+		t.Fatalf("console = %q", got)
 	}
 }
 
-func TestIdleShellRefusesCommands(t *testing.T) {
-	var toasts int
-	s := newIdleShell(func() { toasts++ })
+func TestLineConsoleHandsCompletedLines(t *testing.T) {
+	var lines []string
+	s := newLineConsole("", nil)
+	s.onLine = func(line string) {
+		lines = append(lines, line)
+		s.prompt()
+	}
 	defer s.Close()
-	readIdle(t, s)
+	readConsole(t, s)
 
-	if _, err := s.Write([]byte("ls\r")); err != nil {
+	if _, err := s.Write([]byte("shell ls\r")); err != nil {
 		t.Fatalf("Write() error: %v", err)
 	}
-	if toasts != 1 {
-		t.Fatalf("toasts = %d, want 1 after Enter", toasts)
+	if len(lines) != 1 || lines[0] != "shell ls" {
+		t.Fatalf("lines = %q", lines)
 	}
-	got := readIdle(t, s)
-	if !strings.Contains(got, "ls") {
+	if got := readConsole(t, s); !strings.Contains(got, "shell ls") {
 		t.Fatalf("the console does not echo what was typed: %q", got)
 	}
-	if !strings.Contains(got, IdleConsoleText) {
-		t.Fatalf("the console did not print why it refused: %q", got)
-	}
-	// Nothing is kept as a pending command; the line is cleared.
 	if line := s.Line(); line != "" {
-		t.Fatalf("the refused command was kept: %q", line)
+		t.Fatalf("the line was not cleared: %q", line)
 	}
 }
 
-func TestIdleShellIgnoresUnknownControlKeys(t *testing.T) {
-	s := newIdleShell(nil)
+func TestLineConsoleIgnoresEscapeSequences(t *testing.T) {
+	s := newLineConsole("", nil)
 	defer s.Close()
-	readIdle(t, s)
+	readConsole(t, s)
 	if _, err := s.Write([]byte{0x1b, '[', 'A'}); err != nil {
 		t.Fatalf("Write() error: %v", err)
 	}
-	if line := s.Line(); strings.Contains(line, "[") {
+	if line := s.Line(); line != "" {
 		t.Fatalf("an escape sequence was typed into the line: %q", line)
 	}
 }
 
-func TestConsoleReportsAMissingTerminal(t *testing.T) {
+func TestIdleConsoleRefusesCommands(t *testing.T) {
+	vm := newTestViewModel(t)
+	console := newLineConsole(IdleConsoleText, nil)
+	console.onLine = vm.idleLineHandler(console)
+	defer console.Close()
+	readConsole(t, console)
+
+	if _, err := console.Write([]byte("ls\r")); err != nil {
+		t.Fatalf("Write() error: %v", err)
+	}
+	got := readConsole(t, console)
+	if !strings.Contains(got, IdleConsoleText) {
+		t.Fatalf("the console did not print why it refused: %q", got)
+	}
+	queued := vm.drainToasts()
+	if len(queued) != 1 || queued[0].Type != components.ToastError {
+		t.Fatalf("toasts = %+v", queued)
+	}
+}
+
+func TestADBConsoleRunsCommands(t *testing.T) {
+	vm, calls := newRunnerViewModel(t, func(c core.Command) (core.Result, error) {
+		for _, arg := range c.Args {
+			if arg == "get-state" {
+				return core.Result{Output: "device\n"}, nil
+			}
+		}
+		return core.Result{Output: "attached: /sdcard/a.mp4\n"}, nil
+	})
+	profile := vm.Manager.Profiles()[0]
+	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	defer vm.Manager.Disconnect(context.Background(), profile.ID)
+
+	console := newLineConsole("", nil)
+	console.onLine = func(line string) {
+		vm.runADBLine(profile, vm.Manager.Session(profile.ID), console, line)
+	}
+	defer console.Close()
+	readConsole(t, console)
+
+	if _, err := console.Write([]byte("pull /sdcard/a.mp4 .\r")); err != nil {
+		t.Fatalf("Write() error: %v", err)
+	}
+	got := readConsole(t, console)
+	if !strings.Contains(got, "/sdcard/a.mp4") {
+		t.Fatalf("the command output missing: %q", got)
+	}
+	ran := calls()
+	if len(ran) == 0 {
+		t.Fatal("no adb command was run")
+	}
+	last := ran[len(ran)-1]
+	if !strings.Contains(last, "pull") {
+		t.Fatalf("the last adb call was %q", last)
+	}
+}
+
+func TestConsoleFallsBackWhenTerminalIsUnavailable(t *testing.T) {
 	original := newTerminal
 	newTerminal = func(terminal.Options) (*terminal.Terminal, error) {
 		return nil, errors.New("no native library")
@@ -111,7 +171,25 @@ func TestConsoleHintTracksTheConnection(t *testing.T) {
 		t.Fatalf("Connect() error: %v", err)
 	}
 	defer vm.Manager.Disconnect(context.Background(), profile.ID)
-	if hint := vm.consoleHint(vm.Manager.Session(profile.ID)); !strings.Contains(hint, "命令直接在") {
+	if hint := vm.consoleHint(vm.Manager.Session(profile.ID)); !strings.Contains(hint, "命令直接") {
 		t.Fatalf("hint = %q", hint)
+	}
+	vm.ConsoleTab = ConsoleADB
+	if hint := vm.consoleHint(vm.Manager.Session(profile.ID)); !strings.Contains(hint, "adb 子命令") {
+		t.Fatalf("adb hint = %q", hint)
+	}
+}
+
+func TestConsoleKeyFollowsModeAndState(t *testing.T) {
+	online := core.Session{State: core.StateOnline, Serial: "127.0.0.1:5555"}
+	if got := consoleKey(online, ConsoleShell); got != "adb:127.0.0.1:5555:shell" {
+		t.Fatalf("key = %q", got)
+	}
+	if got := consoleKey(online, ConsoleADB); got != "adb:127.0.0.1:5555:cmd" {
+		t.Fatalf("key = %q", got)
+	}
+	offline := core.Session{State: core.StateFailed, Serial: "127.0.0.1:5555"}
+	if got := consoleKey(offline, ConsoleShell); got != "idle" {
+		t.Fatalf("key = %q, want idle", got)
 	}
 }

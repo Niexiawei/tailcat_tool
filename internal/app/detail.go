@@ -16,7 +16,6 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 	for _, toast := range vm.drainToasts() {
 		c.AddToast(toast)
 	}
-	vm.toolbar(c)
 	vm.routedPage(c)
 	vm.TaskPanel(c)
 	vm.EditorView(c)
@@ -62,6 +61,7 @@ func (vm *ViewModel) routedPage(c *ui.Context) {
 		// The index page shows no device, so nothing is selected.
 		vm.Selection = uuid.Nil
 		r.Title("我的设备")
+		vm.toolbar(c)
 		vm.deviceIndexPage(c)
 	})
 }
@@ -194,6 +194,7 @@ func (vm *ViewModel) devicePage(c *ui.Context, profile core.Profile) {
 		components.Tabs(c, &vm.DetailTab, components.TabsSegmented, "概览", "终端", "日志")
 		switch vm.DetailTab {
 		case 1:
+			components.Tabs(c, &vm.ConsoleTab, components.TabsSegmented, "设备 Shell", "ADB 命令")
 			vm.consoleView(c, profile, session)
 		case 2:
 			vm.logs(c, session)
@@ -242,8 +243,12 @@ func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.
 		detailRow(c, "Shell 权限", session.ShellID)
 
 		ui.Row(c).Gap(6).Children(func() {
-			if components.Button(c, "探测链路", components.ButtonSecondary).Clicked() {
-				go func() { vm.Fail(manager.Diagnose(context.Background(), profile.ID)) }()
+			// Diagnosing measures the Tailcat channel, which a direct
+			// device does not have.
+			if !profile.DirectADB {
+				if components.Button(c, "探测链路", components.ButtonSecondary).Clicked() {
+					go func() { vm.Fail(manager.Diagnose(context.Background(), profile.ID)) }()
+				}
 			}
 			if components.Button(c, "刷新信息", components.ButtonSecondary).Clicked() {
 				go func() { vm.Fail(manager.RefreshDeviceInformation(context.Background(), profile.ID)) }()
@@ -271,14 +276,8 @@ func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.
 			if components.Button(c, "屏幕控制", components.ButtonSecondary).Clicked() {
 				go func() { _, err := manager.BeginScreen(context.Background(), profile.ID); vm.Fail(err) }()
 			}
-			if components.Button(c, "外部终端", components.ButtonSecondary).Clicked() {
-				vm.openTerminal(profile)
-			}
 		})
 
-		if components.Button(c, "在终端中执行 shell 命令", components.ButtonGhost).Clicked() {
-			vm.DetailTab = 1
-		}
 		components.Text(c, "任务始终绑定启动时的设备和 ADB 入口。").FontSize(11)
 	})
 }

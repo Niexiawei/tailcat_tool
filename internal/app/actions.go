@@ -79,15 +79,6 @@ func (vm *ViewModel) chooseDownloadFolder() {
 	vm.TransferLocalPath = paths[0]
 }
 
-// openTerminal opens a terminal bound to the device, when the platform can.
-func (vm *ViewModel) openTerminal(profile core.Profile) {
-	if vm.OpenTerminal == nil {
-		vm.Notice = "当前平台未接入终端"
-		return
-	}
-	go func() { vm.Fail(vm.OpenTerminal(profile.ID)) }()
-}
-
 func fileName(path string) string {
 	for i := len(path) - 1; i >= 0; i-- {
 		if path[i] == '/' || path[i] == filepath.Separator {

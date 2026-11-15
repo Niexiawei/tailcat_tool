@@ -355,6 +355,9 @@ func (m *Manager) Connect(ctx context.Context, id uuid.UUID) error {
 	m.setStateLocked(id, func(s *Session) {
 		s.State = StateConnecting
 		s.Err = ""
+		// The previous device's identity must not linger while a new
+		// connection is being built.
+		clearDeviceInfo(s)
 	})
 	// A direct device has no Tailcat address at all, so asking for one would
 	// fail with a credential error before the direct branch is reached.
@@ -461,6 +464,9 @@ func (m *Manager) Connect(ctx context.Context, id uuid.UUID) error {
 		}
 	}
 	m.startMonitor(id, generation)
+	// Connecting is the moment the device identity becomes readable; doing it
+	// here keeps the overview correct without a manual refresh.
+	_ = m.RefreshDeviceInformation(ctx, id)
 	return nil
 }
 
@@ -476,6 +482,15 @@ func remotePort(p Profile) int {
 		return 5555
 	}
 	return p.RemotePort
+}
+
+// clearDeviceInfo forgets what only a live connection can know.
+func clearDeviceInfo(s *Session) {
+	s.Model = ""
+	s.Product = ""
+	s.Android = ""
+	s.DeviceSerial = ""
+	s.ShellID = ""
 }
 
 func (m *Manager) failConnect(id uuid.UUID, generation uuid.UUID, err error) error {
@@ -496,6 +511,7 @@ func (m *Manager) failConnect(id uuid.UUID, generation uuid.UUID, err error) err
 		s.Serial = ""
 		s.Port = 0
 		s.Err = err.Error()
+		clearDeviceInfo(s)
 	})
 	m.logLocked(id, "连接失败："+err.Error())
 	m.notify()
@@ -553,6 +569,7 @@ func (m *Manager) Disconnect(ctx context.Context, id uuid.UUID) {
 			s.Port = 0
 			s.Err = ""
 			s.Route = PlaceholderNotProbed
+			clearDeviceInfo(s)
 		})
 		m.logLocked(id, "已断开该设备，其他会话保持")
 	}
@@ -825,6 +842,7 @@ func (m *Manager) connectDirect(ctx context.Context, id uuid.UUID, generation uu
 		return m.failConnect(id, generation, err)
 	}
 	m.startMonitor(id, generation)
+	_ = m.RefreshDeviceInformation(ctx, id)
 	return nil
 }
 

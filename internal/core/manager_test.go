@@ -507,3 +507,48 @@ func TestReconnectOverDirectRuntimeDropsIt(t *testing.T) {
 		t.Fatalf("state = %v, want disconnected", got)
 	}
 }
+
+func TestConnectRefreshesDeviceInformation(t *testing.T) {
+	runner := &fakeRunner{handler: func(_ context.Context, c Command) (Result, error) {
+		if contains(c.Args, "get-state") {
+			return Result{Output: "device\n"}, nil
+		}
+		if contains(c.Args, "shell") {
+			return Result{Output: "Automotive SDK\nproduct_x\n11\nEMULATOR1\nuid=2000(shell)\n"}, nil
+		}
+		return Result{}, nil
+	}}
+	f := newManagerFixture(t, func(o *ManagerOptions) { o.Runner = runner })
+
+	if err := f.m.Connect(context.Background(), f.id); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	session := f.m.Session(f.id)
+	if session.Model != "Automotive SDK" || session.Android != "11" || session.ShellID != "uid=2000(shell)" {
+		t.Fatalf("device information was not refreshed on connect: %+v", session)
+	}
+
+	f.m.Disconnect(context.Background(), f.id)
+	if after := f.m.Session(f.id); after.Model != "" || after.Android != "" || after.DeviceSerial != "" || after.ShellID != "" {
+		t.Fatalf("device information survived a disconnect: %+v", after)
+	}
+}
+
+func TestFailedConnectClearsDeviceInformation(t *testing.T) {
+	f := newManagerFixture(t)
+	f.m.mu.Lock()
+	f.m.sessions[f.id] = Session{State: StateOnline, Serial: "old", Model: "Old", Android: "9"}
+	f.m.mu.Unlock()
+	// No credential, so the connect fails and the old identity must go.
+	if err := f.creds.Delete(f.id); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.m.Connect(context.Background(), f.id); err == nil {
+		t.Fatal("Connect() succeeded without a credential")
+	}
+	session := f.m.Session(f.id)
+	if session.Model != "" || session.Android != "" {
+		t.Fatalf("the previous device's identity survived a failed connect: %+v", session)
+	}
+}
