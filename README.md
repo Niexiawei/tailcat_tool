@@ -57,6 +57,8 @@ go run ./cmd/tailcat-manager --demo
 
 - [docs/architecture.md](docs/architecture.md)：架构、状态机、两种连接方式、外部干预检测、安全设计与决策记录
 - [docs/build-notes.md](docs/build-notes.md)：依赖版本、体积与构建耗时实测
+- [docs/CHANGELOG.md](docs/CHANGELOG.md)：版本变更记录（后续改动都记在这里）
+- [AGENTS.md](AGENTS.md)：仓库规则（含"改行为必须更新 CHANGELOG"）
 
 ## 测试
 
