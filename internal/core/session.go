@@ -1,0 +1,71 @@
+package core
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// Session is everything the UI needs to render one device's channel.
+type Session struct {
+	State        ConnectionState
+	Serial       string // "127.0.0.1:<port>", empty when there is no channel
+	Port         int
+	Model        string
+	Product      string
+	Android      string
+	DeviceSerial string
+	ShellID      string
+	Route        string
+	Err          string
+	Logs         []SessionLog
+}
+
+// SessionLog is one timestamped line of channel output.
+type SessionLog struct {
+	At   time.Time
+	Text string
+}
+
+// NewSession returns a session with the same placeholder values the Swift UI
+// used before any device information arrives.
+func NewSession() Session {
+	return Session{
+		Model:        PlaceholderUnknown,
+		Product:      PlaceholderUnknown,
+		Android:      PlaceholderUnknown,
+		DeviceSerial: PlaceholderUnknown,
+		ShellID:      PlaceholderUnknown,
+		Route:        PlaceholderNotProbed,
+	}
+}
+
+const (
+	// PlaceholderUnknown stands in for a value the app has not read yet.
+	PlaceholderUnknown = "—"
+	// PlaceholderNotProbed is the route before any link probe ran.
+	PlaceholderNotProbed = "未探测"
+)
+
+// Profile is a saved device: identity, preferred ports and relay source.
+type Profile struct {
+	ID uuid.UUID `json:"id"`
+	// Name is the user-visible label.
+	Name string `json:"name"`
+	// LegacyUsername is the tailcat-adb address book entry this device was
+	// imported from, if any. It only narrows credential lookups.
+	LegacyUsername string `json:"legacyUsername,omitempty"`
+	// PreferredPort is the fixed local port, or nil for automatic allocation.
+	PreferredPort *int `json:"preferredPort,omitempty"`
+	// RemotePort is the ADB port on the device side.
+	RemotePort int `json:"remotePort"`
+	// RelaySource is a DERP map URL or inline JSON; empty means the official map.
+	RelaySource string `json:"relaySource,omitempty"`
+}
+
+// RelayPreset is a saved DERP map source the user can pick in the editor.
+type RelayPreset struct {
+	ID     uuid.UUID `json:"id"`
+	Name   string    `json:"name"`
+	Source string    `json:"source"`
+}
