@@ -53,6 +53,7 @@ type Manager struct {
 	nextRetries map[uuid.UUID]time.Time
 	taskCancels map[uuid.UUID]context.CancelFunc
 	taskDone    map[uuid.UUID]chan struct{}
+	attention   map[uuid.UUID]Attention
 	pinger      *Pinger
 	checker     *Checker
 
@@ -120,6 +121,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		nextRetries:         map[uuid.UUID]time.Time{},
 		taskCancels:         map[uuid.UUID]context.CancelFunc{},
 		taskDone:            map[uuid.UUID]chan struct{}{},
+		attention:           map[uuid.UUID]Attention{},
 		nextTemporaryNumber: 1,
 		monitorInterval:     interval,
 		connectPoll:         pollInterval,
@@ -591,6 +593,7 @@ func (m *Manager) startMonitor(id uuid.UUID, generation uuid.UUID) {
 				return
 			}
 			m.refresh(ctx, id, generation)
+			m.maybeDetectInterference(ctx, id, generation)
 			m.retryOffline(ctx, id, generation)
 		}
 	}()
@@ -643,6 +646,19 @@ func (m *Manager) refresh(ctx context.Context, id uuid.UUID, generation uuid.UUI
 		delete(m.nextRetries, id)
 	}
 	m.notify()
+}
+
+// maybeDetectInterference runs the external-interference rules when a device is
+// offline; it is separate from refresh so it can take the lock again.
+func (m *Manager) maybeDetectInterference(ctx context.Context, id uuid.UUID, generation uuid.UUID) {
+	m.mu.Lock()
+	state := m.sessions[id].State
+	_, pending := m.attention[id]
+	m.mu.Unlock()
+	if pending || state != StateOffline {
+		return
+	}
+	m.detectInterference(ctx, id, generation)
 }
 
 // retryOffline re-issues adb connect with a bounded, growing delay.

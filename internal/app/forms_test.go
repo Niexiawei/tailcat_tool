@@ -147,3 +147,23 @@ func TestDemoModeUsesSimulatedDevices(t *testing.T) {
 	}
 	env.Manager.Shutdown(context.Background())
 }
+
+func TestAttentionDialogAppears(t *testing.T) {
+	vm := newTestViewModel(t)
+	profile := vm.Manager.Profiles()[0]
+	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	// Simulate an external "adb disconnect": the device list no longer has
+	// our entry, which the monitor turns into a needs-action state.
+	vm.Manager.ForceAttentionForTest(profile.ID, core.AttentionSerialDetached, "本地 ADB 入口已被外部移除")
+	tt := ui.NewTester(vm.ContentView, 900, 700)
+	joined := strings.Join(tt.Texts(), " | ")
+	for _, want := range []string{"设备需要处理", "重新连接", "改用其他本地端口", "稍后处理", "E245"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("attention dialog lacks %q: %s", want, joined)
+		}
+	}
+	vm.Manager.AckAttention(profile.ID)
+	vm.Manager.Disconnect(context.Background(), profile.ID)
+}

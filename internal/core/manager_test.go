@@ -44,6 +44,21 @@ func (f *fakeRunner) commandLog() []string {
 	return out
 }
 
+// lastSerial returns the serial of the most recent "-s <serial>" call.
+func (f *fakeRunner) lastSerial() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := len(f.calls) - 1; i >= 0; i-- {
+		args := f.calls[i].Args
+		for j := 0; j < len(args)-1; j++ {
+			if args[j] == "-s" {
+				return args[j+1]
+			}
+		}
+	}
+	return ""
+}
+
 func (f *fakeRunner) setHandler(h func(ctx context.Context, c Command) (Result, error)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -334,6 +349,11 @@ func TestOfflineRetriesAreBounded(t *testing.T) {
 	f.runner.setHandler(func(_ context.Context, c Command) (Result, error) {
 		if contains(c.Args, "get-state") {
 			return Result{ExitCode: 1, Output: "error: device offline\n"}, nil
+		}
+		if contains(c.Args, "devices") {
+			// The entry is still attached: a plain offline device, not
+			// external interference.
+			return Result{Output: "List of devices attached\n" + f.runner.lastSerial() + "\toffline\n"}, nil
 		}
 		return Result{}, nil
 	})

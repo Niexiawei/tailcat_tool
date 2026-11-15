@@ -28,6 +28,7 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 	vm.TransferView(c)
 	vm.SettingsView(c)
 	vm.ReachabilityView(c)
+	vm.AttentionDialog(c)
 	if note := vm.Notice; note != "" {
 		ui.Row(c).Fill().Padding(12, 16).Gap(8).Children(func() {
 			components.Text(c, note).FontSize(11)
