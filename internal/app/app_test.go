@@ -9,6 +9,7 @@ import (
 	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo/ui"
 	"github.com/google/uuid"
+	"github.com/oneo-me/onevra/source/components"
 )
 
 const testAddress = "tc" + "AbC123_-xyz789" + "0123456789abcdef"
@@ -211,4 +212,76 @@ func TestDetailShowsDirectModeWithoutTailcatFields(t *testing.T) {
 			t.Fatalf("direct detail still shows %q; texts = %v", unwanted, tt.Texts())
 		}
 	}
+}
+
+func TestErrorsBecomeErrorToasts(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.FailText("adb 连接超时")
+
+	queued := vm.drainToasts()
+	if len(queued) != 1 {
+		t.Fatalf("queued %d toasts, want 1", len(queued))
+	}
+	if queued[0].Type != components.ToastError || queued[0].Description != "adb 连接超时" {
+		t.Fatalf("toast = %+v", queued[0])
+	}
+	if queued[0].Title != "操作失败" {
+		t.Fatalf("title = %q", queued[0].Title)
+	}
+	// Drained: the next frame must not show it again.
+	if again := vm.drainToasts(); len(again) != 0 {
+		t.Fatalf("a drained toast was queued again: %+v", again)
+	}
+}
+
+func TestSuccessBecomeSuccessToasts(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.Notify("已复制 127.0.0.1:5555")
+	queued := vm.drainToasts()
+	if len(queued) != 1 || queued[0].Type != components.ToastSuccess {
+		t.Fatalf("toasts = %+v", queued)
+	}
+}
+
+func TestNilErrorQueuesNoToast(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.Fail(nil)
+	if queued := vm.drainToasts(); len(queued) != 0 {
+		t.Fatalf("a nil error produced a toast: %+v", queued)
+	}
+}
+
+func TestConnectFailureIsReportedAsToast(t *testing.T) {
+	// The same call the connect button makes: the error must reach the user
+	// as an error toast instead of only landing in the session.
+	profile := core.Profile{ID: uuid.New(), Name: "本地", DirectADB: true, DirectTarget: "127.0.0.1:5554"}
+	runner := failRunner{}
+	m := core.NewManager(core.ManagerOptions{
+		Configuration: core.Configuration{Profiles: []core.Profile{profile}, Tools: core.ToolSettings{ADB: os.Args[0]}},
+		Credentials:   core.NewMemoryCredentialStore(),
+		Identities:    core.NewIdentityStore(t.TempDir()),
+		Runner:        runner,
+		Locate:        func(string) (string, bool) { return "", false },
+	})
+	vm := NewViewModel(m, func(string) (string, bool) { return "", false })
+	vm.Fail(m.Connect(context.Background(), profile.ID))
+
+	queued := vm.drainToasts()
+	if len(queued) != 1 || queued[0].Type != components.ToastError {
+		t.Fatalf("toasts = %+v", queued)
+	}
+	if !strings.Contains(queued[0].Description, "offline") {
+		t.Fatalf("the toast lost adb's message: %q", queued[0].Description)
+	}
+}
+
+// failRunner reports every adb call as failing.
+type failRunner struct{}
+
+func (failRunner) Start(context.Context, core.Command, func(string)) (*core.Proc, error) {
+	return nil, core.Error("adb: device offline")
+}
+
+func (failRunner) Run(context.Context, core.Command, func(string)) (core.Result, error) {
+	return core.Result{}, core.Error("adb: device offline")
 }

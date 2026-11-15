@@ -11,6 +11,9 @@ import (
 
 // ContentView is the detail pane for the selected device.
 func (vm *ViewModel) ContentView(c *ui.Context) {
+	for _, toast := range vm.drainToasts() {
+		c.AddToast(toast)
+	}
 	vm.toolbar(c)
 	profile, ok := vm.SelectedProfile()
 	if ok {
@@ -93,7 +96,7 @@ func (vm *ViewModel) detail(c *ui.Context, profile core.Profile) {
 				connectLabel = "重新连接"
 			}
 			if components.Button(c, connectLabel, components.ButtonPrimary).Clicked() {
-				go func() { _ = manager.Connect(context.Background(), profile.ID) }()
+				go func() { vm.Fail(manager.Connect(context.Background(), profile.ID)) }()
 			}
 			if components.Button(c, "断开", components.ButtonSecondary).Clicked() {
 				go manager.Disconnect(context.Background(), profile.ID)
@@ -139,10 +142,10 @@ func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.
 
 		ui.Row(c).Gap(6).Children(func() {
 			if components.Button(c, "探测链路", components.ButtonSecondary).Clicked() {
-				go func() { _ = manager.Diagnose(context.Background(), profile.ID) }()
+				go func() { vm.Fail(manager.Diagnose(context.Background(), profile.ID)) }()
 			}
 			if components.Button(c, "刷新信息", components.ButtonSecondary).Clicked() {
-				go func() { _ = manager.RefreshDeviceInformation(context.Background(), profile.ID) }()
+				go func() { vm.Fail(manager.RefreshDeviceInformation(context.Background(), profile.ID)) }()
 			}
 			if profile.DirectADB {
 				if components.Button(c, "复制 ADB 地址", components.ButtonGhost).Clicked() && profile.DirectTarget != "" {
@@ -165,7 +168,7 @@ func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.
 				vm.startDownload(profile)
 			}
 			if components.Button(c, "屏幕控制", components.ButtonSecondary).Clicked() {
-				go func() { _, _ = manager.BeginScreen(context.Background(), profile.ID) }()
+				go func() { _, err := manager.BeginScreen(context.Background(), profile.ID); vm.Fail(err) }()
 			}
 			if components.Button(c, "终端", components.ButtonSecondary).Clicked() {
 				vm.openTerminal(profile)

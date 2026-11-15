@@ -369,7 +369,7 @@ func (m *Manager) Connect(ctx context.Context, id uuid.UUID) error {
 
 	oldTasks := m.cancelDeviceTasks(id)
 
-	if previous != nil {
+	if previous != nil && previous.conn != nil {
 		_ = previous.conn.Close(ctx)
 	}
 	waitDones(oldTasks)
@@ -487,7 +487,9 @@ func (m *Manager) failConnect(id uuid.UUID, generation uuid.UUID, err error) err
 	}
 	if runtime, ok := m.runtimes[id]; ok {
 		delete(m.runtimes, id)
-		_ = runtime.conn.Close(m.ctx)
+		if runtime.conn != nil {
+			_ = runtime.conn.Close(m.ctx)
+		}
 	}
 	m.setStateLocked(id, func(s *Session) {
 		s.State = StateFailed

@@ -124,7 +124,7 @@ func (a *App) installComponent(component core.ToolComponent) {
 				return a.env.Manager.ConfigureInstalledTool(comp, path)
 			})
 		if err != nil {
-			a.vm.Notice = err.Error()
+			a.vm.Fail(err)
 		} else {
 			a.vm.Notice = component.Label() + " 已配置完成"
 		}

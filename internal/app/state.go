@@ -2,7 +2,11 @@
 package app
 
 import (
+	"sync"
+	"time"
+
 	"github.com/Niexiawei/tailcat-tool/internal/core"
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/google/uuid"
 	"github.com/oneo-me/onevra/source/components"
@@ -54,6 +58,62 @@ type ViewModel struct {
 	// Sidebar section expansion; both start open.
 	SavedOpen     bool
 	TemporaryOpen bool
+
+	// Invalidate repaints the window; set once the window exists.
+	Invalidate func()
+
+	// pendingToasts is filled from any goroutine and drained while the view
+	// builds, because a toast can only be added with a live context.
+	toastsMu sync.Mutex
+	toasts   []ui.Toast
+}
+
+// Fail reports an error as an error-level toast.
+func (vm *ViewModel) Fail(err error) {
+	if err == nil {
+		return
+	}
+	vm.FailText(err.Error())
+}
+
+// FailText reports a message as an error-level toast.
+func (vm *ViewModel) FailText(text string) {
+	if text == "" {
+		return
+	}
+	vm.queueToast(ui.Toast{
+		Type:        components.ToastError,
+		Title:       "操作失败",
+		Description: text,
+		Timeout:     8 * time.Second,
+	})
+}
+
+// Notify reports a completed action as a success toast.
+func (vm *ViewModel) Notify(text string) {
+	if text == "" {
+		return
+	}
+	vm.queueToast(ui.Toast{Type: components.ToastSuccess, Title: text, Timeout: 3 * time.Second})
+}
+
+// queueToast stores a toast for the next frame and asks for that frame.
+func (vm *ViewModel) queueToast(t ui.Toast) {
+	vm.toastsMu.Lock()
+	vm.toasts = append(vm.toasts, t)
+	vm.toastsMu.Unlock()
+	if vm.Invalidate != nil {
+		mygo.RunOnMain(vm.Invalidate)
+	}
+}
+
+// drainToasts takes what was queued since the last frame.
+func (vm *ViewModel) drainToasts() []ui.Toast {
+	vm.toastsMu.Lock()
+	defer vm.toastsMu.Unlock()
+	queued := vm.toasts
+	vm.toasts = nil
+	return queued
 }
 
 // EditorRequest asks the editor to open on a device, or on a new one.
@@ -108,9 +168,11 @@ func (vm *ViewModel) deviceRow(c *ui.Context, profile core.Profile, temporary bo
 	session := vm.Manager.Session(profile.ID)
 
 	// Fill() would stretch the row to the full column height; a row only
-	// needs to span the width.
+	// needs to span the width. ButtonBase centers its content, so the row
+	// has to be told to start at the left edge.
 	row := ui.ButtonBase(c)
-	row.FillWidth().Shrink(0).Padding(theme.Space(1), theme.Space(1.5)).Gap(theme.Space(1.5))
+	row.FillWidth().Shrink(0).Padding(theme.Space(1), theme.Space(1.5)).Gap(theme.Space(1.5)).
+		Justify(ui.Start).AlignItems(ui.Center).Radius(theme.Radius)
 	if selected {
 		row.Background(theme.Selection)
 	}

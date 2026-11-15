@@ -25,6 +25,7 @@ func (vm *ViewModel) OpenMainWindow() *sidebar.Shell {
 		},
 	})
 	window := shell.Window()
+	vm.Invalidate = window.Invalidate
 	// Closing the window keeps the channels running; the tray reopens it.
 	window.OnClosed(func() { window.Hide() })
 	return shell

@@ -462,3 +462,48 @@ func TestDirectTargetValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestFailConnectSurvivesDirectRuntime(t *testing.T) {
+	// adb reports an unresponsive device, so the direct connect path reaches
+	// failConnect with a runtime whose conn is nil.
+	runner := &fakeRunner{handler: func(_ context.Context, c Command) (Result, error) {
+		if contains(c.Args, "get-state") {
+			return Result{}, Error("adb: device offline")
+		}
+		return Result{}, nil
+	}}
+	f := newManagerFixture(t, func(o *ManagerOptions) {
+		o.Runner = runner
+		o.Configuration.Profiles[0].DirectADB = true
+		o.Configuration.Profiles[0].DirectTarget = "127.0.0.1:5554"
+	})
+	if err := f.m.Connect(context.Background(), f.id); err == nil {
+		t.Fatal("Connect() succeeded against an unresponsive direct target")
+	}
+	session := f.m.Session(f.id)
+	if session.State != StateFailed {
+		t.Fatalf("state = %v, want failed", session.State)
+	}
+	if session.Err == "" {
+		t.Fatal("the failure was not reported in the session")
+	}
+}
+
+func TestReconnectOverDirectRuntimeDropsIt(t *testing.T) {
+	// A second connect must clean up the previous direct runtime, which has
+	// no conn to close.
+	f := newManagerFixture(t, func(o *ManagerOptions) {
+		o.Configuration.Profiles[0].DirectADB = true
+		o.Configuration.Profiles[0].DirectTarget = "emulator-5554"
+	})
+	if err := f.m.Connect(context.Background(), f.id); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	if err := f.m.Connect(context.Background(), f.id); err != nil {
+		t.Fatalf("reconnect error: %v", err)
+	}
+	f.m.Disconnect(context.Background(), f.id)
+	if got := f.m.Session(f.id).State; got != StateDisconnected {
+		t.Fatalf("state = %v, want disconnected", got)
+	}
+}

@@ -12,26 +12,26 @@ import (
 // copyText puts a string on the clipboard.
 func (vm *ViewModel) copyText(text string) {
 	if err := mygo.Clipboard.Write(transfer.TextData(text), mygo.ClipboardOptions{}); err != nil {
-		vm.Notice = "复制失败：" + err.Error()
+		vm.FailText("复制失败：" + err.Error())
 		return
 	}
-	vm.Notice = "已复制 " + text
+	vm.Notify("已复制 " + text)
 }
 
 // promote saves a temporary device under a name the user picks.
 func (vm *ViewModel) promote(profile core.Profile) {
 	if err := vm.Manager.PromoteTemporaryDevice(profile.ID, profile.Name); err != nil {
-		vm.Notice = err.Error()
+		vm.Fail(err)
 		return
 	}
-	vm.Notice = "已保存到我的设备，当前会话保持"
+	vm.Notify("已保存到我的设备，当前会话保持")
 }
 
 // runShell executes one adb shell command as a task.
 func (vm *ViewModel) runShell(profile core.Profile, command string) {
 	if _, err := vm.Manager.BeginADBTask(context.Background(), profile.ID, "Shell 命令",
 		[]string{"shell", command}, 120*1e9); err != nil {
-		vm.Notice = err.Error()
+		vm.Fail(err)
 	}
 }
 
@@ -46,7 +46,7 @@ func (vm *ViewModel) chooseAPK(profile core.Profile) {
 	}
 	if _, err := vm.Manager.BeginADBTask(context.Background(), profile.ID, "安装 "+fileName(paths[0]),
 		[]string{"install", "-r", paths[0]}, 600*1e9); err != nil {
-		vm.Notice = err.Error()
+		vm.Fail(err)
 	}
 }
 
@@ -93,11 +93,7 @@ func (vm *ViewModel) openTerminal(profile core.Profile) {
 		vm.Notice = "当前平台未接入终端"
 		return
 	}
-	go func() {
-		if err := vm.OpenTerminal(profile.ID); err != nil {
-			vm.Notice = err.Error()
-		}
-	}()
+	go func() { vm.Fail(vm.OpenTerminal(profile.ID)) }()
 }
 
 func fileName(path string) string {
