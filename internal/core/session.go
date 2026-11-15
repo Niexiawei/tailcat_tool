@@ -58,6 +58,11 @@ type Profile struct {
 	RemotePort int `json:"remotePort"`
 	// RelaySource is a DERP map URL or inline JSON; empty means the official map.
 	RelaySource string `json:"relaySource,omitempty"`
+	// DirectADB connects straight to ADB, without a Tailcat channel.
+	DirectADB bool `json:"directADB,omitempty"`
+	// DirectTarget is the ADB endpoint: "host:port" for a networked device,
+	// or a USB serial such as "emulator-5554". Not a secret.
+	DirectTarget string `json:"directTarget,omitempty"`
 }
 
 // RelayPreset is a saved DERP map source the user can pick in the editor.

@@ -68,7 +68,9 @@ type Manager struct {
 }
 
 type runtimeState struct {
+	// conn is nil for a direct ADB connection, which has no Tailcat channel.
 	conn       *ForwardConn
+	serial     string
 	adb        string
 	generation uuid.UUID
 }
@@ -374,6 +376,10 @@ func (m *Manager) Connect(ctx context.Context, id uuid.UUID) error {
 	if adbPath == "" {
 		return m.failConnect(id, generation, Error("未找到 ADB，请在设置中指定可执行文件的绝对路径"))
 	}
+	// A direct device never touches Tailcat: no address, identity or relay.
+	if profile.DirectADB {
+		return m.connectDirect(ctx, id, generation, profile, adbPath)
+	}
 
 	relay, err := NormalizeRelay(profile.RelaySource)
 	if err != nil {
@@ -409,7 +415,7 @@ func (m *Manager) Connect(ctx context.Context, id uuid.UUID) error {
 		_ = conn.Close(ctx)
 		return nil
 	}
-	m.runtimes[id] = &runtimeState{conn: conn, adb: adbPath, generation: generation}
+	m.runtimes[id] = &runtimeState{conn: conn, serial: conn.Serial, adb: adbPath, generation: generation}
 	m.setStateLocked(id, func(s *Session) {
 		s.Serial = conn.Serial
 		s.Port = conn.Port
@@ -515,14 +521,18 @@ func (m *Manager) Disconnect(ctx context.Context, id uuid.UUID) {
 	waitDones(jobs)
 
 	if runtime != nil {
-		_ = runtime.conn.Close(ctx)
-		res, err := m.runner.Run(ctx, Command{
-			Path:    runtime.adb,
-			Args:    []string{"disconnect", runtime.conn.Serial},
-			Timeout: 3 * time.Second,
-		}, nil)
-		_ = res
-		_ = err
+		if runtime.conn != nil {
+			_ = runtime.conn.Close(ctx)
+		}
+		// A direct USB serial was never "connected", so it needs no
+		// disconnect; a networked target does.
+		if runtime.conn != nil || strings.Contains(runtime.serial, ":") {
+			_, _ = m.runner.Run(ctx, Command{
+				Path:    runtime.adb,
+				Args:    []string{"disconnect", runtime.serial},
+				Timeout: 3 * time.Second,
+			}, nil)
+		}
 	}
 
 	m.mu.Lock()
@@ -622,7 +632,7 @@ func (m *Manager) refresh(ctx context.Context, id uuid.UUID, generation uuid.UUI
 	}
 	res, err := m.runner.Run(ctx, Command{
 		Path:    runtime.adb,
-		Args:    []string{"-s", runtime.conn.Serial, "get-state"},
+		Args:    []string{"-s", runtime.serial, "get-state"},
 		Timeout: adbStateTimeout,
 	}, nil)
 	output := ""
@@ -696,7 +706,7 @@ func (m *Manager) retryOffline(ctx context.Context, id uuid.UUID, generation uui
 	m.log(id, "尝试恢复 ADB 连接（"+strconv.Itoa(n)+"/"+strconv.Itoa(maxOfflineRetries)+"）")
 	_, _ = m.runner.Run(ctx, Command{
 		Path:    runtime.adb,
-		Args:    []string{"connect", runtime.conn.Serial},
+		Args:    []string{"connect", runtime.serial},
 		Timeout: 10 * time.Second,
 	}, nil)
 	m.refresh(ctx, id, generation)
@@ -765,3 +775,82 @@ func waitDones(dones []chan struct{}) {
 
 // errNoSuchDevice is returned by helpers when the device vanished mid-flight.
 var errNoSuchDevice = errors.New("device no longer exists")
+
+// connectDirect wires a device that is reachable over ADB without Tailcat.
+func (m *Manager) connectDirect(ctx context.Context, id uuid.UUID, generation uuid.UUID, profile Profile, adbPath string) error {
+	serial := strings.TrimSpace(profile.DirectTarget)
+	if serial == "" {
+		return m.failConnect(id, generation, Error("请填写 ADB 地址（IP:端口 或 USB 序列号）"))
+	}
+	if strings.Contains(serial, ":") {
+		// A networked device has to be attached to the local adb server.
+		res, err := m.runner.Run(ctx, Command{
+			Path:    adbPath,
+			Args:    []string{"connect", serial},
+			Timeout: adbConnectTimeout,
+		}, nil)
+		if err != nil {
+			return m.failConnect(id, generation, err)
+		}
+		if out := strings.TrimSpace(res.Output); out != "" {
+			m.log(id, out)
+		}
+	}
+
+	m.mu.Lock()
+	if !m.isCurrentLocked(id, generation) {
+		m.mu.Unlock()
+		return nil
+	}
+	m.runtimes[id] = &runtimeState{serial: serial, adb: adbPath, generation: generation}
+	m.setStateLocked(id, func(s *Session) {
+		s.Serial = serial
+	})
+	m.logLocked(id, "使用本地 ADB 连接")
+	m.notify()
+	m.mu.Unlock()
+
+	// Only ADB decides whether the direct target is usable.
+	if err := m.validateTargetLocked(ctx, id, serial, adbPath, generation); err != nil {
+		return m.failConnect(id, generation, err)
+	}
+	m.startMonitor(id, generation)
+	return nil
+}
+
+// validateTargetLocked checks one direct target with adb get-state.
+func (m *Manager) validateTargetLocked(ctx context.Context, id uuid.UUID, serial, adbPath string, generation uuid.UUID) error {
+	res, err := m.runner.Run(ctx, Command{
+		Path:    adbPath,
+		Args:    []string{"-s", serial, "get-state"},
+		Timeout: adbStateTimeout,
+	}, nil)
+	if err != nil {
+		return sanitizeError(err)
+	}
+	state := StateOffline
+	output := strings.TrimSpace(res.Output)
+	switch {
+	case res.ExitCode == 0 && output == "device":
+		state = StateOnline
+	case strings.Contains(output, "unauthorized"):
+		state = StateUnauthorized
+	}
+	m.mu.Lock()
+	if !m.isCurrentLocked(id, generation) {
+		m.mu.Unlock()
+		return nil
+	}
+	m.setStateLocked(id, func(s *Session) {
+		s.State = state
+		if state == StateOffline {
+			s.Err = "ADB 尚未上线"
+		}
+	})
+	m.notify()
+	m.mu.Unlock()
+	if state == StateOffline {
+		return Error("该设备的 ADB 尚未进入 device 状态")
+	}
+	return nil
+}

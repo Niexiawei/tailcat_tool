@@ -66,13 +66,25 @@ func (vm *ViewModel) chooseUpload(profile core.Profile) {
 	vm.TransferError = ""
 }
 
-// startDownload asks for the remote path through the transfer dialog.
+// startDownload asks for the remote path and a local folder, then pulls.
 func (vm *ViewModel) startDownload(profile core.Profile) {
 	vm.TransferOpen = true
 	vm.TransferUpload = false
 	vm.TransferLocalPath = ""
 	vm.TransferRemotePath = "/sdcard/Download/"
 	vm.TransferError = ""
+}
+
+// chooseDownloadFolder asks where to put a pulled file or directory.
+func (vm *ViewModel) chooseDownloadFolder() {
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+		Title:     "选择保存目录",
+		Directory: true,
+	})
+	if err != nil || len(paths) == 0 {
+		return
+	}
+	vm.TransferLocalPath = paths[0]
 }
 
 // openTerminal opens a terminal bound to the device, when the platform can.

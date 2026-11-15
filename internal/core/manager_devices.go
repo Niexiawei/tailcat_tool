@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 )
@@ -16,6 +17,10 @@ type SaveDeviceRequest struct {
 	PreferredPort *int
 	RemotePort    int
 	RelaySource   string
+	// DirectADB selects a plain ADB connection instead of a Tailcat channel.
+	DirectADB bool
+	// DirectTarget is then the ADB endpoint instead of Address.
+	DirectTarget string
 }
 
 // SaveTemporaryDeviceRequest is one throwaway device as the editor submits it.
@@ -60,6 +65,9 @@ func (m *Manager) persistLocked() error {
 
 // SaveDevice creates or updates a saved device.
 func (m *Manager) SaveDevice(req SaveDeviceRequest) (uuid.UUID, error) {
+	if req.DirectADB {
+		return m.saveDirectDevice(req, false)
+	}
 	name, address, preferred, err := validatedDeviceInput(req.Name, req.Address, req.PreferredPort, req.RemotePort)
 	if err != nil {
 		return uuid.Nil, err
@@ -94,6 +102,8 @@ func (m *Manager) SaveDevice(req SaveDeviceRequest) (uuid.UUID, error) {
 	profile.PreferredPort = preferred
 	profile.RemotePort = req.RemotePort
 	profile.RelaySource = relay.Source
+	profile.DirectADB = false
+	profile.DirectTarget = ""
 
 	updated := append([]Profile(nil), m.profiles...)
 	replaced := false
@@ -130,6 +140,9 @@ func (m *Manager) SaveDevice(req SaveDeviceRequest) (uuid.UUID, error) {
 
 // SaveTemporaryDevice creates or updates a device that lives only in memory.
 func (m *Manager) SaveTemporaryDevice(req SaveDeviceRequest) (uuid.UUID, error) {
+	if req.DirectADB {
+		return m.saveDirectDevice(req, true)
+	}
 	suppliedName := strings.TrimSpace(req.Name)
 	id := uuid.New()
 	if req.ID != nil {
@@ -395,4 +408,102 @@ func itoaSmall(v int) string {
 		v /= 10
 	}
 	return string(buf[i:])
+}
+
+// validateDirectTarget accepts "host:port" or a USB serial.
+func validateDirectTarget(target string) (string, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "", Error("请填写 ADB 地址（IP:端口 或 USB 序列号）")
+	}
+	if strings.IndexFunc(target, unicode.IsSpace) >= 0 {
+		return "", Error("ADB 地址不能包含空格或换行")
+	}
+	if strings.HasPrefix(target, "tc") && Plausible(target) {
+		return "", Error("这是一个 Tailcat 地址，请改用“通过 Tailcat 转发”")
+	}
+	return target, nil
+}
+
+// saveDirectDevice stores a device that uses ADB without a Tailcat channel.
+func (m *Manager) saveDirectDevice(req SaveDeviceRequest, temporary bool) (uuid.UUID, error) {
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = "本地设备 " + itoaSmall(m.nextTemporaryNumber)
+	}
+	if len([]rune(name)) > 80 {
+		return uuid.Nil, Error("设备名称需要 1–80 个字符")
+	}
+	target, err := validateDirectTarget(req.DirectTarget)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	id := uuid.New()
+	if req.ID != nil {
+		id = *req.ID
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if temporary && req.ID == nil {
+		name = "本地设备 " + itoaSmall(m.nextTemporaryNumber)
+	}
+	profile := Profile{
+		ID: id, Name: name, RemotePort: 5555,
+		DirectADB: true, DirectTarget: target,
+	}
+	if existing, ok := m.profileLocked(id); ok {
+		profile.Name = name
+		profile.RemotePort = existing.RemotePort
+	}
+	if temporary {
+		if req.ID != nil {
+			if !m.isTemporaryLocked(id) {
+				return uuid.Nil, Error("临时设备已关闭或已保存")
+			}
+			if session := m.sessionLocked(id); session.Serial != "" || session.State.Busy() {
+				return uuid.Nil, Error("请先断开该临时设备，再修改连接配置")
+			}
+		}
+		replaced := false
+		for i := range m.temporary {
+			if m.temporary[i].ID == id {
+				m.temporary[i] = profile
+				replaced = true
+			}
+		}
+		if !replaced {
+			m.temporary = append(m.temporary, profile)
+			m.sessions[id] = NewSession()
+			m.nextTemporaryNumber++
+		}
+		m.notify()
+		return id, nil
+	}
+
+	if session := m.sessionLocked(id); session.Serial != "" || session.State.Busy() {
+		return uuid.Nil, Error("请先断开该设备，再修改连接配置")
+	}
+	updated := append([]Profile(nil), m.profiles...)
+	replaced := false
+	for i := range updated {
+		if updated[i].ID == id {
+			updated[i] = profile
+			replaced = true
+		}
+	}
+	if !replaced {
+		updated = append(updated, profile)
+	}
+	saved := m.profiles
+	m.profiles = updated
+	if err := m.persistLocked(); err != nil {
+		m.profiles = saved
+		return uuid.Nil, err
+	}
+	if _, ok := m.sessions[id]; !ok {
+		m.sessions[id] = NewSession()
+	}
+	m.notify()
+	return id, nil
 }

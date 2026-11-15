@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo/ui"
@@ -13,7 +14,10 @@ import (
 
 // EditorInput is the raw text of the device form.
 type EditorInput struct {
-	Name           string
+	Name string
+	// Mode is "tailcat" (default) or "adb" for a plain local ADB target.
+	Mode           string
+	DirectTarget   string
 	Address        string
 	LocalPort      string
 	RemotePort     string
@@ -23,7 +27,10 @@ type EditorInput struct {
 
 // EditorValues are the validated values the manager receives.
 type EditorValues struct {
-	Name          string
+	Name string
+	// DirectADB means the device is reached over ADB without Tailcat.
+	DirectADB     bool
+	DirectTarget  string
 	Address       string
 	PreferredPort *int
 	RemotePort    int
@@ -35,10 +42,24 @@ type EditorValues struct {
 func (in EditorInput) Validate() (EditorValues, error) {
 	var out EditorValues
 	out.Name = strings.TrimSpace(in.Name)
-	out.Address = strings.TrimSpace(in.Address)
 	if out.Name == "" || len([]rune(out.Name)) > 80 {
 		return out, core.Error("设备名称需要 1–80 个字符")
 	}
+	if in.Mode == "adb" {
+		out.DirectADB = true
+		out.DirectTarget = strings.TrimSpace(in.DirectTarget)
+		if out.DirectTarget == "" {
+			return out, core.Error("请填写 ADB 地址（IP:端口 或 USB 序列号）")
+		}
+		if strings.IndexFunc(out.DirectTarget, unicode.IsSpace) >= 0 {
+			return out, core.Error("ADB 地址不能包含空格或换行")
+		}
+		if core.Plausible(out.DirectTarget) {
+			return out, core.Error("这是一个 Tailcat 地址，请改用“通过 Tailcat 转发”")
+		}
+		return out, nil
+	}
+	out.Address = strings.TrimSpace(in.Address)
 	if !core.Plausible(out.Address) {
 		return out, core.Error("请填写以 tc 开头的完整 Tailcat 连接地址")
 	}
@@ -74,9 +95,13 @@ func (vm *ViewModel) openEditor(request *EditorRequest) {
 	vm.PendingEditor = request
 	vm.EditorError = ""
 	vm.EditorPresetName = ""
-	draft := EditorInput{RemotePort: "5555", RelaySelection: "default"}
+	draft := EditorInput{RemotePort: "5555", RelaySelection: "default", Mode: "tailcat"}
 	if request.Profile != nil {
 		profile := *request.Profile
+		if profile.DirectADB {
+			draft.Mode = "adb"
+			draft.DirectTarget = profile.DirectTarget
+		}
 		draft.Name = profile.Name
 		draft.RemotePort = strconv.Itoa(profile.RemotePort)
 		if profile.PreferredPort != nil {
@@ -121,6 +146,7 @@ func (vm *ViewModel) submitEditor() {
 		deviceID, saveErr := vm.Manager.SaveTemporaryDevice(core.SaveTemporaryDeviceRequest{
 			ID: id, Name: values.Name, Address: values.Address,
 			PreferredPort: values.PreferredPort, RemotePort: values.RemotePort, RelaySource: values.RelaySource,
+			DirectADB: values.DirectADB, DirectTarget: values.DirectTarget,
 		})
 		if saveErr != nil {
 			vm.EditorError = saveErr.Error()
@@ -134,6 +160,7 @@ func (vm *ViewModel) submitEditor() {
 		deviceID, saveErr := vm.Manager.SaveDevice(core.SaveDeviceRequest{
 			ID: id, Name: values.Name, Address: values.Address,
 			PreferredPort: values.PreferredPort, RemotePort: values.RemotePort, RelaySource: values.RelaySource,
+			DirectADB: values.DirectADB, DirectTarget: values.DirectTarget,
 		})
 		if saveErr != nil {
 			vm.EditorError = saveErr.Error()
@@ -148,36 +175,31 @@ func (vm *ViewModel) submitEditor() {
 func (vm *ViewModel) EditorView(c *ui.Context) {
 	open := vm.PendingEditor != nil
 	components.Dialog(c, &open, components.DialogOptions{Label: "设备设置"}, func(panel ui.Element) {
-		panel.Padding(20).Gap(10).Width(460)
+		panel.Padding(20).Gap(10).Width(470)
 		panel.Children(func() {
-			title := "添加设备"
-			if vm.PendingEditor != nil {
-				switch {
-				case vm.PendingEditor.Temporary && vm.PendingEditor.Profile == nil:
-					title = "临时连接"
-				case vm.PendingEditor.Temporary:
-					title = "编辑临时设备"
-				case vm.PendingEditor.Profile != nil:
-					title = "编辑设备"
-				}
-			}
-			components.Text(c, title).FontSize(18).Bold()
+			components.Text(c, vm.editorTitle()).FontSize(18).Bold()
 			field(c, "设备名称", &vm.EditorDraft.Name, false)
-			field(c, "Tailcat 地址", &vm.EditorDraft.Address, true)
-			field(c, "本地端口（留空自动）", &vm.EditorDraft.LocalPort, false)
-			field(c, "远端 ADB 端口", &vm.EditorDraft.RemotePort, false)
-			ui.Row(c).Gap(6).Children(func() {
-				if components.Button(c, "默认中继", components.ButtonGhost).Clicked() {
-					vm.EditorDraft.RelaySelection = "default"
-					vm.EditorDraft.RelaySource = ""
+			vm.connectionModeRadio(c)
+			if vm.EditorDraft.Mode == "adb" {
+				field(c, "ADB 地址（IP:端口 或 USB 序列号）", &vm.EditorDraft.DirectTarget, false)
+				components.Text(c, "直连不经过 Tailcat：走本机 adb server，适合 USB 或同一局域网内的设备。").FontSize(11)
+			} else {
+				field(c, "Tailcat 地址", &vm.EditorDraft.Address, true)
+				field(c, "本地端口（留空自动）", &vm.EditorDraft.LocalPort, false)
+				field(c, "远端 ADB 端口", &vm.EditorDraft.RemotePort, false)
+				ui.Row(c).Gap(6).Children(func() {
+					if components.Button(c, "默认中继", components.ButtonGhost).Clicked() {
+						vm.EditorDraft.RelaySelection = "default"
+						vm.EditorDraft.RelaySource = ""
+					}
+					if components.Button(c, "自定义中继", components.ButtonGhost).Clicked() {
+						vm.EditorDraft.RelaySelection = "custom"
+					}
+					components.Text(c, "当前："+relaySelectionLabel(vm)).FontSize(11)
+				})
+				if vm.EditorDraft.RelaySelection != "default" {
+					field(c, "DERP JSON 链接或内容", &vm.EditorDraft.RelaySource, false)
 				}
-				if components.Button(c, "自定义中继", components.ButtonGhost).Clicked() {
-					vm.EditorDraft.RelaySelection = "custom"
-				}
-				components.Text(c, "当前："+relaySelectionLabel(vm)).FontSize(11)
-			})
-			if vm.EditorDraft.RelaySelection != "default" {
-				field(c, "DERP JSON 链接或内容", &vm.EditorDraft.RelaySource, false)
 			}
 			if vm.EditorError != "" {
 				components.Text(c, vm.EditorError).FontSize(11)
@@ -192,6 +214,41 @@ func (vm *ViewModel) EditorView(c *ui.Context) {
 				}
 			})
 		})
+	})
+}
+
+// editorTitle names the form for the device being edited.
+func (vm *ViewModel) editorTitle() string {
+	if vm.PendingEditor == nil {
+		return "添加设备"
+	}
+	switch {
+	case vm.PendingEditor.Temporary && vm.PendingEditor.Profile == nil:
+		return "临时连接"
+	case vm.PendingEditor.Temporary:
+		return "编辑临时设备"
+	case vm.PendingEditor.Profile != nil:
+		return "编辑设备"
+	}
+	return "添加设备"
+}
+
+// connectionModeRadio is a two-state radio: Tailcat (default) or direct ADB.
+func (vm *ViewModel) connectionModeRadio(c *ui.Context) {
+	ui.Row(c).Gap(6).Children(func() {
+		components.Text(c, "连接方式").FontSize(11)
+		tailcatLabel, adbLabel := "○ 通过 Tailcat 转发", "○ 本地 ADB 直连"
+		if vm.EditorDraft.Mode == "adb" {
+			adbLabel = "● 本地 ADB 直连"
+		} else {
+			tailcatLabel = "● 通过 Tailcat 转发"
+		}
+		if components.Button(c, tailcatLabel, components.ButtonGhost).Clicked() {
+			vm.EditorDraft.Mode = "tailcat"
+		}
+		if components.Button(c, adbLabel, components.ButtonGhost).Clicked() {
+			vm.EditorDraft.Mode = "adb"
+		}
 	})
 }
 

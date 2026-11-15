@@ -86,13 +86,13 @@ func (m *Manager) operationTarget(ctx context.Context, id uuid.UUID) (operationT
 		return operationTarget{}, Error("该设备的 ADB 尚未进入 device 状态")
 	}
 	runtime, ok := m.runtimes[id]
-	if !ok || runtime.conn == nil {
+	if !ok || runtime.serial == "" {
 		return operationTarget{}, Error("设备通道已结束，请重新连接")
 	}
 	if session.State != StateOnline {
 		return operationTarget{}, Error("该设备的 ADB 尚未进入 device 状态")
 	}
-	return operationTarget{Serial: runtime.conn.Serial, ADB: runtime.adb, Generation: runtime.generation}, nil
+	return operationTarget{Serial: runtime.serial, ADB: runtime.adb, Generation: runtime.generation}, nil
 }
 
 func (m *Manager) targetIsCurrent(id uuid.UUID, target operationTarget) bool {
@@ -102,11 +102,11 @@ func (m *Manager) targetIsCurrent(id uuid.UUID, target operationTarget) bool {
 		return false
 	}
 	runtime, ok := m.runtimes[id]
-	if !ok || runtime.conn == nil {
+	if !ok || runtime.serial == "" {
 		return false
 	}
 	return m.isCurrentLocked(id, target.Generation) &&
-		runtime.conn.Serial == target.Serial &&
+		runtime.serial == target.Serial &&
 		m.sessions[id].Serial == target.Serial
 }
 

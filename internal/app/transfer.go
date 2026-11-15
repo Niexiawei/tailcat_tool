@@ -35,6 +35,14 @@ func (vm *ViewModel) TransferView(c *ui.Context) {
 			if vm.TransferLocalPath != "" {
 				components.Text(c, "本地："+vm.TransferLocalPath).FontSize(11)
 			}
+			if !vm.TransferUpload {
+				ui.Row(c).Fill().Gap(8).Children(func() {
+					components.Text(c, orPlaceholder(vm.TransferLocalPath, "请选择本地保存目录")).FontSize(11)
+					if components.Button(c, "选择目录", components.ButtonGhost).Clicked() {
+						vm.chooseDownloadFolder()
+					}
+				})
+			}
 			label := "远端文件或目录路径"
 			if vm.TransferUpload {
 				label = "远端保存目录或路径"
@@ -77,8 +85,15 @@ func (vm *ViewModel) submitTransfer() {
 			return
 		}
 	} else {
-		vm.TransferError = "请选择本地保存目录后重试"
-		return
+		if vm.TransferLocalPath == "" {
+			vm.TransferError = "请选择本地保存目录"
+			return
+		}
+		if _, err := vm.Manager.BeginADBTask(context.Background(), profile.ID, "下载 "+fileName(remote),
+			[]string{"pull", remote, vm.TransferLocalPath}, 30*60*1e9); err != nil {
+			vm.TransferError = err.Error()
+			return
+		}
 	}
 	vm.TransferOpen = false
 }

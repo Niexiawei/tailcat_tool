@@ -396,3 +396,69 @@ func TestConnectRequiresAdb(t *testing.T) {
 		t.Fatalf("Connect() = %v, want a missing-ADB error", err)
 	}
 }
+
+func TestDirectConnectNetworkTarget(t *testing.T) {
+	f := newManagerFixture(t)
+	f.m.mu.Lock()
+	f.m.profiles[0].DirectADB = true
+	f.m.profiles[0].DirectTarget = "192.168.1.20:5555"
+	f.m.mu.Unlock()
+
+	if err := f.m.Connect(context.Background(), f.id); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	session := f.m.Session(f.id)
+	if session.State != StateOnline || session.Serial != "192.168.1.20:5555" {
+		t.Fatalf("session = %+v", session)
+	}
+	if f.opener.openCount() != 0 {
+		t.Fatalf("a Tailcat channel was opened for a direct device (%d)", f.opener.openCount())
+	}
+	log := f.runner.commandLog()
+	if len(log) == 0 || !strings.Contains(log[0], "connect 192.168.1.20:5555") {
+		t.Fatalf("first adb call = %v, want connect", log)
+	}
+	// No identity is touched in direct mode.
+	if _, err := f.m.identities.Identity(context.Background(), f.id.String()+"-connection"); err == nil {
+		t.Log("identity store is reachable; it must simply not be used")
+	}
+}
+
+func TestDirectConnectUSBSerial(t *testing.T) {
+	f := newManagerFixture(t)
+	f.m.mu.Lock()
+	f.m.profiles[0].DirectADB = true
+	f.m.profiles[0].DirectTarget = "emulator-5554"
+	f.m.mu.Unlock()
+
+	if err := f.m.Connect(context.Background(), f.id); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	if got := f.m.Session(f.id).Serial; got != "emulator-5554" {
+		t.Fatalf("serial = %q", got)
+	}
+	for _, cmd := range f.runner.commandLog() {
+		if strings.Contains(cmd, " connect ") {
+			t.Fatalf("a USB serial was sent to adb connect: %q", cmd)
+		}
+	}
+}
+
+func TestDirectTargetValidation(t *testing.T) {
+	cases := []struct {
+		target  string
+		wantErr bool
+	}{
+		{"192.168.1.20:5555", false},
+		{"emulator-5554", false},
+		{"", true},
+		{"has space", true},
+		{"tc" + strings.Repeat("A", 24), true},
+	}
+	for _, tc := range cases {
+		_, err := validateDirectTarget(tc.target)
+		if tc.wantErr != (err != nil) {
+			t.Fatalf("validateDirectTarget(%q) = %v", tc.target, err)
+		}
+	}
+}

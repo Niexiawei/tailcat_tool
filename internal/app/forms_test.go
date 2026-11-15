@@ -167,3 +167,37 @@ func TestAttentionDialogAppears(t *testing.T) {
 	vm.Manager.AckAttention(profile.ID)
 	vm.Manager.Disconnect(context.Background(), profile.ID)
 }
+
+func TestEditorDirectMode(t *testing.T) {
+	base := EditorInput{Name: "USB", Mode: "adb", DirectTarget: "emulator-5554"}
+	values, err := base.Validate()
+	if err != nil {
+		t.Fatalf("Validate() error: %v", err)
+	}
+	if !values.DirectADB || values.DirectTarget != "emulator-5554" {
+		t.Fatalf("values = %+v", values)
+	}
+	bad := base
+	bad.DirectTarget = ""
+	if _, err := bad.Validate(); err == nil {
+		t.Fatal("an empty direct target was accepted")
+	}
+	tailcat := base
+	tailcat.DirectTarget = testAddress
+	if _, err := tailcat.Validate(); err == nil {
+		t.Fatal("a Tailcat address was accepted as a direct target")
+	}
+}
+
+func TestEditorDefaultsToTailcatMode(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.openEditor(&EditorRequest{})
+	if vm.EditorDraft.Mode != "tailcat" {
+		t.Fatalf("default mode = %q, want tailcat", vm.EditorDraft.Mode)
+	}
+	tt := ui.NewTester(vm.ContentView, 900, 700)
+	joined := strings.Join(tt.Texts(), " | ")
+	if !strings.Contains(joined, "通过 Tailcat 转发") || !strings.Contains(joined, "本地 ADB 直连") {
+		t.Fatalf("the connection mode radio is missing: %s", joined)
+	}
+}

@@ -29,10 +29,16 @@ go run ./cmd/tailcat-manager --demo
 
 对端（车机 / EVCC）仍需运行真正的 `tailcat` server 并给出 `tc...` 连接地址。
 
+添加设备时可选两种连接方式（默认前者）：
+
+- **通过 Tailcat 转发**：填 `tc...` 地址，走 Tailcat 通道，适合跨网/远程设备。
+- **本地 ADB 直连**：填 `IP:端口` 或 USB 序列号（如 `emulator-5554`），直接用本机 adb server，不经过 Tailcat、不使用设备身份；`IP:端口` 会先执行 `adb connect`。
+
 ## 数据位置
 
 - 配置：macOS `~/Library/Application Support/TailcatManager/configuration.json`；Linux `${XDG_CONFIG_HOME:-~/.config}/TailcatManager/`；Windows `%AppData%\TailcatManager\`。目录 0700、文件 0600。
 - 连接地址只进系统凭据库，**不写配置文件**。
+- 直连设备的目标地址存在配置里（它不是凭据）；Tailcat 设备只有 `tc...` 地址进凭据库。
 - 设备身份：`<配置目录>/Identities/<uuid>-connection.private.json` 与 `-probe.private.json`，格式与 `tailcat --key=` 一致。
 - 历史：`<配置目录>/history.db`（SQLite，纯 Go 驱动 `modernc.org/sqlite`），只存任务、通道日志、连通测试结果；配置、凭据、私钥都不进这个库。删掉它就等于清空历史，不影响使用。
 
