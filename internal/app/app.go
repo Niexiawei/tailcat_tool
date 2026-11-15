@@ -5,7 +5,9 @@ import (
 	"log"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
+	"github.com/Niexiawei/tailcat-tool/internal/platform"
 	"github.com/egoist/mygo"
+	"github.com/google/uuid"
 	"github.com/oneo-me/onevra/source/shells/sidebar"
 )
 
@@ -57,6 +59,7 @@ func (a *App) Start(trayIcon []byte) {
 		log.Printf("tray icon unavailable: %v", err)
 	}
 	a.vm.Install = a.installComponent
+	a.vm.OpenTerminal = a.openTerminal
 	a.vm.Activate = func(id string) { go a.connectByID(id) }
 }
 
@@ -85,6 +88,15 @@ func (a *App) keepTrayFresh() {
 			}
 		})
 	}
+}
+
+// openTerminal starts a terminal bound to the device.
+func (a *App) openTerminal(id uuid.UUID) error {
+	adb, serial, err := a.env.Manager.TerminalCommand(context.Background(), id)
+	if err != nil {
+		return err
+	}
+	return platform.OpenTerminal(adb, serial)
 }
 
 func (a *App) connectByID(id string) {
