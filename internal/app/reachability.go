@@ -20,7 +20,7 @@ func (vm *ViewModel) ReachabilityView(c *ui.Context) {
 			components.Text(c, "全部设备连通测试").FontSize(18).Bold()
 			components.Text(c, "测试全部设备的 Tailcat ping，每次探测最长 8 秒，同时测试 3 台；不会建立或断开 ADB 连接。").FontSize(11)
 			results := vm.Manager.Reachability().SortedResults()
-			ui.Row(c).Fill().Gap(8).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).Children(func() {
 				components.Text(c, "设备").FontSize(11)
 				components.Text(c, "Tailcat ping").FontSize(11)
 				components.Text(c, "延迟").FontSize(11)
@@ -32,14 +32,14 @@ func (vm *ViewModel) ReachabilityView(c *ui.Context) {
 				if detail == "" || detail == "—" {
 					detail = result.Detail
 				}
-				ui.Row(c).Fill().Gap(8).Children(func() {
+				ui.Row(c).FillWidth().Gap(8).Children(func() {
 					components.Text(c, result.Name).FontSize(11)
 					components.Text(c, result.State.Label()).FontSize(11)
 					components.Text(c, result.Latency).FontSize(11)
 					components.Text(c, detail).FontSize(11)
 				})
 			}
-			ui.Row(c).Fill().Gap(8).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).Children(func() {
 				if components.Button(c, "重新测试", components.ButtonSecondary).Clicked() {
 					vm.Manager.TestAllDevices()
 				}

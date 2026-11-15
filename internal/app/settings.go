@@ -31,7 +31,7 @@ func (vm *ViewModel) SettingsView(c *ui.Context) {
 			if vm.SettingsError != "" {
 				components.Text(c, vm.SettingsError).FontSize(11)
 			}
-			ui.Row(c).Fill().Gap(8).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).Children(func() {
 				if components.Button(c, "关闭", components.ButtonGhost).Clicked() {
 					vm.SettingsOpen = false
 					open = false

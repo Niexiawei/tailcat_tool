@@ -50,7 +50,23 @@ func (s *ConfigStore) Load() (Configuration, error) {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return Configuration{}, Errorf("配置文件无法解析：%v", err)
 	}
+	inferDirectMode(&cfg)
 	return cfg, nil
+}
+
+// inferDirectMode repairs a direct device whose flag did not survive a save
+// (older builds wrote only the target) and drops the remote port such a device
+// never uses. It is idempotent, so no migration step is needed.
+func inferDirectMode(cfg *Configuration) {
+	for i := range cfg.Profiles {
+		if cfg.Profiles[i].DirectTarget != "" && !cfg.Profiles[i].DirectADB {
+			cfg.Profiles[i].DirectADB = true
+		}
+		if cfg.Profiles[i].DirectADB {
+			cfg.Profiles[i].RemotePort = 0
+			cfg.Profiles[i].PreferredPort = nil
+		}
+	}
 }
 
 // Save writes the configuration atomically with owner-only permissions.

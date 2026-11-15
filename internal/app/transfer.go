@@ -36,7 +36,7 @@ func (vm *ViewModel) TransferView(c *ui.Context) {
 				components.Text(c, "本地："+vm.TransferLocalPath).FontSize(11)
 			}
 			if !vm.TransferUpload {
-				ui.Row(c).Fill().Gap(8).Children(func() {
+				ui.Row(c).FillWidth().Gap(8).Children(func() {
 					components.Text(c, orPlaceholder(vm.TransferLocalPath, "请选择本地保存目录")).FontSize(11)
 					if components.Button(c, "选择目录", components.ButtonGhost).Clicked() {
 						vm.chooseDownloadFolder()
@@ -51,7 +51,7 @@ func (vm *ViewModel) TransferView(c *ui.Context) {
 			if vm.TransferError != "" {
 				components.Text(c, vm.TransferError).FontSize(11)
 			}
-			ui.Row(c).Fill().Gap(8).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).Children(func() {
 				if components.Button(c, "取消", components.ButtonGhost).Clicked() {
 					vm.TransferOpen = false
 					open = false

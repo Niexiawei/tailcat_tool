@@ -48,6 +48,9 @@ var (
 	_ = ui.Text
 	_ = ui.NewTester
 	_ = (*ui.Context).Invalidate
+	_ = ui.Scroll
+	_ = ui.Element.FillWidth
+	_ = ui.Element.Grow
 )
 
 // onevra: shells, theme, components and icons.
@@ -56,6 +59,10 @@ var (
 	_                   = plain.NewShell
 	_                   = theme.Onevra
 	_                   = components.TextBox
+	_                   = components.Radio[string]
+	_                   = components.Accordion
+	_                   = (*components.AccordionGroup).Item
+	_                   = sidebar.HeaderHeight
 	_                   = components.Switch
 	_                   = components.Tabs
 	_                   = components.TabsSegmented

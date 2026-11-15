@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/oneo-me/onevra/source/components"
 	"github.com/oneo-me/onevra/source/icons/lucide"
+	"github.com/oneo-me/onevra/source/shells/sidebar"
 )
 
 // ViewModel is everything the window reads. It owns no manager state of its
@@ -49,6 +50,10 @@ type ViewModel struct {
 	ReachabilityOpen bool
 	ShellCommand     string
 	AttentionOpen    bool
+
+	// Sidebar section expansion; both start open.
+	SavedOpen     bool
+	TemporaryOpen bool
 }
 
 // EditorRequest asks the editor to open on a device, or on a new one.
@@ -66,7 +71,7 @@ func (vm *ViewModel) newTemporaryDevice() {
 
 // NewViewModel wraps a manager.
 func NewViewModel(m *core.Manager, locate core.LocateTool) *ViewModel {
-	vm := &ViewModel{Manager: m, Locate: locate}
+	vm := &ViewModel{Manager: m, Locate: locate, SavedOpen: true, TemporaryOpen: true}
 	if profiles := m.AllProfiles(); len(profiles) > 0 {
 		vm.Selection = profiles[0].ID
 	}
@@ -102,8 +107,10 @@ func (vm *ViewModel) deviceRow(c *ui.Context, profile core.Profile, temporary bo
 	selected := vm.Selection == profile.ID
 	session := vm.Manager.Session(profile.ID)
 
+	// Fill() would stretch the row to the full column height; a row only
+	// needs to span the width.
 	row := ui.ButtonBase(c)
-	row.Fill().Padding(theme.Space(1), theme.Space(1.5)).Gap(theme.Space(1.5))
+	row.FillWidth().Shrink(0).Padding(theme.Space(1), theme.Space(1.5)).Gap(theme.Space(1.5))
 	if selected {
 		row.Background(theme.Selection)
 	}
@@ -112,10 +119,13 @@ func (vm *ViewModel) deviceRow(c *ui.Context, profile core.Profile, temporary bo
 		ui.Column(c).Gap(1).Children(func() {
 			components.Text(c, profile.Name).Bold().SingleLine()
 			line := session.State.Label()
-			if session.Port != 0 {
+			switch {
+			case profile.DirectADB:
+				line += " · " + orPlaceholder(profile.DirectTarget, "未填地址")
+			case session.Port != 0:
 				line += " · " + itoa(session.Port)
 			}
-			components.Text(c, line).FontSize(11)
+			components.Text(c, line).FontSize(11).SingleLine()
 		})
 		if temporary {
 			components.Icon(c, lucide.Zap).Width(12).Height(12)
@@ -143,43 +153,64 @@ func statusDot(c *ui.Context, state core.ConnectionState) {
 	ui.Column(c).Width(8).Height(8).Radius(4).Background(color)
 }
 
-// SidebarView is the device list plus the tool health footer.
+// SidebarView is the scrolling device list. The floating window header sits
+// above it, so it starts below HeaderHeight.
 func (vm *ViewModel) SidebarView(c *ui.Context) {
 	vm.ensureSelection()
-	saved := vm.Manager.Profiles()
-	temporary := vm.Manager.TemporaryProfiles()
-
-	ui.Column(c).Fill().Children(func() {
-		ui.Column(c).Fill().Padding(10, 8).Gap(2).Children(func() {
-			sectionHeader(c, "我的设备")
-			for _, profile := range saved {
-				vm.deviceRow(c, profile, false)
-			}
-			sectionHeader(c, "临时设备")
-			for _, profile := range temporary {
-				vm.deviceRow(c, profile, true)
-			}
-			if components.Button(c, "新建临时连接", components.ButtonGhost).Clicked() {
-				vm.newTemporaryDevice()
-			}
+	theme := c.Theme()
+	ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), theme.Space(2), 0, theme.Space(2)).Children(func() {
+		ui.Scroll(c).FillWidth().Grow(1).Children(func() {
+			vm.deviceGroups(c)
 		})
-		vm.footer(c)
 	})
 }
 
-func sectionHeader(c *ui.Context, text string) {
-	components.Text(c, text).FontSize(11).Bold().Padding(6, 8, 2, 8)
+// deviceGroups renders both groups as accordion sections.
+func (vm *ViewModel) deviceGroups(c *ui.Context) {
+	components.Accordion(c, func(group *components.AccordionGroup) {
+		group.Item("我的设备 "+countLabel(len(vm.Manager.Profiles())), &vm.SavedOpen, func() {
+			vm.deviceGroupRows(c, vm.Manager.Profiles(), false, "还没有设备，用工具栏的“添加设备”创建一台。")
+		})
+		group.Item("临时设备 "+countLabel(len(vm.Manager.TemporaryProfiles())), &vm.TemporaryOpen, func() {
+			vm.deviceGroupRows(c, vm.Manager.TemporaryProfiles(), true, "临时设备只在本次运行有效。")
+		})
+	})
 }
 
-// footer shows the channel counts and the state of both tools.
-func (vm *ViewModel) footer(c *ui.Context) {
-	ui.Column(c).Padding(10, 8).Gap(4).Children(func() {
-		components.Text(c, "GUI "+itoa(vm.Manager.OwnedActiveCount())).FontSize(11)
+// deviceGroupRows lists one group, or an explanation when it is empty.
+func (vm *ViewModel) deviceGroupRows(c *ui.Context, profiles []core.Profile, temporary bool, empty string) {
+	if len(profiles) == 0 {
+		components.Text(c, empty).FontSize(11).Padding(2, 4)
+		return
+	}
+	for _, profile := range profiles {
+		vm.deviceRow(c, profile, temporary)
+	}
+}
+
+// countLabel renders the "(n)" suffix of a section title, so a collapsed
+// group still says how many devices it holds.
+func countLabel(n int) string {
+	if n == 0 {
+		return "(空)"
+	}
+	return "(" + itoa(n) + ")"
+}
+
+// SidebarFooter is the fixed bottom toolbar: channel count, tool health and
+// the temporary-connection action.
+func (vm *ViewModel) SidebarFooter(c *ui.Context) {
+	theme := c.Theme()
+	ui.Column(c).FillWidth().Padding(theme.Space(2), theme.Space(2.5)).Gap(theme.Space(1.5)).Children(func() {
+		components.Text(c, "GUI "+itoa(vm.Manager.OwnedActiveCount())+" 条通道").FontSize(11).TextColor(theme.TextMuted)
 		for _, component := range core.AllTools() {
 			vm.toolRow(c, component)
 		}
 		if notice := vm.Notice; notice != "" {
 			components.Text(c, notice).FontSize(11)
+		}
+		if components.Button(c, "新建临时连接", components.ButtonGhost).Clicked() {
+			vm.newTemporaryDevice()
 		}
 	})
 }
@@ -187,7 +218,7 @@ func (vm *ViewModel) footer(c *ui.Context) {
 // toolRow says whether a tool is usable, and offers to install it when not.
 func (vm *ViewModel) toolRow(c *ui.Context, component core.ToolComponent) {
 	path := vm.Manager.Tools().FindToolPath(component, vm.Locate)
-	ui.Row(c).Fill().Gap(6).Children(func() {
+	ui.Row(c).FillWidth().Gap(6).Children(func() {
 		if path != "" {
 			components.Icon(c, lucide.CircleCheck).Width(12).Height(12)
 			components.Text(c, component.Label()).FontSize(11)

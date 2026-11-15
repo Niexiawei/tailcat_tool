@@ -298,7 +298,8 @@ DirectADB    bool   `json:"directADB,omitempty"`
 DirectTarget string `json:"directTarget,omitempty"` // "192.168.1.20:5555" 或 "emulator-5554"
 ```
 
-- 不建 Tailcat 通道、不加载身份、不碰 DERP（`forwarder.Open` 一次都不调用）。
+- 不建 Tailcat 通道、不加载身份、不碰 DERP（`forwarder.Open` 一次都不调用），**也不读凭据库**：`Connect` 在直连时不解析 Tailcat 地址，否则会以"没有有效连接凭据"提前失败。
+- `RemotePort` 对直连无意义，保存为 0；加载时若发现"有 `directTarget` 但没有 `directADB`"（旧数据或半途保存），自动按直连处理并把残留字段归零。
 - 目标含 `:` → 视为网络设备，先 `adb connect <target>`；否则视为 USB/模拟器序列号，直接当 serial 用。
 - 之后的监视、退避、任务、干预检测、断开清理全部复用同一套代码——`runtimeState` 里 `conn` 可为 nil，serial 独立存放。
 - 断开时，网络目标会 `adb disconnect`，USB 序列号不会（它从没被 "connect"）。
@@ -369,6 +370,7 @@ Swift 版对"用户在本机 adb 里动了我们的连接"是无感的：它只�
 ## 11. 界面层
 
 - 窗口：`onevra/source/shells/sidebar`（可折叠侧栏 + 内容区），主题 `theme.Onevra`。
+- 侧栏用满 shell 的三个槽位：`Left` = `HeaderHeight` 上内边距 + `ui.Scroll` + `components.Accordion`（我的设备 / 临时设备，标题带数量）；`LeftToolbar` = 固定底栏（通道数、工具健康、新建临时连接）；`Content` 同样以 `HeaderHeight` 起头。行式元素一律 `FillWidth()`——`Fill()` 会同时占满高度。
 - 视图是**状态的函数**：`ViewModel` 持有选择、表单草稿、对话框开关，管理器是唯一事实来源；`Changed()` → `Invalidate()`。
 - 组件映射：`components.Text/Button/TextBox/Switch/Tabs/Table/Dialog/Icon`、`lucide` 图标、`ui.Column/Row/ButtonBase`。
 - 弹窗（编辑设备、上传下载、工具设置、连通测试、外部干预）用 `components.Dialog` 内联渲染，不是独立系统窗口。

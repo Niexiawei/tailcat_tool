@@ -448,13 +448,10 @@ func (m *Manager) saveDirectDevice(req SaveDeviceRequest, temporary bool) (uuid.
 	if temporary && req.ID == nil {
 		name = "本地设备 " + itoaSmall(m.nextTemporaryNumber)
 	}
+	// A direct device has no remote ADB port: the target says everything.
 	profile := Profile{
-		ID: id, Name: name, RemotePort: 5555,
+		ID: id, Name: name,
 		DirectADB: true, DirectTarget: target,
-	}
-	if existing, ok := m.profileLocked(id); ok {
-		profile.Name = name
-		profile.RemotePort = existing.RemotePort
 	}
 	if temporary {
 		if req.ID != nil {

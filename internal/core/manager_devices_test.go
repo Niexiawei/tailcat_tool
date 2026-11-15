@@ -256,3 +256,119 @@ func TestUpdateToolsRejectsActiveSessions(t *testing.T) {
 		t.Fatalf("UpdateTools() after disconnect error: %v", err)
 	}
 }
+
+func TestSaveDirectDeviceSurvivesReload(t *testing.T) {
+	store := NewConfigStore(t.TempDir())
+	f := newManagerFixture(t, func(o *ManagerOptions) {
+		o.Config = store
+		o.Configuration = Configuration{}
+	})
+	id, err := f.m.SaveDevice(SaveDeviceRequest{Name: "本地模拟器", DirectADB: true, DirectTarget: "127.0.0.1:5554"})
+	if err != nil {
+		t.Fatalf("SaveDevice() error: %v", err)
+	}
+
+	cfg, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.Profiles) != 1 {
+		t.Fatalf("profiles = %+v", cfg.Profiles)
+	}
+	saved := cfg.Profiles[0]
+	if saved.ID != id || !saved.DirectADB || saved.DirectTarget != "127.0.0.1:5554" {
+		t.Fatalf("saved profile = %+v", saved)
+	}
+	if saved.RemotePort != 0 {
+		t.Fatalf("a direct device must not carry a remote port, got %d", saved.RemotePort)
+	}
+
+	// A fresh manager reading the same file must keep the mode.
+	reloaded := newManagerFixture(t, func(o *ManagerOptions) {
+		o.Config = store
+		o.Configuration = cfg
+	})
+	profiles := reloaded.m.Profiles()
+	if len(profiles) != 1 || !profiles[0].DirectADB || profiles[0].DirectTarget != "127.0.0.1:5554" {
+		t.Fatalf("reloaded profiles = %+v", profiles)
+	}
+}
+
+func TestSaveDirectDeviceKeepsModeOnEdit(t *testing.T) {
+	store := NewConfigStore(t.TempDir())
+	f := newManagerFixture(t, func(o *ManagerOptions) {
+		o.Config = store
+		o.Configuration = Configuration{}
+	})
+	id, err := f.m.SaveDevice(SaveDeviceRequest{Name: "本地", DirectADB: true, DirectTarget: "127.0.0.1:5554"})
+	if err != nil {
+		t.Fatalf("SaveDevice() error: %v", err)
+	}
+	if _, err := f.m.SaveDevice(SaveDeviceRequest{
+		ID: &id, Name: "本地改名", DirectADB: true, DirectTarget: "127.0.0.1:5556",
+	}); err != nil {
+		t.Fatalf("SaveDevice() edit error: %v", err)
+	}
+	cfg, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.Profiles) != 1 {
+		t.Fatalf("profiles = %+v", cfg.Profiles)
+	}
+	edited := cfg.Profiles[0]
+	if !edited.DirectADB || edited.DirectTarget != "127.0.0.1:5556" || edited.Name != "本地改名" {
+		t.Fatalf("edited profile = %+v", edited)
+	}
+}
+
+// countingCreds counts reads, so a direct device can be proven not to touch
+// the Tailcat credential store.
+type countingCreds struct {
+	inner *MemoryCredentialStore
+	reads int
+}
+
+func (c *countingCreds) Read(id uuid.UUID) (string, bool, error) {
+	c.reads++
+	return c.inner.Read(id)
+}
+
+func (c *countingCreds) Write(address string, id uuid.UUID) error { return c.inner.Write(address, id) }
+func (c *countingCreds) Delete(id uuid.UUID) error                { return c.inner.Delete(id) }
+
+func TestDirectConnectDoesNotAskForCredential(t *testing.T) {
+	creds := &countingCreds{inner: NewMemoryCredentialStore()}
+	f := newManagerFixture(t, func(o *ManagerOptions) { o.Credentials = creds })
+	f.m.mu.Lock()
+	f.m.profiles[0].DirectADB = true
+	f.m.profiles[0].DirectTarget = "127.0.0.1:5554"
+	f.m.mu.Unlock()
+
+	_ = f.m.Connect(context.Background(), f.id)
+	if session := f.m.Session(f.id); strings.Contains(session.Err, "凭据") {
+		t.Fatalf("a direct device asked for a Tailcat credential: %q", session.Err)
+	}
+	if creds.reads != 0 {
+		t.Fatalf("the credential store was read %d times", creds.reads)
+	}
+}
+
+func TestConfigInfersDirectModeFromTarget(t *testing.T) {
+	dir := t.TempDir()
+	store := NewConfigStore(dir)
+	raw := `{"profiles":[{"id":"3f2b8f2e-0000-4000-8000-000000000000","name":"旧数据","remotePort":5555,"directTarget":"127.0.0.1:5554"}],"tools":{"adb":""},"relayPresets":[]}`
+	if err := os.WriteFile(store.Path(), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.Profiles[0].DirectADB {
+		t.Fatalf("a profile with a direct target was not inferred as direct: %+v", cfg.Profiles[0])
+	}
+	if cfg.Profiles[0].RemotePort != 0 {
+		t.Fatalf("the stale remote port was kept: %d", cfg.Profiles[0].RemotePort)
+	}
+}

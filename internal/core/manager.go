@@ -356,7 +356,13 @@ func (m *Manager) Connect(ctx context.Context, id uuid.UUID) error {
 		s.State = StateConnecting
 		s.Err = ""
 	})
-	address, addrErr := m.addressLocked(id)
+	// A direct device has no Tailcat address at all, so asking for one would
+	// fail with a credential error before the direct branch is reached.
+	var address string
+	var addrErr error
+	if !profile.DirectADB {
+		address, addrErr = m.addressLocked(id)
+	}
 	adbPath := m.tools.FindToolPath(ToolADB, m.locate)
 	m.notify()
 	m.mu.Unlock()
@@ -367,11 +373,13 @@ func (m *Manager) Connect(ctx context.Context, id uuid.UUID) error {
 		_ = previous.conn.Close(ctx)
 	}
 	waitDones(oldTasks)
-	if addrErr != nil {
-		return m.failConnect(id, generation, addrErr)
-	}
-	if !Plausible(address) {
-		return m.failConnect(id, generation, Error("设备没有有效连接凭据，请编辑设备后重试"))
+	if !profile.DirectADB {
+		if addrErr != nil {
+			return m.failConnect(id, generation, addrErr)
+		}
+		if !Plausible(address) {
+			return m.failConnect(id, generation, Error("设备没有有效连接凭据，请编辑设备后重试"))
+		}
 	}
 	if adbPath == "" {
 		return m.failConnect(id, generation, Error("未找到 ADB，请在设置中指定可执行文件的绝对路径"))

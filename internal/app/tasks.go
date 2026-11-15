@@ -19,7 +19,7 @@ func (vm *ViewModel) TaskPanel(c *ui.Context) {
 		components.Text(c, "设备任务").FontSize(13).Bold()
 		for i := len(tasks) - 1; i >= start; i-- {
 			task := tasks[i]
-			ui.Row(c).Fill().Gap(8).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).Children(func() {
 				ui.Column(c).Gap(1).Children(func() {
 					components.Text(c, task.Title).FontSize(12)
 					components.Text(c, task.DeviceName+" · "+task.Serial).FontSize(10)

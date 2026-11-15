@@ -39,7 +39,7 @@ func (vm *ViewModel) AttentionDialog(c *ui.Context) {
 			components.Text(c, "设备需要处理").FontSize(18).Bold()
 			components.Text(c, name).FontSize(12)
 			components.Text(c, attention.Detail).FontSize(11)
-			ui.Row(c).Fill().Gap(8).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).Children(func() {
 				if components.Button(c, "重新连接", components.ButtonPrimary).Clicked() {
 					deviceID := attention.DeviceID
 					vm.Manager.AckAttention(deviceID)

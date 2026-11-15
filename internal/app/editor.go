@@ -204,7 +204,7 @@ func (vm *ViewModel) EditorView(c *ui.Context) {
 			if vm.EditorError != "" {
 				components.Text(c, vm.EditorError).FontSize(11)
 			}
-			ui.Row(c).Fill().Gap(8).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).Children(func() {
 				if components.Button(c, "取消", components.ButtonGhost).Clicked() {
 					vm.PendingEditor = nil
 					open = false
@@ -233,22 +233,17 @@ func (vm *ViewModel) editorTitle() string {
 	return "添加设备"
 }
 
-// connectionModeRadio is a two-state radio: Tailcat (default) or direct ADB.
+// connectionModeRadio is the two-way choice between a Tailcat channel and a
+// direct ADB connection, built from the component library's Radio.
 func (vm *ViewModel) connectionModeRadio(c *ui.Context) {
-	ui.Row(c).Gap(6).Children(func() {
+	if vm.EditorDraft.Mode == "" {
+		vm.EditorDraft.Mode = "tailcat"
+	}
+	theme := c.Theme()
+	ui.Row(c).Gap(theme.Space(3)).AlignItems(ui.Center).Children(func() {
 		components.Text(c, "连接方式").FontSize(11)
-		tailcatLabel, adbLabel := "○ 通过 Tailcat 转发", "○ 本地 ADB 直连"
-		if vm.EditorDraft.Mode == "adb" {
-			adbLabel = "● 本地 ADB 直连"
-		} else {
-			tailcatLabel = "● 通过 Tailcat 转发"
-		}
-		if components.Button(c, tailcatLabel, components.ButtonGhost).Clicked() {
-			vm.EditorDraft.Mode = "tailcat"
-		}
-		if components.Button(c, adbLabel, components.ButtonGhost).Clicked() {
-			vm.EditorDraft.Mode = "adb"
-		}
+		components.Radio(c, &vm.EditorDraft.Mode, "tailcat", "通过 Tailcat 转发")
+		components.Radio(c, &vm.EditorDraft.Mode, "adb", "本地 ADB 直连")
 	})
 }
 

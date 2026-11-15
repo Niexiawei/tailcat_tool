@@ -6,6 +6,7 @@ import (
 	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
+	"github.com/oneo-me/onevra/source/shells/sidebar"
 )
 
 // ContentView is the detail pane for the selected device.
@@ -30,7 +31,7 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 	vm.ReachabilityView(c)
 	vm.AttentionDialog(c)
 	if note := vm.Notice; note != "" {
-		ui.Row(c).Fill().Padding(12, 16).Gap(8).Children(func() {
+		ui.Row(c).FillWidth().Padding(12, 16).Gap(8).Children(func() {
 			components.Text(c, note).FontSize(11)
 			if components.Button(c, "关闭", components.ButtonGhost).Clicked() {
 				vm.Notice = ""
@@ -41,7 +42,7 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 
 // toolbar holds the window-wide actions.
 func (vm *ViewModel) toolbar(c *ui.Context) {
-	ui.Row(c).Fill().Padding(8, 16).Gap(6).Children(func() {
+	ui.Row(c).FillWidth().Padding(sidebar.HeaderHeight(c), 16, 8, 16).Gap(6).AlignItems(ui.Center).Children(func() {
 		if components.Button(c, "测试全部设备", components.ButtonGhost).Clicked() {
 			vm.openReachability()
 		}
@@ -66,12 +67,19 @@ func (vm *ViewModel) detail(c *ui.Context, profile core.Profile) {
 	temporary := isTemporary(manager, profile.ID)
 
 	ui.Column(c).Fill().Padding(20).Gap(12).Children(func() {
-		ui.Row(c).Fill().Gap(8).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).Children(func() {
 			ui.Column(c).Gap(2).Children(func() {
 				components.Text(c, profile.Name).FontSize(20).Bold()
-				subtitle := "独立连接会话"
+				subtitle := "通过 Tailcat 转发 · 独立连接会话"
+				if profile.DirectADB {
+					subtitle = "本地 ADB 直连 · " + orPlaceholder(profile.DirectTarget, "未填地址")
+				}
 				if temporary {
-					subtitle = "临时设备 · 仅本次运行"
+					if profile.DirectADB {
+						subtitle = "本地 ADB 直连 · 临时设备 · 仅本次运行"
+					} else {
+						subtitle = "通过 Tailcat 转发 · 临时设备 · 仅本次运行"
+					}
 				}
 				components.Text(c, subtitle).FontSize(11)
 			})
@@ -110,9 +118,18 @@ func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.
 		if session.Err != "" {
 			components.Text(c, session.Err).FontSize(11)
 		}
-		detailRow(c, "本地入口", orPlaceholder(session.Serial, "未分配"))
-		detailRow(c, "远端端口", itoa(profile.RemotePort))
-		detailRow(c, "DERP 中继", relayLabel(vm, profile))
+		if profile.DirectADB {
+			// No Tailcat channel, so no remote port and no relay: showing
+			// them is what made a direct device look misconfigured.
+			detailRow(c, "连接方式", "本地 ADB 直连")
+			detailRow(c, "ADB 地址", orPlaceholder(profile.DirectTarget, "未填地址"))
+			detailRow(c, "本地入口", orPlaceholder(session.Serial, "未分配"))
+		} else {
+			detailRow(c, "连接方式", "通过 Tailcat 转发")
+			detailRow(c, "本地入口", orPlaceholder(session.Serial, "未分配"))
+			detailRow(c, "远端端口", itoa(profile.RemotePort))
+			detailRow(c, "DERP 中继", relayLabel(vm, profile))
+		}
 		detailRow(c, "链路", session.Route)
 		detailRow(c, "设备型号", session.Model)
 		detailRow(c, "设备代号", session.Product)
@@ -127,7 +144,11 @@ func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.
 			if components.Button(c, "刷新信息", components.ButtonSecondary).Clicked() {
 				go func() { _ = manager.RefreshDeviceInformation(context.Background(), profile.ID) }()
 			}
-			if components.Button(c, "复制 ADB 入口", components.ButtonGhost).Clicked() && session.Serial != "" {
+			if profile.DirectADB {
+				if components.Button(c, "复制 ADB 地址", components.ButtonGhost).Clicked() && profile.DirectTarget != "" {
+					vm.copyText(profile.DirectTarget)
+				}
+			} else if components.Button(c, "复制 ADB 入口", components.ButtonGhost).Clicked() && session.Serial != "" {
 				vm.copyText(session.Serial)
 			}
 		})
@@ -151,7 +172,7 @@ func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.
 			}
 		})
 
-		ui.Row(c).Fill().Gap(6).Children(func() {
+		ui.Row(c).FillWidth().Gap(6).Children(func() {
 			box := components.TextBox(c, &vm.ShellCommand, components.TextBoxOptions{})
 			box.Label("执行一条 ADB Shell 命令")
 			box.Placeholder("执行一条 ADB Shell 命令")
@@ -181,8 +202,8 @@ func (vm *ViewModel) logs(c *ui.Context, session core.Session) {
 }
 
 func detailRow(c *ui.Context, label, value string) {
-	ui.Row(c).Fill().Gap(10).Children(func() {
-		ui.Column(c).Width(90).Children(func() { components.Text(c, label).FontSize(11) })
+	ui.Row(c).FillWidth().Gap(10).Children(func() {
+		ui.Column(c).Width(90).Shrink(0).Children(func() { components.Text(c, label).FontSize(11) })
 		components.Text(c, value).FontSize(11)
 	})
 }
