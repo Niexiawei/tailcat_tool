@@ -73,6 +73,7 @@ func (a *App) Show() {
 
 // Quit stops the channels and exits.
 func (a *App) Quit() {
+	a.vm.CloseConsoles()
 	if a.env.OnShutdown != nil {
 		a.env.OnShutdown()
 	}

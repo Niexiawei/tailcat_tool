@@ -80,6 +80,7 @@ func TestDetailRows(t *testing.T) {
 	}
 	defer vm.Manager.Disconnect(context.Background(), profile.ID)
 
+	vm.OpenDevice(profile.ID)
 	tt := ui.NewTester(vm.ContentView, 900, 700)
 	for _, want := range []string{
 		"本地入口", "远端端口", "DERP 中继", "链路", "设备型号", "设备代号",

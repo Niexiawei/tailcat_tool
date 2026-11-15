@@ -24,6 +24,12 @@ type ViewModel struct {
 	Activate     func(deviceID string)
 	OpenTerminal func(deviceID uuid.UUID) error
 
+	// Router owns the content pages; the sidebar and the breadcrumbs
+	// navigate it, so Back returns to the page before.
+	Router *ui.Router
+	// CrumbChoice receives the index of a breadcrumb the user activated.
+	CrumbChoice int
+
 	// Selection is the device the detail pane shows.
 	Selection uuid.UUID
 	// DetailTab is 0 for the overview and 1 for the log.
@@ -52,7 +58,6 @@ type ViewModel struct {
 	SettingsError string
 
 	ReachabilityOpen bool
-	ShellCommand     string
 	AttentionOpen    bool
 
 	// Sidebar section expansion; both start open.
@@ -66,6 +71,9 @@ type ViewModel struct {
 	// builds, because a toast can only be added with a live context.
 	toastsMu sync.Mutex
 	toasts   []ui.Toast
+
+	// consoles holds the embedded terminal of each device.
+	consoles map[uuid.UUID]*consoleHost
 }
 
 // Fail reports an error as an error-level toast.
@@ -131,15 +139,60 @@ func (vm *ViewModel) newTemporaryDevice() {
 
 // NewViewModel wraps a manager.
 func NewViewModel(m *core.Manager, locate core.LocateTool) *ViewModel {
-	vm := &ViewModel{Manager: m, Locate: locate, SavedOpen: true, TemporaryOpen: true}
+	vm := &ViewModel{
+		Manager:       m,
+		Locate:        locate,
+		Router:        ui.NewRouter(DeviceIndexRoute),
+		CrumbChoice:   -1,
+		SavedOpen:     true,
+		TemporaryOpen: true,
+	}
 	if profiles := m.AllProfiles(); len(profiles) > 0 {
 		vm.Selection = profiles[0].ID
 	}
 	return vm
 }
 
-// Select shows one device.
+// DeviceIndexRoute is the page that lists the devices.
+const DeviceIndexRoute = "/devices"
+
+// DeviceRoute is the page of one device.
+func DeviceRoute(id uuid.UUID) string { return DeviceIndexRoute + "/" + id.String() }
+
+// Select shows one device without navigating, for tests and startup.
 func (vm *ViewModel) Select(id uuid.UUID) { vm.Selection = id }
+
+// OpenDevice shows the page of one device.
+func (vm *ViewModel) OpenDevice(id uuid.UUID) {
+	vm.Selection = id
+	if vm.Router == nil {
+		return
+	}
+	if target := DeviceRoute(id); vm.Router.Path() != target {
+		vm.Router.Push(target)
+	}
+}
+
+// OpenDevices goes back to the device index.
+func (vm *ViewModel) OpenDevices() {
+	if vm.Router != nil && vm.Router.Path() != DeviceIndexRoute {
+		vm.Router.Push(DeviceIndexRoute)
+	}
+}
+
+// profileByID finds a saved or temporary device by its route parameter.
+func (vm *ViewModel) profileByID(raw string) (core.Profile, bool) {
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return core.Profile{}, false
+	}
+	for _, profile := range vm.Manager.AllProfiles() {
+		if profile.ID == id {
+			return profile, true
+		}
+	}
+	return core.Profile{}, false
+}
 
 // SelectedProfile returns the device the detail pane shows.
 func (vm *ViewModel) SelectedProfile() (core.Profile, bool) {
@@ -194,7 +247,7 @@ func (vm *ViewModel) deviceRow(c *ui.Context, profile core.Profile, temporary bo
 		}
 	})
 	if row.Clicked() {
-		vm.Select(profile.ID)
+		vm.OpenDevice(profile.ID)
 	}
 }
 
@@ -218,7 +271,6 @@ func statusDot(c *ui.Context, state core.ConnectionState) {
 // SidebarView is the scrolling device list. The floating window header sits
 // above it, so it starts below HeaderHeight.
 func (vm *ViewModel) SidebarView(c *ui.Context) {
-	vm.ensureSelection()
 	theme := c.Theme()
 	ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), theme.Space(2), 0, theme.Space(2)).Children(func() {
 		ui.Scroll(c).FillWidth().Grow(1).Children(func() {

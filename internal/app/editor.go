@@ -155,7 +155,7 @@ func (vm *ViewModel) submitEditor() {
 		if request.Profile == nil {
 			go func() { _ = vm.Manager.Connect(context.Background(), deviceID) }()
 		}
-		vm.Select(deviceID)
+		vm.OpenDevice(deviceID)
 	} else {
 		deviceID, saveErr := vm.Manager.SaveDevice(core.SaveDeviceRequest{
 			ID: id, Name: values.Name, Address: values.Address,
@@ -166,7 +166,7 @@ func (vm *ViewModel) submitEditor() {
 			vm.EditorError = saveErr.Error()
 			return
 		}
-		vm.Select(deviceID)
+		vm.OpenDevice(deviceID)
 	}
 	vm.PendingEditor = nil
 }

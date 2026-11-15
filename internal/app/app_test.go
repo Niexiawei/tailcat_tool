@@ -201,6 +201,7 @@ func TestDetailShowsDirectModeWithoutTailcatFields(t *testing.T) {
 		Locate:        func(string) (string, bool) { return "", false },
 	})
 	vm := NewViewModel(m, func(string) (string, bool) { return "", false })
+	vm.OpenDevice(profile.ID)
 	tt := ui.NewTester(vm.ContentView, 900, 900)
 	for _, want := range []string{"本地 ADB 直连", "127.0.0.1:5554", "ADB 地址", "复制 ADB 地址"} {
 		if !tt.HasText(want) {
@@ -284,4 +285,84 @@ func (failRunner) Start(context.Context, core.Command, func(string)) (*core.Proc
 
 func (failRunner) Run(context.Context, core.Command, func(string)) (core.Result, error) {
 	return core.Result{}, core.Error("adb: device offline")
+}
+
+func TestDeviceIndexPageListsDevices(t *testing.T) {
+	vm := newTestViewModel(t)
+	profile := vm.Manager.Profiles()[0]
+	tt := ui.NewTester(vm.ContentView, 900, 700)
+	if !tt.HasText("我的设备") || !tt.HasText("E245") {
+		t.Fatalf("the index page is missing a device; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("E245"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if got, want := vm.Router.Path(), DeviceRoute(profile.ID); got != want {
+		t.Fatalf("route = %q, want %q", got, want)
+	}
+}
+
+func TestBreadcrumbReturnsToDeviceIndex(t *testing.T) {
+	vm := newTestViewModel(t)
+	profile := vm.Manager.Profiles()[0]
+	vm.OpenDevice(profile.ID)
+
+	tt := ui.NewTester(vm.ContentView, 900, 700)
+	if !tt.HasText("本地入口") {
+		t.Fatalf("the device page did not open; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("我的设备"); err != nil {
+		t.Fatalf("Click() on the breadcrumb error: %v", err)
+	}
+	if got := vm.Router.Path(); got != DeviceIndexRoute {
+		t.Fatalf("route = %q, want %q", got, DeviceIndexRoute)
+	}
+}
+
+func TestBackReturnsToPreviousDevice(t *testing.T) {
+	vm := newTestViewModel(t)
+	first := vm.Manager.Profiles()[0]
+	secondID, err := vm.Manager.SaveDevice(core.SaveDeviceRequest{Name: "第二台", Address: testAddress, RemotePort: 5555})
+	if err != nil {
+		t.Fatalf("SaveDevice() error: %v", err)
+	}
+	vm.OpenDevice(first.ID)
+	vm.OpenDevice(secondID)
+	vm.Router.Back()
+	if got, want := vm.Router.Path(), DeviceRoute(first.ID); got != want {
+		t.Fatalf("route = %q, want %q", got, want)
+	}
+	// The page selects the device it shows.
+	tt := ui.NewTester(vm.ContentView, 900, 700)
+	if !tt.HasText("E245") {
+		t.Fatalf("the restored page shows another device; texts = %v", tt.Texts())
+	}
+	if vm.Selection != first.ID {
+		t.Fatalf("selection = %v, want %v", vm.Selection, first.ID)
+	}
+}
+
+func TestEditEntryOpensTheEditor(t *testing.T) {
+	vm := newTestViewModel(t)
+	profile := vm.Manager.Profiles()[0]
+	vm.OpenDevice(profile.ID)
+	tt := ui.NewTester(vm.ContentView, 900, 700)
+	if err := tt.Click("编辑"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if vm.PendingEditor == nil || vm.PendingEditor.Profile == nil {
+		t.Fatal("the edit entry did not open the device form")
+	}
+	if vm.PendingEditor.Profile.ID != profile.ID {
+		t.Fatalf("editor opened on %v", vm.PendingEditor.Profile.ID)
+	}
+}
+
+func TestMissingDevicePage(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.Router.Push("/devices/" + uuid.New().String())
+	tt := ui.NewTester(vm.ContentView, 900, 700)
+	if !tt.HasText("设备不存在") {
+		t.Fatalf("no page for a device that is gone; texts = %v", tt.Texts())
+	}
 }

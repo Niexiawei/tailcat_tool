@@ -27,14 +27,6 @@ func (vm *ViewModel) promote(profile core.Profile) {
 	vm.Notify("已保存到我的设备，当前会话保持")
 }
 
-// runShell executes one adb shell command as a task.
-func (vm *ViewModel) runShell(profile core.Profile, command string) {
-	if _, err := vm.Manager.BeginADBTask(context.Background(), profile.ID, "Shell 命令",
-		[]string{"shell", command}, 120*1e9); err != nil {
-		vm.Fail(err)
-	}
-}
-
 // chooseAPK asks for an APK and installs it.
 func (vm *ViewModel) chooseAPK(profile core.Profile) {
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{

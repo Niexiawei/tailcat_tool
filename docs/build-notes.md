@@ -29,6 +29,14 @@
 
 首轮依赖下载（`go mod download`）约 2–4 分钟，之后都在秒级。
 
+## 终端插件（libghostty-vt）
+
+详情页的内嵌终端来自 `github.com/egoist/mygo/plugins/terminal`，它**不使用 cgo**，但运行期要加载 libghostty-vt：
+
+- `go run` / `go build` 产物首次打开终端页时会下载一次到用户缓存目录；
+- 发布包应改用 `mygo build`，它会把该库打进应用（`plugins/terminal/mygo-plugin.json` 声明文件名与 SHA-256），否则用户首次使用终端需要联网；
+- 下载失败时界面显示「终端不可用：…」，其他功能不受影响。
+
 ## 体积预估与结论
 
 - 当前 app 还没 import tailcat（转发器在任务 6 接入），`mygo + onevra` 已占 12–14 MB（stripped）。

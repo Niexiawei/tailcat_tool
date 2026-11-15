@@ -5,28 +5,19 @@ import (
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo/ui"
+	"github.com/google/uuid"
 	"github.com/oneo-me/onevra/source/components"
 	"github.com/oneo-me/onevra/source/shells/sidebar"
 )
 
-// ContentView is the detail pane for the selected device.
+// ContentView is the routed content area: a device index page, or the page of
+// one device reached from the sidebar or a breadcrumb.
 func (vm *ViewModel) ContentView(c *ui.Context) {
 	for _, toast := range vm.drainToasts() {
 		c.AddToast(toast)
 	}
 	vm.toolbar(c)
-	profile, ok := vm.SelectedProfile()
-	if ok {
-		vm.detail(c, profile)
-	} else {
-		ui.Column(c).Fill().Center().Gap(8).Children(func() {
-			components.Text(c, "连接你的第一台设备").FontSize(20).Bold()
-			components.Text(c, "每台设备拥有独立通道，支持同时连接。").FontSize(12)
-			if components.Button(c, "添加设备", components.ButtonPrimary).Clicked() {
-				vm.openEditor(&EditorRequest{})
-			}
-		})
-	}
+	vm.routedPage(c)
 	vm.TaskPanel(c)
 	vm.EditorView(c)
 	vm.TransferView(c)
@@ -41,6 +32,99 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 			}
 		})
 	}
+}
+
+// routedPage builds the page the router shows.
+func (vm *ViewModel) routedPage(c *ui.Context) {
+	if vm.Router == nil {
+		if profile, ok := vm.SelectedProfile(); ok {
+			vm.devicePage(c, profile)
+		} else {
+			vm.deviceIndexPage(c)
+		}
+		return
+	}
+	vm.Router.View(c, func(r *ui.Route) {
+		if r.Match("/devices/{id}") {
+			profile, ok := vm.profileByID(r.Param("id"))
+			if !ok {
+				r.Title("设备不存在")
+				vm.missingDevicePage(c)
+				return
+			}
+			// The route is the source of truth: coming back to a page
+			// selects the device it shows.
+			vm.Selection = profile.ID
+			r.Title(profile.Name)
+			vm.devicePage(c, profile)
+			return
+		}
+		// The index page shows no device, so nothing is selected.
+		vm.Selection = uuid.Nil
+		r.Title("我的设备")
+		vm.deviceIndexPage(c)
+	})
+}
+
+// deviceIndexPage lists the devices; it is what the first breadcrumb returns to.
+func (vm *ViewModel) deviceIndexPage(c *ui.Context) {
+	theme, profiles := c.Theme(), vm.Manager.AllProfiles()
+	ui.Column(c).Fill().Padding(20).Gap(10).Children(func() {
+		components.Text(c, "我的设备").FontSize(20).Bold()
+		if len(profiles) == 0 {
+			components.Text(c, "连接你的第一台设备").FontSize(13)
+			components.Text(c, "每台设备拥有独立通道，支持同时连接。").FontSize(11).TextColor(theme.TextMuted)
+			if components.Button(c, "添加设备", components.ButtonPrimary).Clicked() {
+				vm.openEditor(&EditorRequest{})
+			}
+			return
+		}
+		for _, profile := range profiles {
+			vm.deviceCard(c, profile)
+		}
+	})
+}
+
+// deviceCard is one row of the index page.
+func (vm *ViewModel) deviceCard(c *ui.Context, profile core.Profile) {
+	theme := c.Theme()
+	session := vm.Manager.Session(profile.ID)
+	row := ui.ButtonBase(c)
+	row.FillWidth().Shrink(0).Padding(theme.Space(1.5), theme.Space(2)).Gap(theme.Space(1.5)).
+		Justify(ui.Start).AlignItems(ui.Center).Radius(theme.Radius).Border(1, theme.Border)
+	row.Children(func() {
+		statusDot(c, session.State)
+		ui.Column(c).Gap(1).Grow(1).Children(func() {
+			components.Text(c, profile.Name).Bold().SingleLine()
+			components.Text(c, vm.transportLine(profile, session)).FontSize(11).SingleLine()
+		})
+		components.Text(c, session.State.Label()).FontSize(11).TextColor(theme.TextMuted)
+	})
+	if row.Clicked() {
+		vm.OpenDevice(profile.ID)
+	}
+}
+
+// transportLine says how a device is reached, and where.
+func (vm *ViewModel) transportLine(profile core.Profile, session core.Session) string {
+	switch {
+	case profile.DirectADB:
+		return "本地 ADB 直连 · " + orPlaceholder(profile.DirectTarget, "未填地址")
+	case session.Port != 0:
+		return "通过 Tailcat 转发 · 本地端口 " + itoa(session.Port)
+	}
+	return "通过 Tailcat 转发"
+}
+
+// missingDevicePage shows a device that is gone from the configuration.
+func (vm *ViewModel) missingDevicePage(c *ui.Context) {
+	ui.Column(c).Fill().Center().Gap(8).Children(func() {
+		components.Text(c, "设备不存在").FontSize(18).Bold()
+		components.Text(c, "它可能已被删除，或来自上一次运行。").FontSize(11)
+		if components.Button(c, "返回我的设备", components.ButtonPrimary).Clicked() {
+			vm.OpenDevices()
+		}
+	})
 }
 
 // toolbar holds the window-wide actions.
@@ -64,12 +148,13 @@ func (vm *ViewModel) toolbar(c *ui.Context) {
 	})
 }
 
-func (vm *ViewModel) detail(c *ui.Context, profile core.Profile) {
+func (vm *ViewModel) devicePage(c *ui.Context, profile core.Profile) {
 	manager := vm.Manager
 	session := manager.Session(profile.ID)
 	temporary := isTemporary(manager, profile.ID)
 
 	ui.Column(c).Fill().Padding(20).Gap(12).Children(func() {
+		vm.breadcrumbs(c, profile)
 		ui.Row(c).FillWidth().Gap(8).Children(func() {
 			ui.Column(c).Gap(2).Children(func() {
 				components.Text(c, profile.Name).FontSize(20).Bold()
@@ -86,6 +171,10 @@ func (vm *ViewModel) detail(c *ui.Context, profile core.Profile) {
 				}
 				components.Text(c, subtitle).FontSize(11)
 			})
+			if components.Button(c, "编辑", components.ButtonGhost).Clicked() {
+				edited := profile
+				vm.openEditor(&EditorRequest{Profile: &edited})
+			}
 			if temporary {
 				if components.Button(c, "保存到我的设备", components.ButtonGhost).Clicked() {
 					vm.promote(profile)
@@ -102,13 +191,25 @@ func (vm *ViewModel) detail(c *ui.Context, profile core.Profile) {
 				go manager.Disconnect(context.Background(), profile.ID)
 			}
 		})
-		components.Tabs(c, &vm.DetailTab, components.TabsSegmented, "概览", "日志")
-		if vm.DetailTab == 0 {
-			vm.overview(c, profile, session)
-		} else {
+		components.Tabs(c, &vm.DetailTab, components.TabsSegmented, "概览", "终端", "日志")
+		switch vm.DetailTab {
+		case 1:
+			vm.consoleView(c, profile, session)
+		case 2:
 			vm.logs(c, session)
+		default:
+			vm.overview(c, profile, session)
 		}
 	})
+}
+
+// breadcrumbs shows where the page sits; the first crumb returns to the list.
+func (vm *ViewModel) breadcrumbs(c *ui.Context, profile core.Profile) {
+	vm.CrumbChoice = -1
+	crumbs := components.Breadcrumbs(c, []string{"我的设备", profile.Name}, &vm.CrumbChoice)
+	if crumbs.Changed() && vm.CrumbChoice == 0 {
+		vm.OpenDevices()
+	}
 }
 
 func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.Session) {
@@ -170,21 +271,14 @@ func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.
 			if components.Button(c, "屏幕控制", components.ButtonSecondary).Clicked() {
 				go func() { _, err := manager.BeginScreen(context.Background(), profile.ID); vm.Fail(err) }()
 			}
-			if components.Button(c, "终端", components.ButtonSecondary).Clicked() {
+			if components.Button(c, "外部终端", components.ButtonSecondary).Clicked() {
 				vm.openTerminal(profile)
 			}
 		})
 
-		ui.Row(c).FillWidth().Gap(6).Children(func() {
-			box := components.TextBox(c, &vm.ShellCommand, components.TextBoxOptions{})
-			box.Label("执行一条 ADB Shell 命令")
-			box.Placeholder("执行一条 ADB Shell 命令")
-			if components.Button(c, "执行", components.ButtonPrimary).Clicked() && vm.ShellCommand != "" {
-				command := vm.ShellCommand
-				vm.ShellCommand = ""
-				go vm.runShell(profile, command)
-			}
-		})
+		if components.Button(c, "在终端中执行 shell 命令", components.ButtonGhost).Clicked() {
+			vm.DetailTab = 1
+		}
 		components.Text(c, "任务始终绑定启动时的设备和 ADB 入口。").FontSize(11)
 	})
 }
