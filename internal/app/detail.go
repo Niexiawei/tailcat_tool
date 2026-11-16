@@ -17,10 +17,7 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 		c.AddToast(toast)
 	}
 	ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
-		ui.Column(c).FillWidth().Grow(1).Children(func() {
-			vm.routedPage(c)
-		})
-		vm.TaskPanel(c)
+		vm.routedPage(c)
 	})
 	vm.EditorView(c)
 	vm.TransferView(c)

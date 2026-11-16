@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -102,5 +103,43 @@ func TestLogPageStopsFollowingAfterScrollUp(t *testing.T) {
 	vm.logPageText(id, core.Session{Logs: []core.SessionLog{{Text: "又一行"}}})
 	if !state.follow {
 		t.Fatal("scrolling back to the bottom must resume following")
+	}
+}
+
+func TestLogPageCancelsTheRunningTask(t *testing.T) {
+	vm := newBlockingViewModel(t, &blockingRunner{release: make(chan struct{})})
+	profile := vm.Manager.Profiles()[0]
+	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	defer vm.Manager.Disconnect(context.Background(), profile.ID)
+	taskID, err := vm.Manager.BeginADBTask(context.Background(), profile.ID, "adb install", []string{"install", "-r", "app.apk"}, time.Minute)
+	if err != nil {
+		t.Fatalf("BeginADBTask() error: %v", err)
+	}
+	vm.DetailTab = 2
+	vm.OpenDevice(profile.ID)
+	tt := ui.NewTester(vm.ContentView, 900, 700)
+	if !tt.HasText("运行中 1 个任务") {
+		t.Fatalf("the log page does not show the running task; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("取消全部"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	vm.Manager.WaitTask(taskID)
+	if got := vm.Manager.Tasks()[0].State; got != core.TaskCancelled {
+		t.Fatalf("task state = %v, want %v", got, core.TaskCancelled)
+	}
+}
+
+func TestRunningTasksFiltersByDeviceAndState(t *testing.T) {
+	mine, other := uuid.New(), uuid.New()
+	tasks := []core.Task{
+		{ID: uuid.New(), DeviceID: mine, State: core.TaskRunning},
+		{ID: uuid.New(), DeviceID: mine, State: core.TaskSucceeded},
+		{ID: uuid.New(), DeviceID: other, State: core.TaskRunning},
+	}
+	if got := runningTasks(tasks, mine); len(got) != 1 {
+		t.Fatalf("runningTasks() = %+v, want only this device's running task", got)
 	}
 }

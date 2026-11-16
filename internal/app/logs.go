@@ -59,6 +59,17 @@ func logText(lines []logLine) string {
 	return builder.String()
 }
 
+// runningTasks keeps the tasks of one device that are still running.
+func runningTasks(tasks []core.Task, id uuid.UUID) []core.Task {
+	running := make([]core.Task, 0, 2)
+	for _, task := range tasks {
+		if task.DeviceID == id && task.State == core.TaskRunning {
+			running = append(running, task)
+		}
+	}
+	return running
+}
+
 // deviceTasks keeps the tasks that belong to one device.
 func deviceTasks(tasks []core.Task, id uuid.UUID) []core.Task {
 	kept := make([]core.Task, 0, len(tasks))
@@ -110,12 +121,25 @@ func (vm *ViewModel) logPageText(id uuid.UUID, session core.Session) {
 func (vm *ViewModel) logPage(c *ui.Context, profile core.Profile, session core.Session) {
 	vm.logPageText(profile.ID, session)
 	state := vm.logState(profile.ID)
-	if state.text == "" {
-		components.Text(c, "暂无通道日志与任务").FontSize(11)
-		return
-	}
-	// ReadOnly keeps focus, selection and copying but refuses edits; the
-	// text area is its own scroll container, which the probe confirmed.
-	components.TextBoxBuffer(c, state.buffer, components.TextBoxOptions{Multiline: true, ReadOnly: true}).
-		FillWidth().Grow(1).Label("通道日志与任务").TrackScroll(&state.scroll)
+	ui.Column(c).Fill().Gap(6).Children(func() {
+		ui.Row(c).FillWidth().Shrink(0).Gap(8).AlignItems(ui.Center).Children(func() {
+			components.Text(c, "通道日志与任务").FontSize(13).Bold()
+			if running := runningTasks(vm.Manager.Tasks(), profile.ID); len(running) > 0 {
+				components.Text(c, "运行中 "+itoa(len(running))+" 个任务").FontSize(11)
+				if components.Button(c, "取消全部", components.ButtonOutline).Clicked() {
+					for _, task := range running {
+						vm.Manager.CancelTask(task.ID)
+					}
+				}
+			}
+		})
+		if state.text == "" {
+			components.Text(c, "暂无通道日志与任务").FontSize(11)
+			return
+		}
+		// ReadOnly keeps focus, selection and copying but refuses edits; the
+		// text area is its own scroll container, which the probe confirmed.
+		components.TextBoxBuffer(c, state.buffer, components.TextBoxOptions{Multiline: true, ReadOnly: true}).
+			FillWidth().Grow(1).Label("通道日志与任务").TrackScroll(&state.scroll)
+	})
 }

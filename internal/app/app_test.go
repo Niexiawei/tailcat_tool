@@ -431,7 +431,7 @@ func newRunnerViewModel(t *testing.T, fn func(core.Command) (core.Result, error)
 	return vm, func() []string { return runner.calls }
 }
 
-func TestTaskPanelSitsBelowThePage(t *testing.T) {
+func TestTaskPanelIsGone(t *testing.T) {
 	vm := newTestViewModel(t)
 	profile := vm.Manager.Profiles()[0]
 	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
@@ -446,22 +446,56 @@ func TestTaskPanelSitsBelowThePage(t *testing.T) {
 
 	vm.OpenDevice(profile.ID)
 	tt := ui.NewTester(vm.ContentView, 900, 900)
-	panel, ok := tt.Find("设备任务")
-	if !ok {
-		t.Fatalf("the task panel is missing; texts = %v", tt.Texts())
+	if tt.HasText("设备任务") {
+		t.Fatalf("the fixed task panel is still there; texts = %v", tt.Texts())
 	}
-	// The panel used to be a second full-height column, so it laid out at the
-	// top and painted over the page title.
-	header, ok := tt.Find("E245")
-	if !ok {
-		t.Fatalf("the page title is missing; texts = %v", tt.Texts())
+}
+
+// blockingRunner answers everything except `install` as a healthy device, and
+// holds `install` until release is closed or the task is cancelled. Connecting
+// and validating the target must keep working, or the task never starts.
+type blockingRunner struct{ release chan struct{} }
+
+func (r *blockingRunner) Start(context.Context, core.Command, func(string)) (*core.Proc, error) {
+	return nil, core.Error("Start is not used in view tests")
+}
+
+func (r *blockingRunner) Run(ctx context.Context, c core.Command, _ func(string)) (core.Result, error) {
+	for _, arg := range c.Args {
+		if arg != "install" {
+			continue
+		}
+		select {
+		case <-r.release:
+			return core.Result{}, nil
+		case <-ctx.Done():
+			return core.Result{}, core.Error("已取消")
+		}
 	}
-	if panel.Y < header.Y+header.H {
-		t.Fatalf("the task panel (y=%.0f) overlaps the page header (y=%.0f h=%.0f)", panel.Y, header.Y, header.H)
+	return core.Result{Output: "device"}, nil
+}
+
+// newBlockingViewModel builds a view model whose manager runs commands through
+// runner, so a test can hold a task in the running state.
+func newBlockingViewModel(t *testing.T, runner core.Runner) *ViewModel {
+	t.Helper()
+	creds := core.NewMemoryCredentialStore()
+	profile := core.Profile{ID: uuid.New(), Name: "E245", RemotePort: 5555}
+	if err := creds.Write(testAddress, profile.ID); err != nil {
+		t.Fatal(err)
 	}
-	if title, ok := tt.Find("E245"); !ok || title.W == 0 || title.H == 0 {
-		t.Fatalf("the device title was clipped away: %+v", title)
-	}
+	m := core.NewManager(core.ManagerOptions{
+		Configuration: core.Configuration{
+			Profiles: []core.Profile{profile},
+			Tools:    core.ToolSettings{ADB: os.Args[0]},
+		},
+		Credentials:     creds,
+		Identities:      core.NewIdentityStore(t.TempDir()),
+		Runner:          runner,
+		Locate:          func(string) (string, bool) { return "", false },
+		MonitorInterval: 3600 * 1e9,
+	})
+	return NewViewModel(m, func(string) (string, bool) { return "", false })
 }
 
 func TestContentStaysBelowAFloatingHeader(t *testing.T) {

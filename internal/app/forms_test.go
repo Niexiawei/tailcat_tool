@@ -93,7 +93,7 @@ func TestDetailRows(t *testing.T) {
 	}
 }
 
-func TestTaskPanelShowsTasks(t *testing.T) {
+func TestLogPageShowsFinishedTasks(t *testing.T) {
 	vm := newTestViewModel(t)
 	profile := vm.Manager.Profiles()[0]
 	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
@@ -105,9 +105,16 @@ func TestTaskPanelShowsTasks(t *testing.T) {
 		t.Fatalf("BeginADBTask() error: %v", err)
 	}
 	vm.Manager.WaitTask(taskID)
+	vm.DetailTab = 2
+	vm.OpenDevice(profile.ID)
 	tt := ui.NewTester(vm.ContentView, 900, 700)
-	if !tt.HasText("设备任务") || !tt.HasText("上传 a") {
-		t.Fatalf("task panel missing: %v", tt.Texts())
+	if !tt.HasText("通道日志与任务") {
+		t.Fatalf("the log page is missing: %v", tt.Texts())
+	}
+	// The task line lives inside the read-only text area, which the tester
+	// does not list as labels, so assert on the buffer the page wrote.
+	if got := vm.logState(profile.ID).text; !strings.Contains(got, "上传 a · 已完成") {
+		t.Fatalf("the log page lost the task: %q", got)
 	}
 }
 
