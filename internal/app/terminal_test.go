@@ -154,7 +154,7 @@ func TestConsoleFallsBackWhenTerminalIsUnavailable(t *testing.T) {
 	vm := newTestViewModel(t)
 	profile := vm.Manager.Profiles()[0]
 	vm.OpenDevice(profile.ID)
-	vm.DetailTab = 1
+	vm.DetailTab = detailTerminal
 	tt := ui.NewTester(vm.ContentView, 900, 700)
 	if !tt.HasText("终端不可用：no native library") {
 		t.Fatalf("no message about an unusable console; texts = %v", tt.Texts())

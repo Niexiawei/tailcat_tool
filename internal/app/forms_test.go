@@ -108,7 +108,7 @@ func TestLogPageShowsFinishedTasks(t *testing.T) {
 		t.Fatalf("BeginADBTask() error: %v", err)
 	}
 	vm.Manager.WaitTask(taskID)
-	vm.DetailTab = 2
+	vm.DetailTab = detailLog
 	vm.OpenDevice(profile.ID)
 	tt := ui.NewTester(vm.ContentView, 900, 700)
 	if !tt.HasText("通道日志与任务") {

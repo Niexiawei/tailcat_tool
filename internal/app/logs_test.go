@@ -61,7 +61,7 @@ func TestLogTextKeepsEveryLineOfAFullWindow(t *testing.T) {
 
 func TestLogPageHasAnEmptyState(t *testing.T) {
 	vm := newTestViewModel(t)
-	vm.DetailTab = 2
+	vm.DetailTab = detailLog
 	vm.OpenDevice(vm.Manager.Profiles()[0].ID)
 	tt := ui.NewTester(vm.ContentView, 900, 700)
 	if !tt.HasText("暂无通道日志与任务") {
@@ -118,7 +118,7 @@ func TestLogPageCancelsTheRunningTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginADBTask() error: %v", err)
 	}
-	vm.DetailTab = 2
+	vm.DetailTab = detailLog
 	vm.OpenDevice(profile.ID)
 	tt := ui.NewTester(vm.ContentView, 900, 700)
 	if !tt.HasText("运行中 1 个任务") {

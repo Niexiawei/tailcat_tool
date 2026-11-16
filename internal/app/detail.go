@@ -183,14 +183,20 @@ func (vm *ViewModel) devicePage(c *ui.Context, profile core.Profile) {
 				go manager.Disconnect(context.Background(), profile.ID)
 			}
 		})
-		components.Tabs(c, &vm.DetailTab, components.TabsSegmented, "概览", "终端", "日志")
+		components.Tabs(c, &vm.DetailTab, components.TabsSegmented, "概览", "资源", "终端", "日志")
 		switch vm.DetailTab {
-		case 1:
+		case detailResources:
+			vm.resourcePage(c, profile, session)
+		case detailTerminal:
+			// Leaving the resource tab ends its polling.
+			vm.Manager.StopResourceSampling(profile.ID)
 			components.Tabs(c, &vm.ConsoleTab, components.TabsSegmented, "设备 Shell", "ADB 命令")
 			vm.consoleView(c, profile, session)
-		case 2:
+		case detailLog:
+			vm.Manager.StopResourceSampling(profile.ID)
 			vm.logPage(c, profile, session)
 		default:
+			vm.Manager.StopResourceSampling(profile.ID)
 			vm.overview(c, profile, session)
 		}
 	})

@@ -66,6 +66,9 @@ type hardwareInfo struct {
 	fetched  bool
 }
 
+// WarningNoGPU explains a device whose vendor exposes no GPU counter.
+const WarningNoGPU = "该设备不提供 GPU 使用率"
+
 const (
 	// defaultResourceInterval is how often the open resource page re-reads.
 	defaultResourceInterval = 2 * time.Second
@@ -124,7 +127,7 @@ func (m *Manager) SampleResources(ctx context.Context, id uuid.UUID) (ResourceSn
 		snapshot.GPU.Renderer = renderer
 	}
 	if !snapshot.GPU.Available {
-		snapshot.Warnings = append(snapshot.Warnings, "该设备不提供 GPU 使用率")
+		snapshot.Warnings = append(snapshot.Warnings, WarningNoGPU)
 	}
 	snapshot = m.attachAppMeta(snapshot, id, target)
 
@@ -452,6 +455,12 @@ func (m *Manager) StartResourceSampling(id uuid.UUID) {
 // comes back cannot show the previous channel's numbers.
 func (m *Manager) StopResourceSampling(id uuid.UUID) {
 	m.mu.Lock()
+	if _, running := m.samplers[id]; !running {
+		if _, stored := m.resources[id]; !stored {
+			m.mu.Unlock()
+			return
+		}
+	}
 	m.stopResourceSamplingLocked(id)
 	delete(m.resources, id)
 	delete(m.sampleCounters, id)

@@ -14,6 +14,14 @@ import (
 	"github.com/oneo-me/onevra/source/shells/sidebar"
 )
 
+// The device page's tabs, in the order the page shows them.
+const (
+	detailOverview = iota
+	detailResources
+	detailTerminal
+	detailLog
+)
+
 // ViewModel is everything the window reads. It owns no manager state of its
 // own: the manager is the single source of truth and the window redraws when
 // it says something changed.
@@ -31,7 +39,8 @@ type ViewModel struct {
 
 	// Selection is the device the detail pane shows.
 	Selection uuid.UUID
-	// DetailTab is 0 for the overview, 1 for the terminal and 2 for the log.
+	// DetailTab is the device page's current tab; see detailOverview and the
+	// constants beside it.
 	DetailTab int
 	// ConsoleTab is ConsoleShell or ConsoleADB inside the terminal tab.
 	ConsoleTab int
@@ -74,6 +83,10 @@ type ViewModel struct {
 	consoles map[uuid.UUID]*consoleHost
 	// logStates holds the log page's buffer and scroll position per device.
 	logStates map[uuid.UUID]*logState
+	// resources holds the resource page's state per device.
+	resources map[uuid.UUID]*resourceState
+	// appIcons caches decoded application icons, keyed by device and package.
+	appIcons map[string]ui.ImageSource
 }
 
 // Fail reports an error as an error-level toast.
