@@ -1,6 +1,6 @@
 # 界面与内嵌终端（技术文档）
 
-> 记录本轮（提交 `9aaa288` … `88d1ddd`）界面布局、页面路由、内嵌终端与错误提示的设计与实现。
+> 记录界面布局、页面路由、标题栏导航、内嵌终端与提示条的设计与实现（提交 `9aaa288` 起，最近一轮见 `docs/CHANGELOG.md`）。
 > 架构总体见 [`architecture.md`](architecture.md)；构建与依赖见 [`build-notes.md`](build-notes.md)；行为变更见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 目录
@@ -128,7 +128,13 @@ vm.Router.View(c, func(r *ui.Route) {
 
 ### 3.4 窗口级操作只属于列表页
 
-测试全部设备 / 临时连接 / 添加设备 / 工具设置只对"设备集合"有意义，因此 `vm.toolbar(c)` 只在列表页分支里调用。设备页只保留设备自身的动作。
+添加设备 / 临时连接 / 测试全部设备只对"设备集合"有意义，因此 `vm.toolbar(c)` 只在列表页分支里调用，顺序固定：**主操作「添加设备」在最前**，其余按常用度排在后面。设备页只保留设备自身的动作。「工具设置」不属于设备集合，它配置的是侧栏底栏显示的那两个工具，所以放在 `LeftToolbar`（见 §4）。
+
+### 3.5 动作一律「图标 + 文字」
+
+窗口级动作统一走 `actionButton(c, icon, label, variant)`：`components.Button` 加 `Children`，里面是 `components.Icon(c, lucide.X)` 和 `components.Text`，按钮的 `Label` 仍是文案本身——所以无障碍名与 `Tester.Click("添加设备")` 都不受影响。用的都是 `lucide` 图标：`Plus`（添加设备）、`Zap`（临时连接）、`Radar`（测试全部设备）、`Settings`（工具设置）。
+
+**不要**给动作只放文字：一行同尺寸的文字按钮读起来像正文（见 §10 的幽灵按钮一行）。
 
 ## 4. 侧栏
 
@@ -146,7 +152,13 @@ ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), Space(2), 0, Space(2)).Chil
 
 终端来自 `github.com/egoist/mygo/plugins/terminal`（Ghostty 的 libghostty-vt，运行期加载，**无 cgo**）。发布需 `mygo build` 才会把库打进包，`go build` 的产物首次打开终端页时会下载一次。
 
-### 5.1 两种模式
+### 5.1 外观
+
+终端是**自己的一块深色面板**，与窗口外观解耦：`consoleTheme()` 取 `terminal.DarkTheme()` 再把背景钉成 `#000000`、前景 `#f2f2f2`，三处 `terminal.Options`（设备 Shell / ADB 命令 / 未连接占位）都带上它。外面的框是 `Padding(1) + Radius + Border(1, theme.Border) + Clip()`：1 DIP 内缩是为了让终端自己画的背景不吃掉边框，圆角靠 `Clip()` 的圆角裁剪生效。
+
+**不要**让终端跟随窗口的浅色主题：白底黑字的 shell 看起来像一个表单，用户会以为那是输入框。
+
+### 5.2 两种模式
 
 | 模式 | 实现 | 用途 |
 |---|---|---|
@@ -166,7 +178,7 @@ func (m *Manager) RunADB(ctx context.Context, id uuid.UUID, args []string, timeo
 
 复用任务机制的好处是**免费**获得：目标双校验（启动前 + 执行前）、超时、输出脱敏、尾部 32 KiB 上限、日志页可见、进历史库。
 
-### 5.2 未连接时：`lineConsole`
+### 5.3 未连接时：`lineConsole`
 
 未连接（或没有 adb、或演示模式）时挂一个内存 `io.ReadWriteCloser`：
 
@@ -176,7 +188,7 @@ func (m *Manager) RunADB(ctx context.Context, id uuid.UUID, args []string, timeo
 - 转义序列（方向键、功能键）用状态机吞掉，不会把 `[A` 当文字显示；
 - 支持退格与 Ctrl-C。
 
-### 5.3 控制台的生命周期
+### 5.4 控制台的生命周期
 
 ```go
 key := consoleKey(session, mode)   // "idle" | "adb:<serial>:shell" | "adb:<serial>:cmd"
@@ -207,7 +219,8 @@ vm.Notify("已复制…")   // 成功级：3 秒
 
 - 走 `ViewModel` 内的队列 `toasts []ui.Toast`（互斥保护），因为调用方通常是 goroutine；
 - `ContentView` 每帧 `drainToasts()` 后 `c.AddToast(t)`（帧内调用 `AddToast` 是安全的：`requestFrame` 在帧内是空操作，不会自激）；
-- 队列排空即止，不会重复弹。
+- 队列排空即止，不会重复弹；
+- 窗口还不存在时入队的提示条会留在队列里（`Invalidate` 为 nil），第一帧由 `ContentView` 排空，启动问题因此不会丢。
 
 ### 6.2 什么该弹、什么不该弹
 
@@ -295,7 +308,8 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | `ButtonGhost` 用在页面级动作上 | 按钮读成正文（无底色无边框），用户找不到入口 | 页面级动作用 `ButtonOutline`/`Secondary`/`Primary`；ghost 只留给文字里的链接与对话框里的「取消」 |
 | 用内嵌横幅报一次性结果 | 同一句提示出现在两个槽位、不会消失，用户看不见也关不掉 | 事件走 `vm.Notify` / `vm.Fail`，页面只留状态 |
 | 每帧 `ui.TextBuffer.Set` | 选区与 caret 被重置，正在复制的日志跳走 | 只在渲染文本变化时写（`logState.text` 比对） |
-| 在 `components.Dialog` 的内容里放 `components.Tabs(..., TabsSegmented, ...)` | 关闭对话框时崩 `ui: element from pass N used in pass M`：分段控件的 `Draw` 回调闭包住了"选中的那个 tab"元素，而 MyGo 的 overlay 关闭动画会在**不重建**的情况下继续绘制旧面板 | 对话框内用 `ui.Segmented`（mygo 原生分段控件）或 `components.Radio`；`components.Tabs` 只用在常驻页面上（如设备页的三个页签） |
+| 在 `components.Dialog` 的内容里放 `components.Tabs(..., TabsSegmented, ...)` | 关闭对话框时崩 `ui: element from pass N used in pass M`：分段控件的 `Draw` 回调闭包住了"选中的那个 tab"元素，而 MyGo 的 overlay 关闭动画会在**不重建**的情况下继续绘制旧面板 | 对话框内用 `segmentedChoice`（`internal/app/editor.go`：`ui.SegmentedBase` + 组件库的凹槽/浮起取色）或 `components.Radio`；`components.Tabs` 只用在常驻页面上（如设备页的三个页签） |
+| 直接用 `ui.Segmented` 代替上面的分段控件 | 它只画一层 `theme.Surface` 底，浅色窗口里轨道与选中块几乎看不见（用户会以为坏掉了） | 用 `segmentedChoice`，它复刻组件库分段页签的外观（轨道 `Text@6%`、选中块 `Surface` + 阴影、选中文案 600 字重） |
 | `TrackScroll` 挂在不是滚动容器的元素上 | `MaxY` 一直是 0，跟随尾部失效 | `TrackScroll` 只接管 `Scroll`/`List` 这类容器；`TextAreaBuffer` 自带 `flagScrollY`，实测可用，但换控件时要重新确认 |
 | `mygo.RunOnMain` 请求重绘 | 命令协程被主线程卡住 | `Window.Invalidate()` |
 | 终端 `Write` 里再取同一把锁 | 自锁（敲字无反应） | 锁内只改状态，锁外 `push` |
@@ -318,6 +332,9 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 锁不被占用 | 注入阻塞 `Recorder`，断言 `Session()` 在 1 秒内返回 |
 | 行不被拉伸 | 三个设备名 `Find` 出的 `Y` 间距 < 70（旧布局是 201） |
 | 未连接终端 | `lineConsole` 单测：banner、回显、回车回调、转义序列吞掉 |
+| 动作顺序 | `Find("添加设备")`/`Find("临时连接")`/`Find("测试全部设备")` 的 `X` 递增 |
+| 对话框关闭动画 | 打开 → 关闭 → `Advance(20ms) + Frame()` 十次，任何跨帧持有 Element 的绘制回调都会 panic（`TestDialogsCloseWithoutPanic`） |
+| 是提示条还是内嵌横幅 | 点完动作后断言文案出现、**没有**「关闭」按钮，且 `Advance(5s)` 后消失 |
 
 **注意**：`ui.Tester` 的时钟是虚拟的，`Tester.Advance` 才推进。用"帧是否还在排队"判断卡死会误判——提示条动画本身会持续请求帧。判断"界面是否被锁住"要用真实的时间断言（如上面的锁测试）。
 
@@ -336,5 +353,6 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 日志入队与写库 | `internal/core/manager.go`（`writeLogs`）、`internal/history/sqlite.go` |
 | 设备信息读取与清空 | `internal/core/manager_tasks.go`、`internal/core/manager.go` |
 | 中继历史（`relayHistory`）与预设 | `internal/core/manager_devices.go`、`internal/core/config.go` |
+| 对话框关闭动画回归 | `internal/app/dialog_test.go` |
 | 视图测试 | `internal/app/app_test.go`、`internal/app/forms_test.go`、`internal/app/terminal_test.go` |
 | 锁不阻塞测试 | `internal/core/manager_test.go`（`TestSlowRecorderNeverBlocksTheManager`） |
