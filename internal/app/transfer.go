@@ -38,7 +38,7 @@ func (vm *ViewModel) TransferView(c *ui.Context) {
 			if !vm.TransferUpload {
 				ui.Row(c).FillWidth().Gap(8).Children(func() {
 					components.Text(c, orPlaceholder(vm.TransferLocalPath, "请选择本地保存目录")).FontSize(11)
-					if components.Button(c, "选择目录", components.ButtonGhost).Clicked() {
+					if components.Button(c, "选择目录", components.ButtonOutline).Clicked() {
 						vm.chooseDownloadFolder()
 					}
 				})

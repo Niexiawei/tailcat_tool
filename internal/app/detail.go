@@ -27,7 +27,7 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 	if note := vm.Notice; note != "" {
 		ui.Row(c).FillWidth().Padding(12, 16).Gap(8).Children(func() {
 			components.Text(c, note).FontSize(11)
-			if components.Button(c, "关闭", components.ButtonGhost).Clicked() {
+			if components.Button(c, "关闭", components.ButtonLink).Clicked() {
 				vm.Notice = ""
 			}
 		})
@@ -130,16 +130,16 @@ func (vm *ViewModel) missingDevicePage(c *ui.Context) {
 // toolbar holds the window-wide actions.
 func (vm *ViewModel) toolbar(c *ui.Context) {
 	ui.Row(c).FillWidth().Padding(0, 16, 8, 16).Gap(6).AlignItems(ui.Center).Children(func() {
-		if components.Button(c, "测试全部设备", components.ButtonGhost).Clicked() {
+		if components.Button(c, "测试全部设备", components.ButtonSecondary).Clicked() {
 			vm.openReachability()
 		}
-		if components.Button(c, "临时连接", components.ButtonGhost).Clicked() {
+		if components.Button(c, "临时连接", components.ButtonSecondary).Clicked() {
 			vm.openEditor(&EditorRequest{Temporary: true})
 		}
-		if components.Button(c, "添加设备", components.ButtonGhost).Clicked() {
+		if components.Button(c, "添加设备", components.ButtonPrimary).Clicked() {
 			vm.openEditor(&EditorRequest{})
 		}
-		if components.Button(c, "工具设置", components.ButtonGhost).Clicked() {
+		if components.Button(c, "工具设置", components.ButtonSecondary).Clicked() {
 			vm.openSettings()
 		}
 		if vm.Demo {
@@ -170,12 +170,12 @@ func (vm *ViewModel) devicePage(c *ui.Context, profile core.Profile) {
 				}
 				components.Text(c, subtitle).FontSize(11)
 			})
-			if components.Button(c, "编辑", components.ButtonGhost).Clicked() {
+			if components.Button(c, "编辑", components.ButtonOutline).Clicked() {
 				edited := profile
 				vm.openEditor(&EditorRequest{Profile: &edited})
 			}
 			if temporary {
-				if components.Button(c, "保存到我的设备", components.ButtonGhost).Clicked() {
+				if components.Button(c, "保存到我的设备", components.ButtonOutline).Clicked() {
 					vm.promote(profile)
 				}
 			}
@@ -244,10 +244,10 @@ func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.
 				go func() { vm.Fail(manager.RefreshDeviceInformation(context.Background(), profile.ID)) }()
 			}
 			if profile.DirectADB {
-				if components.Button(c, "复制 ADB 地址", components.ButtonGhost).Clicked() && profile.DirectTarget != "" {
+				if components.Button(c, "复制 ADB 地址", components.ButtonOutline).Clicked() && profile.DirectTarget != "" {
 					vm.copyText(profile.DirectTarget)
 				}
-			} else if components.Button(c, "复制 ADB 入口", components.ButtonGhost).Clicked() && session.Serial != "" {
+			} else if components.Button(c, "复制 ADB 入口", components.ButtonOutline).Clicked() && session.Serial != "" {
 				vm.copyText(session.Serial)
 			}
 		})
