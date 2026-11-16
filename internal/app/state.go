@@ -408,7 +408,7 @@ func (vm *ViewModel) toolRow(c *ui.Context, component core.ToolComponent) {
 		}
 		components.Icon(c, lucide.CircleAlert).Width(12).Height(12)
 		components.Text(c, component.Label()).FontSize(11)
-		if components.Button(c, "安装", components.ButtonOutline).Clicked() && vm.Install != nil {
+		if components.Button(c, "安装", components.ButtonOutline).Height(22).FontSize(11).Clicked() && vm.Install != nil {
 			vm.Install(component)
 		}
 	})
