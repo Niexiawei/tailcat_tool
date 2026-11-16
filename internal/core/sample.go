@@ -465,3 +465,33 @@ func (m *Manager) stopResourceSamplingLocked(id uuid.UUID) {
 		delete(m.samplers, id)
 	}
 }
+
+// RefreshAppMeta reads the names and icons of the applications the last
+// reading saw again, ignoring the cache lifetime. It returns as soon as the
+// work is queued: the page refreshes when the metadata arrives.
+func (m *Manager) RefreshAppMeta(ctx context.Context, id uuid.UUID) error {
+	target, err := m.operationTarget(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := m.validateTarget(ctx, id, target); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	source := m.appMeta
+	snapshot, seen := m.resources[id]
+	m.mu.Unlock()
+	if source == nil || !seen {
+		return nil
+	}
+	pkgs := make([]string, 0, len(snapshot.Apps))
+	for _, app := range snapshot.Apps {
+		pkgs = append(pkgs, app.Package)
+	}
+	if len(pkgs) == 0 {
+		return nil
+	}
+	source.Refresh(deviceKey(id), target.ADB, target.Serial, pkgs)
+	return nil
+}
