@@ -51,3 +51,13 @@ type Runner interface {
 	// Run starts the command and waits for it, applying Timeout and ctx.
 	Run(ctx context.Context, c Command, onOutput func(string)) (Result, error)
 }
+
+// FileRunner is a Runner that can stream a command's stdout straight into a
+// file. It exists for payloads no text sink can carry, such as an APK pulled
+// off a device; separating it keeps every existing fake a Runner.
+type FileRunner interface {
+	Runner
+	// RunToFile writes stdout to path, truncating it, and waits for the
+	// command. Result.Output then holds only what went to stderr.
+	RunToFile(ctx context.Context, c Command, path string) (Result, error)
+}

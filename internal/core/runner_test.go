@@ -1,10 +1,12 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,6 +53,14 @@ func runHelper(mode string) int {
 	case "sleep":
 		time.Sleep(30 * time.Second)
 		return 0
+	case "binary-bytes":
+		// Raw bytes no text sink can carry: 0x00..0x1f.
+		data := make([]byte, 32)
+		for i := range data {
+			data[i] = byte(i)
+		}
+		os.Stdout.Write(data)
+		return 0
 	case "exit-code":
 		return 7
 	case "spawn-child":
@@ -91,6 +101,44 @@ func TestRunCapturesBothPipes(t *testing.T) {
 		if !strings.Contains(res.Output, want) && !strings.Contains(strings.Join(chunks, ""), want) {
 			t.Fatalf("missing %q in output %q / chunks %v", want, res.Output, chunks)
 		}
+	}
+}
+
+func TestExecRunnerRunToFileKeepsBinaryStdout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "payload.bin")
+	cmd := *helperCommand("binary-bytes")
+	cmd.Timeout = 10 * time.Second
+	res, err := NewExecRunner().RunToFile(context.Background(), cmd, path)
+	if err != nil {
+		t.Fatalf("RunToFile() error: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	want := make([]byte, 32)
+	for i := range want {
+		want[i] = byte(i)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("file = %v, want %v", got, want)
+	}
+	if strings.ContainsRune(res.Output, 0) {
+		t.Fatalf("Output kept the binary bytes: %q", res.Output)
+	}
+}
+
+func TestExecRunnerRunToFileReportsExitCode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "payload.bin")
+	res, err := NewExecRunner().RunToFile(context.Background(), *helperCommand("exit-code"), path)
+	if err != nil {
+		t.Fatalf("RunToFile() error: %v", err)
+	}
+	if res.ExitCode != 7 {
+		t.Fatalf("ExitCode = %d, want 7", res.ExitCode)
 	}
 }
 
