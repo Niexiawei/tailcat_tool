@@ -283,3 +283,33 @@ func testIconPNG(t *testing.T) []byte {
 	}
 	return buf.Bytes()
 }
+
+func TestDemoRunnerAnswersResourceSampling(t *testing.T) {
+	res, err := demoRunner{}.Run(context.Background(), core.Command{
+		Path: "adb", Args: []string{"-s", "emulator-5554", "shell", "echo @@STAT; echo @@MEM"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("demoRunner.Run() error: %v", err)
+	}
+	for _, want := range []string{"@@STAT", "@@P ", "@@MEM"} {
+		if !strings.Contains(res.Output, want) {
+			t.Fatalf("the demo sampling output has no %q", want)
+		}
+	}
+}
+
+func TestDemoEnvironmentHasAppNamesAndIcons(t *testing.T) {
+	env := NewDemoEnvironment()
+	profile := env.Manager.Profiles()[0]
+
+	meta, ok := env.Manager.AppMeta(profile.ID, "com.demo.camera")
+	if !ok || meta.Label != "相机" {
+		t.Fatalf("demo metadata = %+v, ok=%v", meta, ok)
+	}
+	if len(meta.Icon) == 0 {
+		t.Fatal("the demo application has no icon")
+	}
+	if _, ok := env.Manager.AppMeta(profile.ID, "com.unknown.app"); ok {
+		t.Fatal("the demo invents metadata for unknown packages")
+	}
+}
