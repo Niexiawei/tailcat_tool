@@ -22,7 +22,7 @@
 
 ## 1. 设计目标
 
-1. **一屏一职责**：侧栏只负责"有哪些设备"，内容区只负责"当前这一页"，任务面板只负责"正在跑什么"。三者互不争空间。
+1. **一屏一职责**：侧栏只负责"有哪些设备"，标题栏只负责"我在哪一层"，内容区只负责"当前这一页"。三者互不争空间。
 2. **界面是状态的函数**：视图不持有临时布局状态；展开、页签、输入草稿都在 `ViewModel`，重绘由管理器通知驱动。
 3. **绝不让界面等 I/O**：任何写库、跑命令、探测，都不允许出现在渲染线程上，也不允许在持有管理器锁时发生。
 4. **组件优先**：能用的交互一律用 onevra 的 `components`，不自造（见 `AGENTS.md`「GUI 组件优先级」）。
@@ -40,7 +40,7 @@
 │ Left         │ Content                                      │
 │  Padding =   │  Padding(top) = HeaderHeight                 │
 │  HeaderHeight│  ├─ Column(Grow 1)  ← 路由页                 │
-│  ├─ Scroll   │  └─ 任务面板（Shrink 0，可滚动）              │
+│  ├─ Scroll   │  └─ （页面自己滚动，见 §2.2）                 │
 │  │  Accordion│                                              │
 ├──────────────┤                                              │
 │ LeftToolbar  │                                              │
@@ -52,12 +52,13 @@
 
 ```go
 sidebar.NewShell(sidebar.ShellOptions{
-	Title:       AppName,
-	Theme:       theme.Onevra,
-	StateKey:    "tailcat-manager.main",
-	Left:        vm.SidebarView,     // 设备列表（可滚动）
-	LeftToolbar: vm.SidebarFooter,   // 固定底栏
-	Content:     vm.ContentView,     // 路由 + 任务面板
+	Title:        AppName,
+	Theme:        theme.Onevra,
+	StateKey:     "tailcat-manager.main",
+	Left:         vm.SidebarView,     // 设备列表（可滚动）
+	LeftToolbar:  vm.SidebarFooter,   // 固定底栏
+	ContentTitle: vm.ContentTitle,    // 标题栏内的面包屑
+	Content:      vm.ContentView,     // 路由页
 })
 ```
 
@@ -65,22 +66,22 @@ sidebar.NewShell(sidebar.ShellOptions{
 
 | 约定 | 原因 |
 |---|---|
-| `Left` 与 `Content` 必须用 `sidebar.HeaderHeight(c)` 作为上内边距 | 标题栏是浮在上面的，不留出来就会被折叠按钮压住 |
+| `Left` 与 `Content` 必须用 `sidebar.HeaderHeight(c)` 作为上内边距 | 标题栏是浮在上面的（高 `max(48, 系统标题栏高度, 主题行高)`），不留出来就会被它压住；标题栏还负责拖动窗口，画在它下面的按钮连点击都收不到 |
+| 导航（面包屑）画在 `ContentTitle`，不要画在 `Content` 里 | `ContentTitle` 是 shell 的标题栏槽位，点击不会被拖拽区吞掉；`Content` 从标题栏下方开始 |
 | 固定底栏用 `LeftToolbar`，不要塞进 `Left` 的列尾 | 塞进列尾会和列表抢高度，出现"底栏浮在列表中间" |
 | 列内**只有一个**元素可以用 `Fill()` | `Fill()` 是宽 **和** 高都 100%，两个相邻的 `Fill()` 会叠在同一位置 |
 
-### 2.2 内容区两段
+### 2.2 内容区是一段
 
-`ContentView`（`internal/app/detail.go`）是显式的两段列：
+`ContentView`（`internal/app/detail.go`）只放一个路由页，并且自己让出标题栏高度：
 
 ```go
-ui.Column(c).Fill().Children(func() {
-	ui.Column(c).FillWidth().Grow(1).Children(func() { vm.routedPage(c) })  // 页面占满剩余
-	vm.TaskPanel(c)                                                        // 面板固定贴底
+ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
+	vm.routedPage(c)   // 页面占满，含设备页的「概览 / 终端 / 日志」
 })
 ```
 
-任务面板（`internal/app/tasks.go`）自身是 `FillWidth().Shrink(0)`，列表包在 `ui.Scroll(c).Height(150)` 里，最多显示 20 条（只读最近 20 条，完整历史在库里）。
+**没有固定的任务面板。** 设备任务并进该设备的「日志」标签页（按时间与通道日志合并），运行中的任务在日志页顶部一键取消。历史上那个 `Shrink(0)` 贴底面板会压住内联对话框，已删除。
 
 **行式元素一律 `FillWidth()`。** `Fill()` 让行去抢高度，是最常见的布局事故（见 §9.2）。
 
@@ -90,7 +91,7 @@ ui.Column(c).Fill().Children(func() {
 
 | 路由 | 页面 | 说明 |
 |---|---|---|
-| `/devices` | 设备列表页 | 卡片式列表（状态点 / 名称 / 连接方式与地址 / 状态），空态给出"添加设备" |
+| `/devices` | 设备列表页 | 卡片式列表（状态点 / 名称 / 连接方式与地址 / 状态），空态给出"添加设备"；页面标题在窗口标题栏里，正文不再重复 |
 | `/devices/{id}` | 设备页 | 面包屑 + 标题行（编辑 / 连接 / 断开）+ 页签（概览 / 终端 / 日志） |
 | 其他 | 列表页 | 兜底 |
 | `/devices/{无效 id}` | "设备不存在"页 | 附带"返回我的设备" |
@@ -100,7 +101,7 @@ ui.Column(c).Fill().Children(func() {
 ### 3.2 导航的两条入口
 
 - **侧栏点击**：`deviceRow` → `vm.OpenDevice(id)`；已在该页时不重复 `Push`。
-- **面包屑**：`components.Breadcrumbs(c, []string{"我的设备", 设备名}, &vm.CrumbChoice)`，`Changed()` 且 index 为 0 时 `vm.OpenDevices()`。
+- **标题栏面包屑**：`vm.ContentTitle` 交给 `ShellOptions.ContentTitle`，用 `components.Breadcrumbs(c, []string{"我的设备", 设备名}, &vm.CrumbChoice)`；`Changed()` 且 index 为 0 时 `vm.OpenDevices()`。它读路由而不是 `Selection`，所以按 ⌘[ 后退时标题栏自动跟着变。`deviceIDFromPath(path)` 是这一步唯一的路径解析（纯函数，单独可测）。
 
 `Router` 自带 ⌘[ / ⌘]（Windows/Linux 为 Alt+← / →）与鼠标侧键，页面在历史中保留滚动位置与焦点。
 
@@ -139,7 +140,7 @@ ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), Space(2), 0, Space(2)).Chil
 
 - **分组**：`components.Accordion` 两个 `group.Item`，标题带数量（`我的设备 (3)` / `临时设备 (空)`），展开状态在 `ViewModel.SavedOpen / TemporaryOpen`，默认都展开。空组给一句说明而不是空白。
 - **设备行**：`ui.ButtonBase(c).FillWidth().Shrink(0).Justify(ui.Start).AlignItems(ui.Center).Radius(t.Radius)`，选中时 `Background(t.Selection)`。`ButtonBase` 内部是 `coreRow(c).Center()`，**必须显式 `Justify(Start)`**，否则内容居中。
-- **底栏**：通道数、两个工具的健康状态（缺失时给「安装」按钮）、一行提示文本。不放动作按钮。
+- **底栏**：两个工具的健康状态（缺失时给「安装」按钮）、一行提示文本。不放动作按钮，也不放通道计数（它与设备行上的状态点重复，且无法操作）。
 
 ## 5. 内嵌终端
 
@@ -163,7 +164,7 @@ func (m *Manager) RunADB(ctx context.Context, id uuid.UUID, args []string, timeo
 }
 ```
 
-复用任务机制的好处是**免费**获得：目标双校验（启动前 + 执行前）、超时、输出脱敏、尾部 32 KiB 上限、任务面板可见、进历史库。
+复用任务机制的好处是**免费**获得：目标双校验（启动前 + 执行前）、超时、输出脱敏、尾部 32 KiB 上限、日志页可见、进历史库。
 
 ### 5.2 未连接时：`lineConsole`
 
@@ -216,6 +217,7 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 安装 APK、上传、下载、终端命令失败、组件安装失败 | 错误提示 |
 | 复制成功、保存临时设备成功 | 成功提示 |
 | 表单字段校验（地址为空、端口越界、名称过长） | **内联**文案：错误指向具体输入框，弹窗反而找不到落点 |
+| 中继历史补录（`relayHistory`）失败 | **不提示**：它只是编辑器的便利数据，不影响设备是否保存成功 |
 
 ### 6.3 不要静默吞掉错误
 
@@ -267,8 +269,9 @@ vm.Notify("已复制…")   // 成功级：3 秒
 
 - **现象**：出现第一台任务后，"设备任务"面板画在内容区顶部，盖住面包屑与标题，标题被裁成 0 尺寸。
 - **根因**：`ContentView` 里页面与面板是两个相邻的 `Fill()`（各 100% 高度），布局把它们叠在同一区域；路由器页面又是绝对定位的，于是谁在上谁在下取决于绘制顺序。
-- **修复**：内容区改成显式两段（页面 `Grow(1)`、面板 `Shrink(0)`），面板内部用固定高度 `Scroll`。
-- **防回归**：`TestTaskPanelSitsBelowThePage` 用 `ui.NewTester` 的 `Find` 比较几何位置，旧布局下报 `task panel (y=0) overlaps the page header (y=20 h=25)`。
+- **当轮修复**：内容区改成显式两段（页面 `Grow(1)`、面板 `Shrink(0)`），面板内部用固定高度 `Scroll`。
+- **后续结论**：面板本身在下一轮被删除——它仍会压住内联对话框，而且任务本来就应该属于该设备的日志。现在任务行合并进「日志」页。
+- **防回归**：`TestTaskPanelIsGone` 断言页面上不再出现「设备任务」；日志页的内容由 `logState(id).text` 断言。
 
 ### 9.3 终端显示 `[Process exited]` 后再也输入不了
 
@@ -286,6 +289,9 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | `ButtonBase` 默认居中 | 行内容居中，不像列表项 | `.Justify(ui.Start)` |
 | 行内 `Text` 不 `SingleLine()` | 长设备名把行撑高 | `.SingleLine()` |
 | 持锁调用 `Recorder` | 磁盘一慢，界面冻住 | 入队，由独立协程写 |
+| `ButtonGhost` 用在页面级动作上 | 按钮读成正文（无底色无边框），用户找不到入口 | 页面级动作用 `ButtonOutline`/`Secondary`/`Primary`；ghost 只留给文字里的链接与对话框里的「取消」 |
+| 每帧 `ui.TextBuffer.Set` | 选区与 caret 被重置，正在复制的日志跳走 | 只在渲染文本变化时写（`logState.text` 比对） |
+| `TrackScroll` 挂在不是滚动容器的元素上 | `MaxY` 一直是 0，跟随尾部失效 | `TrackScroll` 只接管 `Scroll`/`List` 这类容器；`TextAreaBuffer` 自带 `flagScrollY`，实测可用，但换控件时要重新确认 |
 | `mygo.RunOnMain` 请求重绘 | 命令协程被主线程卡住 | `Window.Invalidate()` |
 | 终端 `Write` 里再取同一把锁 | 自锁（敲字无反应） | 锁内只改状态，锁外 `push` |
 | 用真终端写视图测试 | CI 需要下载 libghostty-vt | 视图测试里不打开终端页，或把 `newTerminal` 换掉 |
@@ -302,7 +308,8 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 面包屑可点 | `Click("我的设备")` 断言回到 `/devices` |
 | 折叠面板 | `Click("我的设备 (1)")` 后断言行消失、`SavedOpen` 变为 false |
 | 单选切换 | `Click("本地 ADB 直连")` 后断言表单字段变化 |
-| 几何不错位 | `Find("设备任务")` 与 `Find("我的设备")` 的 `Y/H` 比较 |
+| 标题栏不压内容 | `Tester.SetTitleBar` 换成 48/64 DIP，断言正文首个可见元素 `Y >= sidebar.HeaderHeight(c)` |
+| 日志时间线 | 纯函数 `deviceTimeline` / `logText` 断言行序；视图只断言 `logState(id).text` 与空态文案 |
 | 锁不被占用 | 注入阻塞 `Recorder`，断言 `Session()` 在 1 秒内返回 |
 | 行不被拉伸 | 三个设备名 `Find` 出的 `Y` 间距 < 70（旧布局是 201） |
 | 未连接终端 | `lineConsole` 单测：banner、回显、回车回调、转义序列吞掉 |
@@ -314,14 +321,15 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 关注点 | 文件 |
 |---|---|
 | 窗口与槽位 | `internal/app/shell.go` |
-| 侧栏、分组、底栏、提示队列 | `internal/app/state.go` |
+| 侧栏、分组、底栏、提示队列、标题栏面包屑 | `internal/app/state.go` |
 | 路由、页面、概览、页签 | `internal/app/detail.go` |
-| 任务面板 | `internal/app/tasks.go` |
+| 日志页（时间线、只读缓冲、取消） | `internal/app/logs.go` |
 | 内嵌终端、`lineConsole` | `internal/app/terminal.go` |
-| 表单（含连接方式单选） | `internal/app/editor.go` |
+| 表单（连接方式单选、中继分段与历史） | `internal/app/editor.go` |
 | 上传/下载表单 | `internal/app/transfer.go` |
 | 错误回流（连接、探测、终端） | `internal/app/detail.go`、`internal/app/actions.go`、`internal/app/app.go` |
 | 日志入队与写库 | `internal/core/manager.go`（`writeLogs`）、`internal/history/sqlite.go` |
 | 设备信息读取与清空 | `internal/core/manager_tasks.go`、`internal/core/manager.go` |
+| 中继历史（`relayHistory`）与预设 | `internal/core/manager_devices.go`、`internal/core/config.go` |
 | 视图测试 | `internal/app/app_test.go`、`internal/app/forms_test.go`、`internal/app/terminal_test.go` |
 | 锁不阻塞测试 | `internal/core/manager_test.go`（`TestSlowRecorderNeverBlocksTheManager`） |
