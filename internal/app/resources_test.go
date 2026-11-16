@@ -274,6 +274,33 @@ func TestResourceToolbarRefreshNeedsAConnection(t *testing.T) {
 	}
 }
 
+func TestAppIconFollowsTheMetadataFetchTime(t *testing.T) {
+	first := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	icon := testIconPNG(t)
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{
+		"com.foo": {Package: "com.foo", Label: "微信", Icon: icon, FetchedAt: first},
+	})
+	profile := vm.Manager.Profiles()[0]
+	if got := vm.appIcon(profile.ID, "com.foo"); got == nil {
+		t.Fatal("the cached icon did not decode")
+	}
+
+	// A refresh lands with a newer reading; the page must pick up the new icon
+	// instead of the one it decoded before.
+	other := testIconPNG(t)
+	meta.mu.Lock()
+	meta.metas["com.foo"] = core.AppMeta{Package: "com.foo", Label: "微信", Icon: other, FetchedAt: first.Add(time.Hour)}
+	meta.mu.Unlock()
+
+	if got := vm.appIcon(profile.ID, "com.foo"); got == nil {
+		t.Fatal("the refreshed icon did not decode")
+	}
+	key := profile.ID.String() + "|com.foo"
+	if cached := vm.appIcons[key]; !cached.fetchedAt.Equal(first.Add(time.Hour)) {
+		t.Fatalf("the icon cache kept the old reading: %v", cached.fetchedAt)
+	}
+}
+
 // testIconPNG is a 1×1 PNG the view can decode, as a real APK icon would be.
 func testIconPNG(t *testing.T) []byte {
 	t.Helper()

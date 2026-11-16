@@ -23,6 +23,10 @@ const (
 
 	adbMetaTimeout = 10 * time.Second
 	apkPullTimeout = 60 * time.Second
+
+	// failedRetryAfter keeps a package with no readable APK (a system process,
+	// a package the shell cannot see) from being asked about every two seconds.
+	failedRetryAfter = 10 * time.Minute
 )
 
 // Store is the application metadata cache: it pulls the APK of each running
@@ -37,6 +41,8 @@ type Store struct {
 	mu      sync.Mutex
 	pending map[string]bool
 	forced  map[string]bool
+	// failed remembers when a package last failed, keyed like pending.
+	failed map[string]time.Time
 }
 
 type job struct {
@@ -64,6 +70,7 @@ func New(dir string, runner core.FileRunner, workers int) (*Store, error) {
 		queue:   make(chan job, 512),
 		pending: map[string]bool{},
 		forced:  map[string]bool{},
+		failed:  map[string]time.Time{},
 	}
 	for i := 0; i < workers; i++ {
 		go s.work()
@@ -114,8 +121,14 @@ func (s *Store) enqueue(device, adbPath, serial string, pkgs []string, force boo
 			// Whatever is queued may have skipped this package as fresh, so
 			// let the worker know it must read the APK this time.
 			s.forced[key] = true
-		} else if meta, ok := s.cache.lookupAt(device, pkg, now); ok && !meta.Stale {
-			continue
+			delete(s.failed, key)
+		} else {
+			if meta, ok := s.cache.lookupAt(device, pkg, now); ok && !meta.Stale {
+				continue
+			}
+			if last, failed := s.failed[key]; failed && now.Sub(last) < failedRetryAfter {
+				continue
+			}
 		}
 		if s.pending[key] {
 			continue
@@ -139,34 +152,44 @@ func (s *Store) work() {
 		delete(s.forced, key)
 		s.mu.Unlock()
 
-		s.fetch(queued, force)
+		stored := s.fetch(queued, force)
 
 		s.mu.Lock()
 		delete(s.pending, key)
+		if stored {
+			delete(s.failed, key)
+		} else {
+			s.failed[key] = s.now()
+		}
 		s.mu.Unlock()
 		s.wg.Done()
 	}
 }
 
-// fetch reads one application's APK and stores its name and icon.
-func (s *Store) fetch(queued job, force bool) {
+// fetch reads one application's APK and stores its name and icon. It reports
+// whether the cache now holds an entry, so a package with nothing to read backs
+// off instead of being asked about on every round.
+func (s *Store) fetch(queued job, force bool) bool {
 	apk, err := s.apkPath(queued)
 	if err != nil || apk == "" {
-		return
+		return false
 	}
 	size, stamp := s.apkIdentity(queued, apk)
 	if size > maxAPKSize {
-		return
+		return false
 	}
 	key := queued.pkg + "|" + apk + "|" + strconv.FormatInt(size, 10) + "|" + stamp
 	if !force && s.cache.freshAt(queued.device, queued.pkg, key, s.now()) {
-		return
+		return true
 	}
 	label, icon := s.readApk(queued, apk)
 	if label == "" {
-		return
+		return false
 	}
-	_ = s.cache.putAt(queued.device, queued.pkg, key, label, icon, s.now())
+	if err := s.cache.putAt(queued.device, queued.pkg, key, label, icon, s.now()); err != nil {
+		return false
+	}
+	return true
 }
 
 // apkPath asks the device where a package's base APK lives.

@@ -204,6 +204,34 @@ func TestStoreIgnoresDuplicateRequests(t *testing.T) {
 	}
 }
 
+func TestStoreBacksOffAfterAFailedFetch(t *testing.T) {
+	now := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	// No APK path: the device answers "unknown package", as it does for
+	// processes that are not applications at all.
+	runner := &fakeFileRunner{}
+	s := newTestStore(t, runner)
+	s.now = func() time.Time { return now }
+
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"system_server"})
+	s.waitIdle()
+	if got := runner.count("pm path"); got != 1 {
+		t.Fatalf("first attempt ran %d pm path calls", got)
+	}
+
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"system_server"})
+	s.waitIdle()
+	if got := runner.count("pm path"); got != 1 {
+		t.Fatalf("a failed package was retried immediately (%d calls)", got)
+	}
+
+	now = now.Add(11 * time.Minute)
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"system_server"})
+	s.waitIdle()
+	if got := runner.count("pm path"); got != 2 {
+		t.Fatalf("the backoff never expired (%d calls)", got)
+	}
+}
+
 func TestStoreKeepsLabelWhenIconIsVector(t *testing.T) {
 	vector := []byte(`<vector xmlns:android="http://schemas.android.com/apk/res/android"/>`)
 	apk := buildTestAPK(t, "微信", "res/mipmap-anydpi-v26/ic.xml", vector)

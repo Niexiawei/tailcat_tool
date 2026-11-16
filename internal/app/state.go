@@ -85,8 +85,9 @@ type ViewModel struct {
 	logStates map[uuid.UUID]*logState
 	// resources holds the resource page's state per device.
 	resources map[uuid.UUID]*resourceState
-	// appIcons caches decoded application icons, keyed by device and package.
-	appIcons map[string]ui.ImageSource
+	// appIcons caches decoded application icons, keyed by device and package,
+	// together with the reading they were decoded from.
+	appIcons map[string]iconAsset
 }
 
 // Fail reports an error as an error-level toast.

@@ -350,22 +350,34 @@ func percent1Text(v float64) string {
 	return strconv.FormatFloat(v, 'f', 1, 64) + "%"
 }
 
-// appIcon decodes one application's icon once and remembers it, including the
-// answer "there is none", which Avatar draws as initials.
+// iconAsset is one decoded icon and the reading it came from, so a refetched
+// application shows its new icon instead of the one decoded an hour ago.
+type iconAsset struct {
+	fetchedAt time.Time
+	image     ui.ImageSource
+}
+
+// appIcon decodes one application's icon once per reading and remembers it,
+// including the answer "there is none", which Avatar draws as initials.
 func (vm *ViewModel) appIcon(device uuid.UUID, pkg string) ui.ImageSource {
 	if vm.appIcons == nil {
-		vm.appIcons = map[string]ui.ImageSource{}
+		vm.appIcons = map[string]iconAsset{}
 	}
 	key := device.String() + "|" + pkg
-	if icon, known := vm.appIcons[key]; known {
-		return icon
+	var fetchedAt time.Time
+	var icon []byte
+	if meta, ok := vm.Manager.AppMeta(device, pkg); ok {
+		fetchedAt, icon = meta.FetchedAt, meta.Icon
 	}
-	var icon ui.ImageSource
-	if meta, ok := vm.Manager.AppMeta(device, pkg); ok && len(meta.Icon) > 0 {
-		if decoded, err := ui.DecodeImage(meta.Icon); err == nil {
-			icon = decoded
+	if cached, ok := vm.appIcons[key]; ok && cached.fetchedAt.Equal(fetchedAt) {
+		return cached.image
+	}
+	var image ui.ImageSource
+	if len(icon) > 0 {
+		if decoded, err := ui.DecodeImage(icon); err == nil {
+			image = decoded
 		}
 	}
-	vm.appIcons[key] = icon
-	return icon
+	vm.appIcons[key] = iconAsset{fetchedAt: fetchedAt, image: image}
+	return image
 }
