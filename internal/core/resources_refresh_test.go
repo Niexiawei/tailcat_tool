@@ -25,20 +25,37 @@ func (f *fakeAppMeta) resetCalls() {
 	f.requested, f.refreshed = nil, nil
 }
 
-func TestRefreshAppMetaRequiresOnlineDevice(t *testing.T) {
+func TestResolveAppMetaRequiresOnlineDevice(t *testing.T) {
 	f, meta := refreshFixture(t)
 	f.serveRounds(t, defaultRound())
 
-	if err := f.m.RefreshAppMeta(context.Background(), f.id); err == nil {
-		t.Fatal("RefreshAppMeta() accepted a device with no channel")
+	if err := f.m.ResolveAppMeta(context.Background(), f.id, []string{"com.foo"}); err == nil {
+		t.Fatal("ResolveAppMeta() accepted a device with no channel")
 	}
 	if got := meta.snapshot(); len(got) != 0 {
-		t.Fatalf("a refresh was queued for an offline device: %v", got)
+		t.Fatalf("a read was queued for an offline device: %v", got)
 	}
 	for _, call := range f.runner.commandLog() {
-		if containsText([]string{call}, "pm path") || containsSubstring([]string{call}, "exec-out") {
-			t.Fatalf("an offline refresh touched adb: %q", call)
+		if containsSubstring([]string{call}, "pm path") || containsSubstring([]string{call}, "exec-out") {
+			t.Fatalf("an offline read touched adb: %q", call)
 		}
+	}
+}
+
+func TestResolveAppMetaQueuesOnlyTheChosenPackages(t *testing.T) {
+	f, meta := refreshFixture(t)
+	f.connect(t)
+	f.serveRounds(t, defaultRound())
+	if _, err := f.m.SampleResources(context.Background(), f.id); err != nil {
+		t.Fatalf("SampleResources() error: %v", err)
+	}
+	meta.resetCalls()
+
+	if err := f.m.ResolveAppMeta(context.Background(), f.id, []string{"com.foo"}); err != nil {
+		t.Fatalf("ResolveAppMeta() error: %v", err)
+	}
+	if got := meta.snapshot(); len(got) != 1 || got[0] != "com.foo" {
+		t.Fatalf("refreshed = %v, want just com.foo", got)
 	}
 }
 

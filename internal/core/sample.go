@@ -293,7 +293,10 @@ func (m *Manager) attachAppMeta(snapshot ResourceSnapshot, id uuid.UUID, target 
 		snapshot.Apps[i].HasIcon = len(meta.Icon) > 0
 		snapshot.Apps[i].MetaStale = meta.Stale
 	}
-	source.Request(device, target.ADB, target.Serial, pkgs)
+	// Nothing is fetched here on purpose: reading a name costs a whole APK
+	// pulled off the device, which is far too slow to do for every running
+	// application. The page asks for one application at a time, or all of them
+	// when the user presses refresh.
 	return snapshot
 }
 
@@ -479,6 +482,22 @@ func (m *Manager) stopResourceSamplingLocked(id uuid.UUID) {
 // reading saw again, ignoring the cache lifetime. It returns as soon as the
 // work is queued: the page refreshes when the metadata arrives.
 func (m *Manager) RefreshAppMeta(ctx context.Context, id uuid.UUID) error {
+	m.mu.Lock()
+	snapshot, seen := m.resources[id]
+	m.mu.Unlock()
+	if !seen {
+		return nil
+	}
+	pkgs := make([]string, 0, len(snapshot.Apps))
+	for _, app := range snapshot.Apps {
+		pkgs = append(pkgs, app.Package)
+	}
+	return m.ResolveAppMeta(ctx, id, pkgs)
+}
+
+// ResolveAppMeta queues a read of the given packages' names and icons,
+// ignoring what the cache holds. It returns as soon as the work is queued.
+func (m *Manager) ResolveAppMeta(ctx context.Context, id uuid.UUID, pkgs []string) error {
 	target, err := m.operationTarget(ctx, id)
 	if err != nil {
 		return err
@@ -486,19 +505,14 @@ func (m *Manager) RefreshAppMeta(ctx context.Context, id uuid.UUID) error {
 	if err := m.validateTarget(ctx, id, target); err != nil {
 		return err
 	}
+	if len(pkgs) == 0 {
+		return nil
+	}
 
 	m.mu.Lock()
 	source := m.appMeta
-	snapshot, seen := m.resources[id]
 	m.mu.Unlock()
-	if source == nil || !seen {
-		return nil
-	}
-	pkgs := make([]string, 0, len(snapshot.Apps))
-	for _, app := range snapshot.Apps {
-		pkgs = append(pkgs, app.Package)
-	}
-	if len(pkgs) == 0 {
+	if source == nil {
 		return nil
 	}
 	source.Refresh(deviceKey(id), target.ADB, target.Serial, pkgs)

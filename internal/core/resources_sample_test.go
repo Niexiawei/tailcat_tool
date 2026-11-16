@@ -316,12 +316,12 @@ func TestSampleResourcesUsesAppMetaLabels(t *testing.T) {
 	if foo.Label != "微信" || !foo.HasIcon {
 		t.Fatalf("com.foo = %+v", foo)
 	}
-	if len(meta.requested) == 0 {
-		t.Fatal("no package was queued for a metadata fetch")
+	if len(meta.requested) != 0 || len(meta.refreshed) != 0 {
+		t.Fatalf("sampling fetched metadata on its own: requested=%v refreshed=%v", meta.requested, meta.refreshed)
 	}
 }
 
-func TestSampleResourcesKeepsStaleLabelAndRequestsRefresh(t *testing.T) {
+func TestSampleResourcesKeepsStaleLabelWithoutFetching(t *testing.T) {
 	meta := &fakeAppMeta{metas: map[string]AppMeta{
 		"com.foo": {Package: "com.foo", Label: "旧名字", Stale: true},
 	}}
@@ -345,8 +345,8 @@ func TestSampleResourcesKeepsStaleLabelAndRequestsRefresh(t *testing.T) {
 	if !foo.MetaStale {
 		t.Fatalf("the snapshot does not mark the stale label: %+v", foo)
 	}
-	if len(meta.requested) == 0 {
-		t.Fatal("a stale entry was not queued for a refetch")
+	if len(meta.refreshed) != 0 {
+		t.Fatalf("a stale entry was refetched without being asked: %v", meta.refreshed)
 	}
 }
 

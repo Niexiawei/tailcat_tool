@@ -444,3 +444,32 @@ func TestResourceTableEndsAboveThePageEdge(t *testing.T) {
 		t.Fatalf("the process table ends at %v, past the page's bottom padding", bottom)
 	}
 }
+
+func TestProcessTableResolvesOneAppOnDemand(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+
+	// Every row that has no name yet offers to read just that application.
+	if err := tt.Click("解析应用信息"); err != nil {
+		t.Fatalf("no per-row resolve button; texts = %v", tt.Texts())
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(meta.refreshedPackages()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	got := meta.refreshedPackages()
+	if len(got) != 1 {
+		t.Fatalf("the row button queued %v, want exactly one package", got)
+	}
+}
+
+func TestProcessTableHidesResolveButtonOnceNamed(t *testing.T) {
+	vm, _ := resourceFixtureWithMeta(t, map[string]core.AppMeta{
+		"com.foo":       {Package: "com.foo", Label: "微信"},
+		"system_server": {Package: "system_server", Label: "系统"},
+	})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if tt.HasText("解析应用信息") {
+		t.Fatalf("a named application still offers to resolve itself; texts = %v", tt.Texts())
+	}
+}

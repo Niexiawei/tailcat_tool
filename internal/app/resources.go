@@ -9,17 +9,15 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/google/uuid"
 	"github.com/oneo-me/onevra/source/components"
-	"github.com/oneo-me/onevra/source/components/chart"
 	"github.com/oneo-me/onevra/source/icons/lucide"
 )
 
 // resourceState is the resource page's own state, kept per device so switching
-// devices does not carry a chart selection or an expanded group across.
+// devices does not carry an expanded group across.
 type resourceState struct {
-	cpu, mem, gpu chart.State
-	table         components.TableState
-	expanded      map[string]bool
-	scroll        ui.ScrollState
+	table    components.TableState
+	expanded map[string]bool
+	scroll   ui.ScrollState
 	// refreshing is set while a manual refresh runs, so the button cannot be
 	// pressed twice and the user sees why nothing changed yet.
 	refreshing bool
@@ -36,14 +34,7 @@ func (vm *ViewModel) resourceStateFor(device uuid.UUID) *resourceState {
 	}
 	state, ok := vm.resources[device]
 	if !ok {
-		state = &resourceState{
-			// The donuts show the used slice by default, so the number in the
-			// middle is the percentage rather than the ring's total.
-			cpu:      chart.State{Index: 0},
-			mem:      chart.State{Index: 0},
-			gpu:      chart.State{Index: 0},
-			expanded: map[string]bool{},
-		}
+		state = &resourceState{expanded: map[string]bool{}}
 		vm.resources[device] = state
 	}
 	return state
@@ -111,10 +102,10 @@ func (vm *ViewModel) hardwareItem(c *ui.Context, label, value string) {
 // unavailable counter is said out loud rather than drawn as an empty ring.
 func (vm *ViewModel) donutRow(c *ui.Context, state *resourceState, snapshot core.ResourceSnapshot) {
 	ui.Row(c).FillWidth().Gap(16).AlignItems(ui.Start).Children(func() {
-		vm.usageRing(c, "CPU 占用", &state.cpu, snapshot.CPU.Percent, snapshot.CPU.Available)
-		vm.usageRing(c, "内存占用", &state.mem, snapshot.Memory.Percent, snapshot.Memory.OK)
+		vm.usageRing(c, "CPU 占用", snapshot.CPU.Percent, snapshot.CPU.Available)
+		vm.usageRing(c, "内存占用", snapshot.Memory.Percent, snapshot.Memory.OK)
 		if snapshot.GPU.Available {
-			vm.usageRing(c, "GPU 占用", &state.gpu, snapshot.GPU.Percent, true)
+			vm.usageRing(c, "GPU 占用", snapshot.GPU.Percent, true)
 			return
 		}
 		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
@@ -125,26 +116,27 @@ func (vm *ViewModel) donutRow(c *ui.Context, state *resourceState, snapshot core
 	})
 }
 
-func (vm *ViewModel) usageRing(c *ui.Context, title string, state *chart.State, percent float64, available bool) {
-	ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-		components.Text(c, title).FontSize(11).TextColor(c.Theme().TextMuted)
+// usageRing is one share of the whole: a ring, with the usage in the middle
+// where the eye lands first.
+func (vm *ViewModel) usageRing(c *ui.Context, title string, percent float64, available bool) {
+	theme := c.Theme()
+	// The component's own diameter is 32 DIPs, far too small to hold a number
+	// for three rings side by side; it keeps the ring circular at any size.
+	size := theme.Space(30)
+	ui.Column(c).Grow(1).MinWidth(0).Gap(4).AlignItems(ui.Center).Children(func() {
+		components.Text(c, title).FontSize(11).TextColor(theme.TextMuted)
 		if !available {
 			// The first reading has no delta yet: "—" is honest, 0% is not.
 			components.Text(c, core.PlaceholderUnknown).FontSize(20).Bold()
 			return
 		}
 		used := clampPercent(percent)
-		chart.Donut(c, state, []chart.Slice{
-			{ID: "used", Label: "已用", Value: used},
-			{ID: "idle", Label: "空闲", Value: 100 - used},
-		}, chart.Options{
-			Label:      title,
-			PlotHeight: 150,
-			// The chart prints FormatValue's result in the middle, and feeds
-			// it the total when nothing is selected. The number reads as the
-			// usage, so it must always be the used share.
-			FormatValue: func(float64) string { return percentText(used) },
-			Detail:      ringDetail,
+		ring := components.ProgressRing(c, used/100).Width(size).Height(size)
+		ring.Children(func() {
+			ui.Column(c).Absolute().Left(0).Top(0).WidthPercent(100).HeightPercent(100).
+				AlignItems(ui.Center).Justify(ui.Center).Children(func() {
+				components.Text(c, percentText(used)).FontSize(theme.FontSize * 1.3).Bold()
+			})
 		})
 	})
 }
@@ -307,6 +299,15 @@ func (vm *ViewModel) appCell(c *ui.Context, col int, device uuid.UUID, app core.
 			if app.MetaStale {
 				components.Text(c, "7 天前更新").FontSize(10).TextColor(theme.TextMuted)
 			}
+			// Names and icons cost an APK pull per application, which is slow
+			// over a tailcat channel, so each row offers to read itself.
+			if app.Label == "" {
+				if components.IconButton(c, lucide.PackageSearch(), "解析应用信息", components.IconButtonCompact).Clicked() {
+					go func(pkg string) {
+						vm.Fail(vm.Manager.ResolveAppMeta(context.Background(), device, []string{pkg}))
+					}(app.Package)
+				}
+			}
 		})
 	case 1:
 		components.Text(c, itoa(len(app.Processes))+" 个进程").FontSize(11).TextColor(theme.TextMuted)
@@ -386,12 +387,4 @@ func (vm *ViewModel) appIcon(device uuid.UUID, pkg string) ui.ImageSource {
 	}
 	vm.appIcons[key] = iconAsset{fetchedAt: fetchedAt, image: image}
 	return image
-}
-
-// ringDetail prints a hovered ring slice's real value; the middle number is
-// fixed to the used share, which is wrong for the idle slice.
-func ringDetail(c *ui.Context, selection chart.Selection) {
-	for _, value := range selection.Values {
-		components.Text(c, value.Label+" "+percentText(value.Value)).FontSize(11)
-	}
 }
