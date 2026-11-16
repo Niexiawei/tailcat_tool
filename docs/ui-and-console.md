@@ -291,6 +291,7 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 持锁调用 `Recorder` | 磁盘一慢，界面冻住 | 入队，由独立协程写 |
 | `ButtonGhost` 用在页面级动作上 | 按钮读成正文（无底色无边框），用户找不到入口 | 页面级动作用 `ButtonOutline`/`Secondary`/`Primary`；ghost 只留给文字里的链接与对话框里的「取消」 |
 | 每帧 `ui.TextBuffer.Set` | 选区与 caret 被重置，正在复制的日志跳走 | 只在渲染文本变化时写（`logState.text` 比对） |
+| 在 `components.Dialog` 的内容里放 `components.Tabs(..., TabsSegmented, ...)` | 关闭对话框时崩 `ui: element from pass N used in pass M`：分段控件的 `Draw` 回调闭包住了"选中的那个 tab"元素，而 MyGo 的 overlay 关闭动画会在**不重建**的情况下继续绘制旧面板 | 对话框内用 `ui.Segmented`（mygo 原生分段控件）或 `components.Radio`；`components.Tabs` 只用在常驻页面上（如设备页的三个页签） |
 | `TrackScroll` 挂在不是滚动容器的元素上 | `MaxY` 一直是 0，跟随尾部失效 | `TrackScroll` 只接管 `Scroll`/`List` 这类容器；`TextAreaBuffer` 自带 `flagScrollY`，实测可用，但换控件时要重新确认 |
 | `mygo.RunOnMain` 请求重绘 | 命令协程被主线程卡住 | `Window.Invalidate()` |
 | 终端 `Write` 里再取同一把锁 | 自锁（敲字无反应） | 锁内只改状态，锁外 `push` |

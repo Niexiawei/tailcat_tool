@@ -191,7 +191,12 @@ func (vm *ViewModel) EditorView(c *ui.Context) {
 				field(c, "远端 ADB 端口", &vm.EditorDraft.RemotePort, false)
 				ui.Column(c).Gap(3).Children(func() {
 					components.Text(c, "DERP 中继").FontSize(11)
-					components.Tabs(c, &vm.EditorDraft.RelayTab, components.TabsSegmented, "官方默认", "自定义")
+					// mygo's own segmented control, not components.Tabs: the
+					// onevra one keeps the chosen tab as an Element inside its
+					// paint callback, and a dialog's exit animation paints the
+					// old layer without rebuilding it, which panics with
+					// "element from pass N used in pass M".
+					ui.Segmented(c, &vm.EditorDraft.RelayTab, "官方默认", "自定义")
 					if vm.EditorDraft.RelayTab == 1 {
 						vm.relaySourceFields(c)
 					}

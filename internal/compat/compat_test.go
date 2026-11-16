@@ -57,6 +57,10 @@ var (
 	_ = ui.NewRouter
 	_ = (*ui.Router).Push
 	_ = (*ui.Router).View
+	_ = ui.Segmented
+	_ = ui.TextAreaBuffer
+	_ = ui.NewTextBuffer
+	_ = ui.Element.TrackScroll
 )
 
 // onevra: shells, theme, components and icons.

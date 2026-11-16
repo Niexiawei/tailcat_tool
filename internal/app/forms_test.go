@@ -235,3 +235,24 @@ func TestRelayHistoryOptionsListSavedSources(t *testing.T) {
 		t.Fatalf("options = %+v", options)
 	}
 }
+
+func TestClosingTheEditorDoesNotPanic(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.openEditor(&EditorRequest{})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	tt.Frame()
+	tt.Frame()
+	if err := tt.Click("取消"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	// The dialog animates out through MyGo's overlay, which keeps painting the
+	// layer it was handed: any paint callback inside it must not hold on to an
+	// element from an earlier pass.
+	for i := 0; i < 10; i++ {
+		tt.Advance(20 * time.Millisecond)
+		tt.Frame()
+	}
+	if vm.PendingEditor != nil {
+		t.Fatal("the editor did not close")
+	}
+}
