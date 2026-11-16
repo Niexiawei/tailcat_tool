@@ -68,10 +68,12 @@ func TestResourceSamplingStopsOnDisconnect(t *testing.T) {
 	f, count := samplingFixture(t)
 
 	f.m.StartResourceSampling(f.id)
-	waitFor(t, "one sampling round", func() bool { return count() >= 1 })
-	if _, ok := f.m.Resources(f.id); !ok {
-		t.Fatal("sampling stored no snapshot")
-	}
+	// The counter is bumped inside the fake runner, before the round is
+	// parsed and stored; wait for the snapshot itself.
+	waitFor(t, "a stored snapshot", func() bool {
+		_, ok := f.m.Resources(f.id)
+		return ok
+	})
 
 	f.m.Disconnect(context.Background(), f.id)
 	stopped := count()
