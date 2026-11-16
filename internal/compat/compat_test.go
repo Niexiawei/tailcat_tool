@@ -57,7 +57,8 @@ var (
 	_ = ui.NewRouter
 	_ = (*ui.Router).Push
 	_ = (*ui.Router).View
-	_ = ui.Segmented
+	_ = ui.SegmentedBase
+	_ = ui.SegmentedParts.Segment
 	_ = ui.TextAreaBuffer
 	_ = ui.NewTextBuffer
 	_ = ui.Element.TrackScroll
