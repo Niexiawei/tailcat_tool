@@ -229,3 +229,31 @@ func mustUUID(t *testing.T, s string) uuid.UUID {
 	}
 	return parsed
 }
+
+func TestSaveWritesRelayHistoryAsAnEmptyArray(t *testing.T) {
+	store := NewConfigStore(t.TempDir())
+	if err := store.Save(Configuration{}); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+	raw, err := os.ReadFile(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"relayHistory": []`) {
+		t.Fatalf("configuration.json = %s", raw)
+	}
+}
+
+func TestLoadAcceptsAConfigurationWithoutRelayHistory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "configuration.json"), []byte(`{"profiles":[],"relayPresets":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := NewConfigStore(dir).Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.RelayHistory) != 0 {
+		t.Fatalf("relayHistory = %+v, want empty", cfg.RelayHistory)
+	}
+}

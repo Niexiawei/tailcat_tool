@@ -65,6 +65,16 @@ type Profile struct {
 	DirectTarget string `json:"directTarget,omitempty"`
 }
 
+// RelayHistoryEntry is one custom DERP source the user has used before. It is
+// what the editor offers as 「之前用过的中继」; a management page comes later.
+type RelayHistoryEntry struct {
+	Source string `json:"source"`
+	// Name is derived from the source when it is first recorded and is only a
+	// label: Source is what goes back into a device.
+	Name     string    `json:"name"`
+	LastUsed time.Time `json:"lastUsed"`
+}
+
 // RelayPreset is a saved DERP map source the user can pick in the editor.
 type RelayPreset struct {
 	ID     uuid.UUID `json:"id"`

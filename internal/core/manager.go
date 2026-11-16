@@ -47,6 +47,7 @@ type Manager struct {
 	sessions     map[uuid.UUID]Session
 	tasks        []Task
 	relayPresets []RelayPreset
+	relayHistory []RelayHistoryEntry
 	tools        ToolSettings
 
 	generations map[uuid.UUID]uuid.UUID
@@ -123,6 +124,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		sessions:            map[uuid.UUID]Session{},
 		tools:               opts.Configuration.Tools,
 		relayPresets:        opts.Configuration.RelayPresets,
+		relayHistory:        opts.Configuration.RelayHistory,
 		tempCredentials:     map[uuid.UUID]string{},
 		generations:         map[uuid.UUID]uuid.UUID{},
 		runtimes:            map[uuid.UUID]*runtimeState{},
@@ -245,6 +247,13 @@ func (m *Manager) Tools() ToolSettings {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.tools
+}
+
+// RelayHistory returns the custom DERP sources seen so far, newest first.
+func (m *Manager) RelayHistory() []RelayHistoryEntry {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]RelayHistoryEntry(nil), m.relayHistory...)
 }
 
 // RelayPresets returns the saved DERP sources.

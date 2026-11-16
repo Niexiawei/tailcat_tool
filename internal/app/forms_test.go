@@ -11,7 +11,7 @@ import (
 )
 
 func TestDeviceEditorValidation(t *testing.T) {
-	base := EditorInput{Name: "E245", Address: testAddress, RemotePort: "5555", RelaySelection: "default"}
+	base := EditorInput{Name: "E245", Address: testAddress, RemotePort: "5555"}
 	cases := []struct {
 		name    string
 		mutate  func(*EditorInput)
@@ -23,7 +23,7 @@ func TestDeviceEditorValidation(t *testing.T) {
 		{"local port not a number", func(in *EditorInput) { in.LocalPort = "abc" }, "端口需要填写整数"},
 		{"local port out of range", func(in *EditorInput) { in.LocalPort = "70000" }, "1–65535"},
 		{"remote port missing", func(in *EditorInput) { in.RemotePort = "" }, "端口需要填写整数"},
-		{"custom relay without source", func(in *EditorInput) { in.RelaySelection = "custom" }, "DERP JSON"},
+		{"custom relay without source", func(in *EditorInput) { in.RelayTab = 1 }, "DERP JSON"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -207,5 +207,31 @@ func TestEditorDefaultsToTailcatMode(t *testing.T) {
 	joined := strings.Join(tt.Texts(), " | ")
 	if !strings.Contains(joined, "通过 Tailcat 转发") || !strings.Contains(joined, "本地 ADB 直连") {
 		t.Fatalf("the connection mode radio is missing: %s", joined)
+	}
+}
+
+func TestEditorRelayTabSwitchesToCustom(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.openEditor(&EditorRequest{})
+	tt := ui.NewTester(vm.ContentView, 900, 1000)
+	if tt.HasText("DERP JSON 链接或内容") {
+		t.Fatalf("the custom relay field shows before it is chosen; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("自定义"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if vm.EditorDraft.RelayTab != 1 || !tt.HasText("DERP JSON 链接或内容") {
+		t.Fatalf("the segmented switch did not open the custom relay field; tab = %d", vm.EditorDraft.RelayTab)
+	}
+}
+
+func TestRelayHistoryOptionsListSavedSources(t *testing.T) {
+	entries := []core.RelayHistoryEntry{
+		{Name: "内网中继", Source: "https://relay.example.com/map.json"},
+		{Name: "内联 JSON 4f2a9c1b", Source: `{"Regions":{}}`},
+	}
+	options := relayHistoryOptions(entries)
+	if len(options) != 2 || options[0].Label != "内网中继" || options[0].Value != "https://relay.example.com/map.json" {
+		t.Fatalf("options = %+v", options)
 	}
 }

@@ -44,9 +44,8 @@ type ViewModel struct {
 
 	// Form state. MyGo views are functions of state, so every text field is a
 	// field here.
-	EditorDraft      EditorInput
-	EditorError      string
-	EditorPresetName string
+	EditorDraft EditorInput
+	EditorError string
 
 	TransferOpen       bool
 	TransferUpload     bool

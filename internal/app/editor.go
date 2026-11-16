@@ -16,13 +16,16 @@ import (
 type EditorInput struct {
 	Name string
 	// Mode is "tailcat" (default) or "adb" for a plain local ADB target.
-	Mode           string
-	DirectTarget   string
-	Address        string
-	LocalPort      string
-	RemotePort     string
-	RelaySelection string
-	RelaySource    string
+	Mode         string
+	DirectTarget string
+	Address      string
+	LocalPort    string
+	RemotePort   string
+	RelayTab     int
+	// RelaySource is the DERP map URL or inline JSON, used when RelayTab is 1.
+	RelaySource string
+	// RelayPick is the history entry the picker shows, by Source.
+	RelayPick string
 }
 
 // EditorValues are the validated values the manager receives.
@@ -81,11 +84,12 @@ func (in EditorInput) Validate() (EditorValues, error) {
 		return out, core.Error("端口必须在 1–65535 之间；本地端口留空表示自动分配")
 	}
 	out.RemotePort = remote
-	if in.RelaySelection != "default" && in.RelaySelection != "" && strings.TrimSpace(in.RelaySource) == "" {
-		return out, core.Error("请填写 DERP JSON 链接或内容，或选择默认官方节点")
-	}
-	if in.RelaySelection != "default" && in.RelaySelection != "" {
+	// RelayTab 0 is the official map, so its source stays empty.
+	if in.RelayTab != 0 {
 		out.RelaySource = strings.TrimSpace(in.RelaySource)
+		if out.RelaySource == "" {
+			return out, core.Error("请填写 DERP JSON 链接或内容，或选择默认官方节点")
+		}
 	}
 	return out, nil
 }
@@ -94,8 +98,7 @@ func (in EditorInput) Validate() (EditorValues, error) {
 func (vm *ViewModel) openEditor(request *EditorRequest) {
 	vm.PendingEditor = request
 	vm.EditorError = ""
-	vm.EditorPresetName = ""
-	draft := EditorInput{RemotePort: "5555", RelaySelection: "default", Mode: "tailcat"}
+	draft := EditorInput{RemotePort: "5555", Mode: "tailcat"}
 	if request.Profile != nil {
 		profile := *request.Profile
 		if profile.DirectADB {
@@ -109,11 +112,10 @@ func (vm *ViewModel) openEditor(request *EditorRequest) {
 		}
 		if profile.RelaySource != "" {
 			draft.RelaySource = profile.RelaySource
-			draft.RelaySelection = "custom"
-			for _, preset := range vm.Manager.RelayPresets() {
-				if preset.Source == profile.RelaySource {
-					draft.RelaySelection = preset.ID.String()
-					vm.EditorPresetName = preset.Name
+			draft.RelayTab = 1
+			for _, entry := range vm.Manager.RelayHistory() {
+				if entry.Source == profile.RelaySource {
+					draft.RelayPick = entry.Source
 				}
 			}
 		}
@@ -187,19 +189,13 @@ func (vm *ViewModel) EditorView(c *ui.Context) {
 				field(c, "Tailcat 地址", &vm.EditorDraft.Address, true)
 				field(c, "本地端口（留空自动）", &vm.EditorDraft.LocalPort, false)
 				field(c, "远端 ADB 端口", &vm.EditorDraft.RemotePort, false)
-				ui.Row(c).Gap(6).Children(func() {
-					if components.Button(c, "默认中继", components.ButtonGhost).Clicked() {
-						vm.EditorDraft.RelaySelection = "default"
-						vm.EditorDraft.RelaySource = ""
+				ui.Column(c).Gap(3).Children(func() {
+					components.Text(c, "DERP 中继").FontSize(11)
+					components.Tabs(c, &vm.EditorDraft.RelayTab, components.TabsSegmented, "官方默认", "自定义")
+					if vm.EditorDraft.RelayTab == 1 {
+						vm.relaySourceFields(c)
 					}
-					if components.Button(c, "自定义中继", components.ButtonGhost).Clicked() {
-						vm.EditorDraft.RelaySelection = "custom"
-					}
-					components.Text(c, "当前："+relaySelectionLabel(vm)).FontSize(11)
 				})
-				if vm.EditorDraft.RelaySelection != "default" {
-					field(c, "DERP JSON 链接或内容", &vm.EditorDraft.RelaySource, false)
-				}
 			}
 			if vm.EditorError != "" {
 				components.Text(c, vm.EditorError).FontSize(11)
@@ -247,16 +243,29 @@ func (vm *ViewModel) connectionModeRadio(c *ui.Context) {
 	})
 }
 
-func relaySelectionLabel(vm *ViewModel) string {
-	if vm.EditorDraft.RelaySelection == "default" {
-		return "官方默认节点"
+// relayHistoryOptions turns the recorded sources into the editor's history
+// menu. Values are the canonical sources, so picking one fills the field.
+func relayHistoryOptions(entries []core.RelayHistoryEntry) []components.NativeSelectOption[string] {
+	options := make([]components.NativeSelectOption[string], 0, len(entries))
+	for _, entry := range entries {
+		options = append(options, components.NativeSelectOption[string]{Value: entry.Source, Label: entry.Name})
 	}
-	for _, preset := range vm.Manager.RelayPresets() {
-		if preset.ID.String() == vm.EditorDraft.RelaySelection {
-			return preset.Name
-		}
+	return options
+}
+
+// relaySourceFields renders the history picker and the free-form source box.
+func (vm *ViewModel) relaySourceFields(c *ui.Context) {
+	if entries := vm.Manager.RelayHistory(); len(entries) > 0 {
+		ui.Column(c).Gap(3).Children(func() {
+			components.Text(c, "之前用过的中继").FontSize(11)
+			pick := components.NativeSelect(c, &vm.EditorDraft.RelayPick, relayHistoryOptions(entries))
+			if pick.Changed() {
+				vm.EditorDraft.RelaySource = vm.EditorDraft.RelayPick
+			}
+			pick.Trigger.Label("之前用过的中继").FillWidth()
+		})
 	}
-	return "自定义 JSON"
+	field(c, "DERP JSON 链接或内容", &vm.EditorDraft.RelaySource, false)
 }
 
 // field renders one labelled text input.

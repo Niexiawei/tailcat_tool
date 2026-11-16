@@ -80,9 +80,16 @@ var (
 	_                   = components.Spinner
 	_                   = components.Progress
 	_                   = components.ButtonPrimary
+	_                   = components.ButtonOutline
+	_                   = components.ButtonLink
+	_                   = components.NativeSelect[string]
+	_                   = (*components.NativeSelectParts).Changed
+	_                   = components.TextBoxBuffer
+	_                   = components.TextBoxOptions{}.ReadOnly
 	_ func() *ui.SVG    = lucide.Search
 	_ string            = sidebar.ShellOptions{}.Title
 	_ func(*ui.Context) = sidebar.ShellOptions{}.Content
+	_ func(*ui.Context) = sidebar.ShellOptions{}.ContentTitle
 )
 
 // tailcat: address parsing, identities, and the forward/ping primitives.

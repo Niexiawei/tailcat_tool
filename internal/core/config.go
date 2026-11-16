@@ -13,6 +13,9 @@ type Configuration struct {
 	Profiles     []Profile     `json:"profiles"`
 	Tools        ToolSettings  `json:"tools"`
 	RelayPresets []RelayPreset `json:"relayPresets"`
+	// RelayHistory is the custom DERP sources saved devices have used, newest
+	// first. It is separate from RelayPresets: those are named by the user.
+	RelayHistory []RelayHistoryEntry `json:"relayHistory"`
 }
 
 // ConfigStore reads and writes configuration.json inside a directory.
@@ -91,6 +94,9 @@ func (s *ConfigStore) Save(cfg Configuration) error {
 	}
 	if cfg.RelayPresets == nil {
 		cfg.RelayPresets = []RelayPreset{}
+	}
+	if cfg.RelayHistory == nil {
+		cfg.RelayHistory = []RelayHistoryEntry{}
 	}
 	raw, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

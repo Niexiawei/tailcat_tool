@@ -2,8 +2,12 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"net/url"
 	"os"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/google/uuid"
@@ -60,6 +64,7 @@ func (m *Manager) persistLocked() error {
 		Profiles:     m.profiles,
 		Tools:        m.tools,
 		RelayPresets: m.relayPresets,
+		RelayHistory: m.relayHistory,
 	})
 }
 
@@ -121,9 +126,12 @@ func (m *Manager) SaveDevice(req SaveDeviceRequest) (uuid.UUID, error) {
 		return uuid.Nil, err
 	}
 	saved := m.profiles
+	savedHistory := m.relayHistory
 	m.profiles = updated
+	m.rememberRelayLocked(relay.Source)
 	if err := m.persistLocked(); err != nil {
 		m.profiles = saved
+		m.relayHistory = savedHistory
 		if hadAddress {
 			_ = m.credentials.Write(previousAddress, id)
 		} else {
@@ -330,6 +338,65 @@ func (m *Manager) ConfigureInstalledTool(component ToolComponent, path string) e
 	}
 	m.notify()
 	return nil
+}
+
+// maxRelayHistory bounds the editor's history menu: the entries used longest
+// ago fall off first.
+const maxRelayHistory = 8
+
+// rememberRelayLocked records a custom DERP source for the editor's history.
+// It dedupes by the canonical Source, keeps the newest first and never fails
+// the device save.
+func (m *Manager) rememberRelayLocked(source string) {
+	if source == "" {
+		return
+	}
+	name := ""
+	taken := make(map[string]bool, len(m.relayHistory)+1)
+	updated := make([]RelayHistoryEntry, 0, len(m.relayHistory)+1)
+	updated = append(updated, RelayHistoryEntry{Source: source, LastUsed: time.Now()})
+	for _, entry := range m.relayHistory {
+		if entry.Source == source {
+			// Keep the label a reused source already has, so the menu does not
+			// rename an entry the user recognised.
+			name = entry.Name
+			continue
+		}
+		updated = append(updated, entry)
+		taken[entry.Name] = true
+	}
+	if name == "" {
+		name = relayHistoryName(source, taken)
+	}
+	updated[0].Name = name
+	if len(updated) > maxRelayHistory {
+		updated = updated[:maxRelayHistory]
+	}
+	m.relayHistory = updated
+}
+
+// relayHistoryName derives a label from a DERP source: the host for a URL and
+// a short digest for an inline map. A taken name gets a " (2)" style suffix so
+// the menu never shows two identical rows.
+func relayHistoryName(source string, taken map[string]bool) string {
+	base := relayHistoryBase(source)
+	if !taken[base] {
+		return base
+	}
+	for n := 2; ; n++ {
+		candidate := base + " (" + itoaSmall(n) + ")"
+		if !taken[candidate] {
+			return candidate
+		}
+	}
+}
+
+func relayHistoryBase(source string) string {
+	if u, err := url.Parse(source); err == nil && u.Host != "" {
+		return u.Host
+	}
+	sum := sha256.Sum256([]byte(source))
+	return "内联 JSON " + hex.EncodeToString(sum[:4])
 }
 
 // SaveRelayPreset creates or updates a DERP preset.

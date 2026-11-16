@@ -372,3 +372,84 @@ func TestConfigInfersDirectModeFromTarget(t *testing.T) {
 		t.Fatalf("the stale remote port was kept: %d", cfg.Profiles[0].RemotePort)
 	}
 }
+
+func TestSaveDeviceRecordsRelayHistoryOnce(t *testing.T) {
+	f := newManagerFixture(t)
+	if _, err := f.m.SaveDevice(SaveDeviceRequest{Name: "a", Address: sampleAddress, RemotePort: 5555, RelaySource: "https://relay.example.com/map.json"}); err != nil {
+		t.Fatalf("SaveDevice() error: %v", err)
+	}
+	if _, err := f.m.SaveDevice(SaveDeviceRequest{Name: "b", Address: sampleAddress, RemotePort: 5555, RelaySource: "https://relay.example.com/map.json"}); err != nil {
+		t.Fatalf("SaveDevice() error: %v", err)
+	}
+	history := f.m.RelayHistory()
+	if len(history) != 1 {
+		t.Fatalf("history = %+v, want one entry for a repeated source", history)
+	}
+	if history[0].Name != "relay.example.com" {
+		t.Fatalf("history name = %q, want the host", history[0].Name)
+	}
+	if history[0].LastUsed.IsZero() {
+		t.Fatal("history entry has no LastUsed")
+	}
+}
+
+func TestOfficialRelayIsNotRecordedInHistory(t *testing.T) {
+	f := newManagerFixture(t)
+	if _, err := f.m.SaveDevice(SaveDeviceRequest{Name: "a", Address: sampleAddress, RemotePort: 5555}); err != nil {
+		t.Fatalf("SaveDevice() error: %v", err)
+	}
+	if got := len(f.m.RelayHistory()); got != 0 {
+		t.Fatalf("history = %d entries, want the official map skipped", got)
+	}
+}
+
+func TestRelayHistoryKeepsOnlyTheNewestEntries(t *testing.T) {
+	f := newManagerFixture(t)
+	for i := 0; i < maxRelayHistory+3; i++ {
+		source := "https://relay" + itoaSmall(i) + ".example.com/map.json"
+		if _, err := f.m.SaveDevice(SaveDeviceRequest{Name: "d" + itoaSmall(i), Address: sampleAddress, RemotePort: 5555, RelaySource: source}); err != nil {
+			t.Fatalf("SaveDevice() error: %v", err)
+		}
+	}
+	history := f.m.RelayHistory()
+	if len(history) != maxRelayHistory {
+		t.Fatalf("history = %d entries, want %d", len(history), maxRelayHistory)
+	}
+	newest := "https://relay" + itoaSmall(maxRelayHistory+2) + ".example.com/map.json"
+	if history[0].Source != newest {
+		t.Fatalf("history[0] = %+v, want the most recent source first", history[0])
+	}
+}
+
+func TestRelayHistorySurvivesReload(t *testing.T) {
+	// NewManager 拿的是 ManagerOptions.Configuration，不读 ConfigStore，所以
+	// “重开能读回”直接验文件：保存后 Load 出同样的历史。
+	store := NewConfigStore(t.TempDir())
+	f := newManagerFixture(t, func(o *ManagerOptions) { o.Config = store })
+	if _, err := f.m.SaveDevice(SaveDeviceRequest{Name: "a", Address: sampleAddress, RemotePort: 5555, RelaySource: "https://relay.example.com/map.json"}); err != nil {
+		t.Fatalf("SaveDevice() error: %v", err)
+	}
+	saved, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(saved.RelayHistory) != 1 || saved.RelayHistory[0].Source != "https://relay.example.com/map.json" {
+		t.Fatalf("relayHistory after reload = %+v", saved.RelayHistory)
+	}
+}
+
+func TestRelayHistoryNameNeverCollides(t *testing.T) {
+	f := newManagerFixture(t)
+	for _, source := range []string{"https://relay.example.com/a.json", "https://relay.example.com/b.json"} {
+		if _, err := f.m.SaveDevice(SaveDeviceRequest{Name: uuid.NewString()[:8], Address: sampleAddress, RemotePort: 5555, RelaySource: source}); err != nil {
+			t.Fatalf("SaveDevice() error: %v", err)
+		}
+	}
+	names := map[string]bool{}
+	for _, entry := range f.m.RelayHistory() {
+		if names[entry.Name] {
+			t.Fatalf("duplicate history name %q in %+v", entry.Name, f.m.RelayHistory())
+		}
+		names[entry.Name] = true
+	}
+}
