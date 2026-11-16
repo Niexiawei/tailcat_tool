@@ -340,3 +340,107 @@ func TestDemoEnvironmentHasAppNamesAndIcons(t *testing.T) {
 		t.Fatal("the demo invents metadata for unknown packages")
 	}
 }
+
+// samplingRoundMany is one reading with n applications, one process each, for
+// layout tests that need a table taller than the window.
+func samplingRoundMany(apps int) string {
+	var b strings.Builder
+	b.WriteString("@@STAT\ncpu 100 0 100 800 0 0 0 0 0 0\n")
+	b.WriteString("@@MEM\nMemTotal: 8000000 kB\nMemAvailable: 2000000 kB\n")
+	b.WriteString("@@CPU\n8\nHardware\t: Qualcomm Technologies, Inc SM8150\n")
+	b.WriteString("@@GPU\n")
+	b.WriteString("@@PROC\n")
+	for i := 0; i < apps; i++ {
+		pid := 1000 + i
+		b.WriteString("@@P " + itoa(pid) + "\n")
+		b.WriteString(itoa(pid) + " (comm) S 1 1 1 0 -1 0 0 0 0 0 1 0 0 0 20 0 1 0 500 0 0\n")
+		b.WriteString("VmRSS:\t   1024 kB\n")
+		b.WriteString("com.app" + itoa(i) + " \n")
+	}
+	return b.String()
+}
+
+// manyAppsViewModel renders the resource tab over a device with n applications.
+func manyAppsViewModel(t *testing.T, apps int) *ViewModel {
+	t.Helper()
+	vm, _ := newRunnerViewModel(t, func(c core.Command) (core.Result, error) {
+		joined := strings.Join(c.Args, " ")
+		if strings.Contains(joined, "get-state") {
+			return core.Result{Output: "device\n"}, nil
+		}
+		if strings.Contains(joined, "@@STAT") {
+			return core.Result{Output: samplingRoundMany(apps)}, nil
+		}
+		return core.Result{}, nil
+	})
+	t.Cleanup(func() { vm.Manager.Shutdown(context.Background()) })
+	profile := vm.Manager.Profiles()[0]
+	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	if _, err := vm.Manager.SampleResources(context.Background(), profile.ID); err != nil {
+		t.Fatalf("SampleResources() error: %v", err)
+	}
+	vm.DetailTab = detailResources
+	vm.OpenDevice(profile.ID)
+	return vm
+}
+
+func TestUsageRingCenterShowsTheUsedShare(t *testing.T) {
+	vm, _ := resourceFixture(t)
+	tt := ui.NewTester(vm.ContentView, 900, 800)
+
+	// Hover the CPU ring and leave it: the chart's own selection then reports
+	// no slice, and the middle would show the slices' total (100%) instead of
+	// the usage.
+	ring, ok := tt.Find("CPU 占用")
+	if !ok {
+		t.Fatalf("no CPU ring; texts = %v", tt.Texts())
+	}
+	tt.Move(ring.X+ring.W/2, ring.Y+90)
+	tt.Move(5, 5)
+
+	if tt.HasText("100%") {
+		t.Fatalf("the ring centre shows the slices' total; texts = %v", tt.Texts())
+	}
+	if !tt.HasText("20%") {
+		t.Fatalf("the ring centre lost the used share; texts = %v", tt.Texts())
+	}
+}
+
+func TestHardwareRowSharesTheWidthEqually(t *testing.T) {
+	vm, _ := resourceFixture(t)
+	tt := ui.NewTester(vm.ContentView, 900, 800)
+
+	var xs []float32
+	for _, label := range []string{"CPU", "GPU", "内存"} {
+		rect, ok := tt.Find(label)
+		if !ok {
+			t.Fatalf("the hardware row has no %q; texts = %v", label, tt.Texts())
+		}
+		xs = append(xs, rect.X)
+	}
+	first, second := xs[1]-xs[0], xs[2]-xs[1]
+	if first-second > 2 || second-first > 2 {
+		t.Fatalf("hardware columns are not equal thirds: x = %v", xs)
+	}
+	if !tt.HasText("5.7 GB / 7.6 GB") {
+		t.Fatalf("the memory column shows no total; texts = %v", tt.Texts())
+	}
+}
+
+func TestResourceTableEndsAboveThePageEdge(t *testing.T) {
+	vm := manyAppsViewModel(t, 40)
+	const window = 700
+	tt := ui.NewTester(vm.ContentView, 900, window)
+
+	rect, ok := tt.Find("按应用分组的进程表")
+	if !ok {
+		t.Fatalf("no process table; texts = %v", tt.Texts())
+	}
+	// The device page has 20 DIPs of bottom padding; a scroll area that ends at
+	// the window edge is cut by the window frame.
+	if bottom := rect.Y + rect.H; bottom > window-20 {
+		t.Fatalf("the process table ends at %v, past the page's bottom padding", bottom)
+	}
+}

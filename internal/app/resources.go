@@ -67,7 +67,7 @@ func (vm *ViewModel) resourcePage(c *ui.Context, profile core.Profile, session c
 	}
 
 	state := vm.resourceStateFor(profile.ID)
-	ui.Column(c).Fill().Gap(12).Children(func() {
+	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(12).Children(func() {
 		vm.hardwareLine(c, snapshot)
 		vm.donutRow(c, state, snapshot)
 		vm.warnings(c, snapshot)
@@ -89,9 +89,11 @@ func (vm *ViewModel) resourceOffline(c *ui.Context, session core.Session) {
 	})
 }
 
-// hardwareLine names what the numbers below were measured on.
+// hardwareLine names what the numbers below were measured on. The three share
+// the width equally and truncate, so a long CPU model cannot push the memory
+// number off the page.
 func (vm *ViewModel) hardwareLine(c *ui.Context, snapshot core.ResourceSnapshot) {
-	ui.Row(c).FillWidth().Gap(24).Children(func() {
+	ui.Row(c).FillWidth().Shrink(0).Gap(16).Children(func() {
 		vm.hardwareItem(c, "CPU", cpuHardwareText(snapshot.CPU))
 		vm.hardwareItem(c, "GPU", gpuHardwareText(snapshot.GPU))
 		vm.hardwareItem(c, "内存", memoryText(snapshot.Memory))
@@ -99,9 +101,9 @@ func (vm *ViewModel) hardwareLine(c *ui.Context, snapshot core.ResourceSnapshot)
 }
 
 func (vm *ViewModel) hardwareItem(c *ui.Context, label, value string) {
-	ui.Column(c).Gap(2).MinWidth(0).Children(func() {
+	ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 		components.Text(c, label).FontSize(11).TextColor(c.Theme().TextMuted)
-		components.Text(c, value).FontSize(12).SingleLine()
+		components.Tooltip(c, components.Text(c, value).FontSize(12).SingleLine(), value)
 	})
 }
 
@@ -136,9 +138,13 @@ func (vm *ViewModel) usageRing(c *ui.Context, title string, state *chart.State, 
 			{ID: "used", Label: "已用", Value: used},
 			{ID: "idle", Label: "空闲", Value: 100 - used},
 		}, chart.Options{
-			Label:       title,
-			PlotHeight:  150,
-			FormatValue: percentText,
+			Label:      title,
+			PlotHeight: 150,
+			// The chart prints FormatValue's result in the middle, and feeds
+			// it the total when nothing is selected. The number reads as the
+			// usage, so it must always be the used share.
+			FormatValue: func(float64) string { return percentText(used) },
+			Detail:      ringDetail,
 		})
 	})
 }
@@ -196,7 +202,7 @@ func memoryText(memory core.MemorySample) string {
 // processSection is the toolbar plus the grouped process table.
 func (vm *ViewModel) processSection(c *ui.Context, state *resourceState, profile core.Profile, session core.Session, snapshot core.ResourceSnapshot) {
 	vm.settleRefresh(state, snapshot)
-	ui.Column(c).FillWidth().Grow(1).Gap(6).Children(func() {
+	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(6).Children(func() {
 		vm.tableToolbar(c, state, profile, session, snapshot)
 		vm.processTable(c, state, profile.ID, snapshot)
 	})
@@ -256,7 +262,7 @@ func namedApps(snapshot core.ResourceSnapshot) int {
 // processTable lists one row per application and, when the user expands it, its
 // processes underneath.
 func (vm *ViewModel) processTable(c *ui.Context, state *resourceState, device uuid.UUID, snapshot core.ResourceSnapshot) {
-	components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).Children(func() {
+	components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).MinHeight(0).Label("按应用分组的进程表").Children(func() {
 		components.Table(c, &state.table, processColumns(), func() {
 			for _, app := range snapshot.Apps {
 				label := appLabel(app)
@@ -380,4 +386,12 @@ func (vm *ViewModel) appIcon(device uuid.UUID, pkg string) ui.ImageSource {
 	}
 	vm.appIcons[key] = iconAsset{fetchedAt: fetchedAt, image: image}
 	return image
+}
+
+// ringDetail prints a hovered ring slice's real value; the middle number is
+// fixed to the used share, which is wrong for the idle slice.
+func ringDetail(c *ui.Context, selection chart.Selection) {
+	for _, value := range selection.Values {
+		components.Text(c, value.Label+" "+percentText(value.Value)).FontSize(11)
+	}
 }

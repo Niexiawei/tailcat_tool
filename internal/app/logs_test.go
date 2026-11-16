@@ -184,3 +184,37 @@ func TestLogPagePausesWhileReadingUp(t *testing.T) {
 		t.Fatalf("returning to the tail did not catch up: %q", state.text)
 	}
 }
+
+func TestLogPageEndsAboveThePageEdge(t *testing.T) {
+	vm, _ := newRunnerViewModel(t, func(c core.Command) (core.Result, error) {
+		if strings.Contains(strings.Join(c.Args, " "), "get-state") {
+			return core.Result{Output: "device\n"}, nil
+		}
+		return core.Result{}, nil
+	})
+	t.Cleanup(func() { vm.Manager.Shutdown(context.Background()) })
+	profile := vm.Manager.Profiles()[0]
+	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	state := vm.logState(profile.ID)
+	state.text = ""
+	var lines []logLine
+	base := time.Now()
+	for i := 0; i < 80; i++ {
+		lines = append(lines, logLine{At: base.Add(time.Duration(i) * time.Second), Text: "第" + itoa(i) + "行日志"})
+	}
+	state.buffer.Set(logText(lines))
+	vm.DetailTab = detailLog
+	vm.OpenDevice(profile.ID)
+
+	const window = 700
+	tt := ui.NewTester(vm.ContentView, 900, window)
+	rect, ok := tt.Find("通道日志与任务内容")
+	if !ok {
+		t.Fatalf("no log text area; texts = %v", tt.Texts())
+	}
+	if bottom := rect.Y + rect.H; bottom > window-20 {
+		t.Fatalf("the log area ends at %v, past the page's bottom padding", bottom)
+	}
+}

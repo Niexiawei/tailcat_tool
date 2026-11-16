@@ -125,7 +125,7 @@ func (vm *ViewModel) logPageText(id uuid.UUID, session core.Session) {
 func (vm *ViewModel) logPage(c *ui.Context, profile core.Profile, session core.Session) {
 	vm.logPageText(profile.ID, session)
 	state := vm.logState(profile.ID)
-	ui.Column(c).Fill().Gap(6).Children(func() {
+	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(6).Children(func() {
 		ui.Row(c).FillWidth().Shrink(0).Gap(8).AlignItems(ui.Center).Children(func() {
 			components.Text(c, "通道日志与任务").FontSize(13).Bold()
 			if running := runningTasks(vm.Manager.Tasks(), profile.ID); len(running) > 0 {
@@ -144,6 +144,6 @@ func (vm *ViewModel) logPage(c *ui.Context, profile core.Profile, session core.S
 		// ReadOnly keeps focus, selection and copying but refuses edits; the
 		// text area is its own scroll container, which the probe confirmed.
 		components.TextBoxBuffer(c, state.buffer, components.TextBoxOptions{Multiline: true, ReadOnly: true}).
-			FillWidth().Grow(1).Label("通道日志与任务").TrackScroll(&state.scroll)
+			FillWidth().Grow(1).MinHeight(0).Label("通道日志与任务内容").TrackScroll(&state.scroll)
 	})
 }
