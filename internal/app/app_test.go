@@ -600,3 +600,14 @@ func TestDevicePageHasNoSecondBreadcrumb(t *testing.T) {
 		}
 	}
 }
+
+func TestSidebarFooterDropsTheChannelCount(t *testing.T) {
+	vm := newTestViewModel(t)
+	tt := sidebarTester(vm, 280, 420)
+	if tt.HasText("条通道") {
+		t.Fatalf("the footer still counts channels; texts = %v", tt.Texts())
+	}
+	if !tt.HasText("scrcpy") {
+		t.Fatalf("the footer lost the tool health rows; texts = %v", tt.Texts())
+	}
+}

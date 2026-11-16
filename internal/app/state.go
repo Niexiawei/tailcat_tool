@@ -361,7 +361,6 @@ func countLabel(n int) string {
 func (vm *ViewModel) SidebarFooter(c *ui.Context) {
 	theme := c.Theme()
 	ui.Column(c).FillWidth().Padding(theme.Space(2), theme.Space(2.5)).Gap(theme.Space(1.5)).Children(func() {
-		components.Text(c, "GUI "+itoa(vm.Manager.OwnedActiveCount())+" 条通道").FontSize(11).TextColor(theme.TextMuted)
 		for _, component := range core.AllTools() {
 			vm.toolRow(c, component)
 		}
