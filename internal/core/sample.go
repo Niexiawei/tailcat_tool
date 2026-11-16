@@ -504,3 +504,15 @@ func (m *Manager) RefreshAppMeta(ctx context.Context, id uuid.UUID) error {
 	source.Refresh(deviceKey(id), target.ADB, target.Serial, pkgs)
 	return nil
 }
+
+// AppMeta returns the cached name and icon of one package, for the views that
+// draw them.
+func (m *Manager) AppMeta(id uuid.UUID, pkg string) (AppMeta, bool) {
+	m.mu.Lock()
+	source := m.appMeta
+	m.mu.Unlock()
+	if source == nil {
+		return AppMeta{}, false
+	}
+	return source.Lookup(deviceKey(id), pkg)
+}

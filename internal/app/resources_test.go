@@ -1,9 +1,14 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/png"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo/ui"
@@ -26,12 +31,21 @@ func samplingRound(stat string, utime uint64, gpu string) string {
 	b.WriteString("101 (comm) S 1 101 101 0 -1 0 0 0 0 0 5 0 0 0 20 0 1 0 600 0 0\n")
 	b.WriteString("VmRSS:\t   1024 kB\n")
 	b.WriteString("com.foo:remote \n")
+	b.WriteString("@@P 200\n")
+	b.WriteString("200 (comm) S 1 200 200 0 -1 0 0 0 0 0 1 0 0 0 20 0 1 0 700 0 0\n")
+	b.WriteString("VmRSS:\t   4096 kB\n")
+	b.WriteString("system_server \n")
 	return b.String()
 }
 
 // resourceFixture connects a device, runs two sampling rounds and leaves the
 // resource tab selected, so the page has numbers to draw.
 func resourceFixture(t *testing.T) (*ViewModel, func() []string) {
+	t.Helper()
+	return resourceFixtureWith(t)
+}
+
+func resourceFixtureWith(t *testing.T, opts ...func(*core.ManagerOptions)) (*ViewModel, func() []string) {
 	t.Helper()
 	round := 0
 	vm, calls := newRunnerViewModel(t, func(c core.Command) (core.Result, error) {
@@ -47,7 +61,7 @@ func resourceFixture(t *testing.T) (*ViewModel, func() []string) {
 			return core.Result{Output: samplingRound("200 0 200 1600 0 0 0 0 0 0", 40, "")}, nil
 		}
 		return core.Result{}, nil
-	})
+	}, opts...)
 	t.Cleanup(func() { vm.Manager.Shutdown(context.Background()) })
 
 	profile := vm.Manager.Profiles()[0]
@@ -116,4 +130,156 @@ func TestResourcePageStopsPollingWhenTheTabCloses(t *testing.T) {
 	if _, ok := vm.Manager.Resources(profile.ID); ok {
 		t.Fatal("the closed tab kept its sampling loop and reading")
 	}
+}
+
+// stubAppMeta is the metadata cache as the view sees it.
+type stubAppMeta struct {
+	mu        sync.Mutex
+	metas     map[string]core.AppMeta
+	requested []string
+	refreshed []string
+}
+
+func (s *stubAppMeta) Lookup(_, pkg string) (core.AppMeta, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	meta, ok := s.metas[pkg]
+	return meta, ok
+}
+
+func (s *stubAppMeta) Request(_, _, _ string, pkgs []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requested = append(s.requested, pkgs...)
+}
+
+func (s *stubAppMeta) Refresh(_, _, _ string, pkgs []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refreshed = append(s.refreshed, pkgs...)
+}
+
+func (s *stubAppMeta) refreshedPackages() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.refreshed...)
+}
+
+// resourceFixtureWithMeta runs the usual fixture against a metadata cache.
+func resourceFixtureWithMeta(t *testing.T, metas map[string]core.AppMeta) (*ViewModel, *stubAppMeta) {
+	t.Helper()
+	meta := &stubAppMeta{metas: metas}
+	vm, _ := resourceFixtureWith(t, func(o *core.ManagerOptions) { o.AppMeta = meta })
+	return vm, meta
+}
+
+func TestProcessTableGroupsByApp(t *testing.T) {
+	vm, _ := resourceFixture(t)
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+
+	for _, want := range []string{"按应用分组", "com.foo", "system_server", "2 个进程"} {
+		if !tt.HasText(want) {
+			t.Fatalf("the process table has no %q; texts = %v", want, tt.Texts())
+		}
+	}
+}
+
+func TestProcessTableShowsAppNameNotPackage(t *testing.T) {
+	vm, _ := resourceFixtureWithMeta(t, map[string]core.AppMeta{
+		"com.foo": {Package: "com.foo", Label: "微信", Icon: testIconPNG(t)},
+	})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+
+	if !tt.HasText("微信") {
+		t.Fatalf("the group row does not show the application name; texts = %v", tt.Texts())
+	}
+}
+
+func TestProcessTableFallsBackToPackageWithoutMeta(t *testing.T) {
+	vm, _ := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+
+	if !tt.HasText("com.foo") {
+		t.Fatalf("a package without metadata disappeared from the table; texts = %v", tt.Texts())
+	}
+}
+
+func TestProcessTableMarksStaleMeta(t *testing.T) {
+	vm, _ := resourceFixtureWithMeta(t, map[string]core.AppMeta{
+		"com.foo": {Package: "com.foo", Label: "微信", Stale: true},
+	})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+
+	if !tt.HasText("微信") {
+		t.Fatalf("a stale name was dropped; texts = %v", tt.Texts())
+	}
+	if !tt.HasText("7 天前更新") {
+		t.Fatalf("a stale name is not marked; texts = %v", tt.Texts())
+	}
+}
+
+func TestProcessTableExpandsOnClick(t *testing.T) {
+	vm, _ := resourceFixture(t)
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if tt.HasText("PID 100") {
+		t.Fatal("the process rows are visible before expanding the group")
+	}
+	if err := tt.Click("com.foo"); err != nil {
+		t.Fatalf("clicking the group row: %v", err)
+	}
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if !tt.HasText("PID 100") || !tt.HasText("com.foo:remote") {
+		t.Fatalf("the expanded group does not show its processes; texts = %v", tt.Texts())
+	}
+}
+
+func TestProcessTableSaysGPUUnavailable(t *testing.T) {
+	vm, _ := resourceFixture(t)
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+
+	if !tt.HasText("不可用") {
+		t.Fatalf("the GPU column does not say 不可用; texts = %v", tt.Texts())
+	}
+}
+
+func TestResourceToolbarRefreshAsksManagerToRefresh(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+
+	if err := tt.Click("刷新应用信息"); err != nil {
+		t.Fatalf("clicking the refresh button: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(meta.refreshedPackages()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := meta.refreshedPackages(); len(got) == 0 {
+		t.Fatal("the refresh button queued nothing")
+	}
+	profile := vm.Manager.Profiles()[0]
+	if !vm.resourceStateFor(profile.ID).refreshing {
+		t.Fatal("the page does not show that a refresh is running")
+	}
+}
+
+func TestResourceToolbarRefreshNeedsAConnection(t *testing.T) {
+	vm := newTestViewModel(t)
+	profile := vm.Manager.Profiles()[0]
+	vm.DetailTab = detailResources
+	vm.OpenDevice(profile.ID)
+
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if err := tt.Click("刷新应用信息"); err == nil {
+		t.Fatal("an offline page offered the refresh button")
+	}
+}
+
+// testIconPNG is a 1×1 PNG the view can decode, as a real APK icon would be.
+func testIconPNG(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatalf("encoding the test icon: %v", err)
+	}
+	return buf.Bytes()
 }

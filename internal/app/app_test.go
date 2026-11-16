@@ -408,7 +408,7 @@ func (r *recordingRunner) Run(_ context.Context, c core.Command, _ func(string))
 }
 
 // newRunnerViewModel builds a view model whose manager answers adb with fn.
-func newRunnerViewModel(t *testing.T, fn func(core.Command) (core.Result, error)) (*ViewModel, func() []string) {
+func newRunnerViewModel(t *testing.T, fn func(core.Command) (core.Result, error), opts ...func(*core.ManagerOptions)) (*ViewModel, func() []string) {
 	t.Helper()
 	runner := &recordingRunner{fn: fn}
 	creds := core.NewMemoryCredentialStore()
@@ -416,7 +416,7 @@ func newRunnerViewModel(t *testing.T, fn func(core.Command) (core.Result, error)
 	if err := creds.Write(testAddress, profile.ID); err != nil {
 		t.Fatal(err)
 	}
-	m := core.NewManager(core.ManagerOptions{
+	mo := core.ManagerOptions{
 		Configuration: core.Configuration{
 			Profiles: []core.Profile{profile},
 			Tools:    core.ToolSettings{ADB: os.Args[0]},
@@ -426,7 +426,11 @@ func newRunnerViewModel(t *testing.T, fn func(core.Command) (core.Result, error)
 		Runner:          runner,
 		Locate:          func(string) (string, bool) { return "", false },
 		MonitorInterval: 3600 * 1e9,
-	})
+	}
+	for _, opt := range opts {
+		opt(&mo)
+	}
+	m := core.NewManager(mo)
 	vm := NewViewModel(m, func(string) (string, bool) { return "", false })
 	return vm, func() []string { return runner.calls }
 }
@@ -484,7 +488,7 @@ func newBlockingViewModel(t *testing.T, runner core.Runner) *ViewModel {
 	if err := creds.Write(testAddress, profile.ID); err != nil {
 		t.Fatal(err)
 	}
-	m := core.NewManager(core.ManagerOptions{
+	mo := core.ManagerOptions{
 		Configuration: core.Configuration{
 			Profiles: []core.Profile{profile},
 			Tools:    core.ToolSettings{ADB: os.Args[0]},
@@ -494,7 +498,8 @@ func newBlockingViewModel(t *testing.T, runner core.Runner) *ViewModel {
 		Runner:          runner,
 		Locate:          func(string) (string, bool) { return "", false },
 		MonitorInterval: 3600 * 1e9,
-	})
+	}
+	m := core.NewManager(mo)
 	return NewViewModel(m, func(string) (string, bool) { return "", false })
 }
 
