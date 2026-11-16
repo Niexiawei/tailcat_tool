@@ -71,3 +71,16 @@ func TestGroupProcessesSkipsEmptyCommand(t *testing.T) {
 		t.Fatalf("groups = %v", got)
 	}
 }
+
+func TestGroupProcessesCutsRunTogetherArguments(t *testing.T) {
+	// The device shell drops the NULs in /proc/<pid>/cmdline, so a daemon with
+	// arguments arrives as one run-together token.
+	entries := []procEntry{{PID: 1, Command: "adbd--root_seclabel=u:r:su:s0"}}
+	apps := GroupProcesses(entries, map[int]float64{1: 0})
+	if len(apps) != 1 || apps[0].Package != "adbd" {
+		t.Fatalf("groups = %v, want adbd", groupedKeys(apps))
+	}
+	if name := apps[0].Processes[0].Name; name != "adbd" {
+		t.Fatalf("process name = %q", name)
+	}
+}

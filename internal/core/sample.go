@@ -62,8 +62,10 @@ type procCounters struct {
 }
 
 type hardwareInfo struct {
-	renderer string
 	fetched  bool
+	cores    int
+	model    string
+	renderer string
 }
 
 // WarningNoGPU explains a device whose vendor exposes no GPU counter.
@@ -76,14 +78,25 @@ const (
 	hardwareTimeout         = 5 * time.Second
 )
 
-// resourceSampleScript is one adb shell round trip: CPU totals, memory, CPU
-// identity, whatever GPU counters this vendor exposes, and every process.
-const resourceSampleScript = `echo @@STAT; cat /proc/stat; echo @@MEM; cat /proc/meminfo; ` +
-	`echo @@CPU; grep -c '^processor' /proc/cpuinfo; grep -m1 -i -e 'model name' -e 'Hardware' /proc/cpuinfo; ` +
-	`echo @@GPU; cat /sys/class/kgsl/kgsl-3d0/gpubusy 2>/dev/null; cat /sys/class/kgsl/kgsl-3d0/gpu_busy_percentage 2>/dev/null; ` +
-	`cat /sys/kernel/gpu/gpu_busy 2>/dev/null; cat /sys/class/devfreq/gpufreq/load 2>/dev/null; ` +
-	`echo @@PROC; for d in /proc/[0-9]*; do echo @@P ${d##*/}; head -1 $d/stat 2>/dev/null; ` +
-	`grep VmRSS $d/status 2>/dev/null; tr '\0' ' ' < $d/cmdline 2>/dev/null; echo; done`
+// resourceSampleScript is one adb shell round trip: the CPU totals, memory,
+// whichever vendor GPU counters exist, and every process. The per-process loop
+// uses shell builtins only: a grep/head/tr per process costs about 14 ms each
+// on a real device, which made a single round take 21 seconds.
+const resourceSampleScript = `echo @@STAT; IFS= read -r line < /proc/stat; echo "$line"; ` +
+	`echo @@MEM; cat /proc/meminfo; echo @@GPU; ` +
+	`for f in /sys/class/kgsl/kgsl-3d0/gpubusy /sys/class/kgsl/kgsl-3d0/gpu_busy_percentage /sys/kernel/gpu/gpu_busy /sys/class/devfreq/gpufreq/load; do ` +
+	`IFS= read -r line < $f 2>/dev/null && echo "$line"; done; ` +
+	`echo @@PROC; for d in /proc/[0-9]*; do pid=${d#/proc/}; cmd=""; ` +
+	`IFS= read -r cmd < $d/cmdline 2>/dev/null; [ -n "$cmd" ] || continue; ` +
+	`stat=""; IFS= read -r stat < $d/stat 2>/dev/null || continue; [ -n "$stat" ] || continue; ` +
+	`rss=0; while IFS= read -r line; do case $line in VmRSS:*) set -- $line; rss=$2; break;; esac; done < $d/status 2>/dev/null; ` +
+	`echo "@@P $pid|$rss|$stat|$cmd"; done`
+
+// hardwareScript reads what never changes on a connection: the CPU identity and
+// the GPU model. It runs once, after the first reading is on screen.
+const hardwareScript = `echo @@CPU; grep -c '^processor' /proc/cpuinfo; ` +
+	`grep -m1 -i -e 'model name' -e 'Hardware' /proc/cpuinfo; ` +
+	`echo @@GPU; dumpsys SurfaceFlinger | grep -m1 '^GLES:'`
 
 // SampleResources reads the device once and stores the result. It binds the
 // endpoint it started with, so a reconnect mid-read throws the reading away
@@ -123,9 +136,6 @@ func (m *Manager) SampleResources(ctx context.Context, id uuid.UUID) (ResourceSn
 	}
 
 	snapshot := m.buildSnapshot(id, previous, parseResourceOutput(res.Output))
-	if renderer := m.fetchRenderer(ctx, id, target); renderer != "" {
-		snapshot.GPU.Renderer = renderer
-	}
 	if !snapshot.GPU.Available {
 		snapshot.Warnings = append(snapshot.Warnings, WarningNoGPU)
 	}
@@ -138,6 +148,16 @@ func (m *Manager) SampleResources(ctx context.Context, id uuid.UUID) (ResourceSn
 	m.resources[id] = snapshot
 	m.notify()
 	m.mu.Unlock()
+
+	// The CPU and GPU identity never changes, so it is read once and only
+	// after the numbers above are on screen: dumpsys is slow and would
+	// otherwise hold the first reading back.
+	m.ensureHardware(ctx, id, target)
+	// ensureHardware fills the identity into the stored reading, so return that
+	// rather than the copy taken before it ran.
+	if updated, ok := m.Resources(id); ok {
+		return updated, nil
+	}
 	return snapshot, nil
 }
 
@@ -197,8 +217,13 @@ func (m *Manager) buildSnapshot(id uuid.UUID, previous *resourceCounters, parsed
 			snapshot.CPU.Percent = 100 * float64(deltaTotal-deltaIdle) / float64(deltaTotal)
 		}
 	}
-	snapshot.CPU.Model = parsed.model
-	snapshot.CPU.Cores = parsed.cores
+	if hardware := m.hardwareOf(id); hardware != nil {
+		snapshot.CPU.Model = hardware.model
+		snapshot.CPU.Cores = hardware.cores
+		if hardware.renderer != "" {
+			snapshot.GPU.Renderer = hardware.renderer
+		}
+	}
 	if parsed.cpuOK {
 		counters.cpu, counters.ok = parsed.cpu, true
 	}
@@ -241,33 +266,43 @@ func (m *Manager) buildSnapshot(id uuid.UUID, previous *resourceCounters, parsed
 	return snapshot
 }
 
-// fetchRenderer reads the GPU model once per connection: it never changes, and
-// dumpsys is far too slow to run every two seconds.
-func (m *Manager) fetchRenderer(ctx context.Context, id uuid.UUID, target operationTarget) string {
+// hardwareOf returns the cached CPU and GPU identity, if it was read.
+func (m *Manager) hardwareOf(id uuid.UUID) *hardwareInfo {
 	m.mu.Lock()
-	info := m.hardware[id]
-	m.mu.Unlock()
-	if info != nil && info.fetched {
-		return info.renderer
+	defer m.mu.Unlock()
+	return m.hardware[id]
+}
+
+// ensureHardware reads the CPU identity and the GPU model once per connection.
+// It runs after a reading is stored, and it updates that reading in place, so a
+// slow dumpsys never delays the numbers.
+func (m *Manager) ensureHardware(ctx context.Context, id uuid.UUID, target operationTarget) {
+	if info := m.hardwareOf(id); info != nil && info.fetched {
+		return
 	}
 
-	renderer := ""
+	hardware := &hardwareInfo{fetched: true}
 	res, err := m.runner.Run(ctx, Command{
 		Path:    target.ADB,
-		Args:    []string{"-s", target.Serial, "shell", "dumpsys SurfaceFlinger"},
+		Args:    []string{"-s", target.Serial, "shell", hardwareScript},
 		Timeout: hardwareTimeout,
 	}, nil)
 	if err == nil && res.ExitCode == 0 {
-		renderer = parseGLESRenderer(res.Output)
+		hardware.cores, hardware.model, hardware.renderer = parseHardwareOutput(res.Output)
 	}
 
 	m.mu.Lock()
-	if m.hardware[id] == nil {
-		m.hardware[id] = &hardwareInfo{}
+	m.hardware[id] = hardware
+	if snapshot, ok := m.resources[id]; ok {
+		snapshot.CPU.Cores = hardware.cores
+		snapshot.CPU.Model = hardware.model
+		if hardware.renderer != "" {
+			snapshot.GPU.Renderer = hardware.renderer
+		}
+		m.resources[id] = snapshot
 	}
-	m.hardware[id].renderer, m.hardware[id].fetched = renderer, true
+	m.notify()
 	m.mu.Unlock()
-	return renderer
 }
 
 // attachAppMeta fills in the names and icons the cache knows and queues the
@@ -310,15 +345,9 @@ type parsedSample struct {
 	cpuOK      bool
 	mem        memInfo
 	memOK      bool
-	cores      int
-	model      string
 	gpuPercent float64
 	gpuOK      bool
 	entries    []procEntry
-}
-
-type procRaw struct {
-	pid, stat, status, cmdline string
 }
 
 // parseResourceOutput reads the sectioned output of resourceSampleScript.
@@ -326,30 +355,32 @@ func parseResourceOutput(text string) parsedSample {
 	var out parsedSample
 	var memLines []string
 	section := ""
-	var current *procRaw
-
-	flush := func() {
-		if current == nil {
-			return
-		}
-		pid, err := strconv.Atoi(current.pid)
-		if err == nil {
-			if entry, ok := parseProcEntry(pid, current.stat, current.status, current.cmdline); ok {
-				out.entries = append(out.entries, entry)
-			}
-		}
-		current = nil
-	}
 
 	for _, raw := range strings.Split(text, "\n") {
 		line := strings.TrimRight(raw, "\r")
-		if rest, ok := strings.CutPrefix(line, "@@P "); ok {
-			flush()
-			current = &procRaw{pid: strings.TrimSpace(rest)}
+		if strings.HasPrefix(line, "@@P ") {
+			if section != "@@PROC" {
+				continue
+			}
+			// "@@P <pid>|<rss kB>|<stat line>|<cmdline>"
+			parts := strings.SplitN(strings.TrimPrefix(line, "@@P "), "|", 4)
+			if len(parts) < 4 {
+				continue
+			}
+			pid, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+			if err != nil {
+				continue
+			}
+			status := ""
+			if rss := strings.TrimSpace(parts[1]); rss != "" && rss != "0" {
+				status = "VmRSS:\t" + rss + " kB"
+			}
+			if entry, ok := parseProcEntry(pid, parts[2], status, parts[3]); ok {
+				out.entries = append(out.entries, entry)
+			}
 			continue
 		}
 		if strings.HasPrefix(line, "@@") {
-			flush()
 			section = line
 			continue
 		}
@@ -362,35 +393,14 @@ func parseResourceOutput(text string) parsedSample {
 			}
 		case "@@MEM":
 			memLines = append(memLines, line)
-		case "@@CPU":
-			if out.cores == 0 {
-				if cores, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
-					out.cores = cores
-				}
-			} else if out.model == "" {
-				out.model = cpuModelFromLine(line)
-			}
 		case "@@GPU":
 			if !out.gpuOK {
 				if percent, ok := parseGPUBusy(line); ok {
 					out.gpuPercent, out.gpuOK = percent, true
 				}
 			}
-		case "@@PROC":
-			if current == nil {
-				continue
-			}
-			switch {
-			case current.stat == "":
-				current.stat = line
-			case current.status == "" && strings.HasPrefix(line, "VmRSS:"):
-				current.status = line
-			case current.cmdline == "":
-				current.cmdline = line
-			}
 		}
 	}
-	flush()
 
 	if !out.memOK {
 		if mem, ok := parseMemInfo(strings.Join(memLines, "\n")); ok {
@@ -398,6 +408,34 @@ func parseResourceOutput(text string) parsedSample {
 		}
 	}
 	return out
+}
+
+// parseHardwareOutput reads hardwareScript's output: core count, CPU model and
+// the GPU renderer.
+func parseHardwareOutput(text string) (cores int, model, renderer string) {
+	section := ""
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimRight(raw, "\r")
+		if strings.HasPrefix(line, "@@") {
+			section = line
+			continue
+		}
+		switch section {
+		case "@@CPU":
+			if cores == 0 {
+				if count, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
+					cores = count
+				}
+			} else if model == "" {
+				model = cpuModelFromLine(line)
+			}
+		case "@@GPU":
+			if renderer == "" {
+				renderer = parseGLESRenderer(line)
+			}
+		}
+	}
+	return cores, model, renderer
 }
 
 // cpuModelFromLine reads /proc/cpuinfo spellings like
@@ -454,20 +492,16 @@ func (m *Manager) StartResourceSampling(id uuid.UUID) {
 	}()
 }
 
-// StopResourceSampling ends the loop and forgets what it read, so a device that
-// comes back cannot show the previous channel's numbers.
+// StopResourceSampling ends the loop and keeps the last reading, so coming back
+// to the page shows numbers at once instead of reading the device again.
+// Disconnecting still forgets everything.
 func (m *Manager) StopResourceSampling(id uuid.UUID) {
 	m.mu.Lock()
 	if _, running := m.samplers[id]; !running {
-		if _, stored := m.resources[id]; !stored {
-			m.mu.Unlock()
-			return
-		}
+		m.mu.Unlock()
+		return
 	}
 	m.stopResourceSamplingLocked(id)
-	delete(m.resources, id)
-	delete(m.sampleCounters, id)
-	m.notify()
 	m.mu.Unlock()
 }
 

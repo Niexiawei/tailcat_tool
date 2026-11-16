@@ -33,16 +33,19 @@ func (r sampleRound) String() string {
 	var b strings.Builder
 	b.WriteString("@@STAT\ncpu " + r.stat + "\n")
 	fmt.Fprintf(&b, "@@MEM\nMemTotal: %d kB\nMemAvailable: %d kB\n", r.memTotal, r.memAvail)
-	fmt.Fprintf(&b, "@@CPU\n%d\n%s\n", r.cores, r.model)
 	b.WriteString("@@GPU\n" + r.gpu + "\n")
 	b.WriteString("@@PROC\n")
 	for _, p := range r.procs {
-		fmt.Fprintf(&b, "@@P %d\n%d (comm) S 1 %d %d 0 -1 0 0 0 0 0 %d %d 0 0 20 0 1 0 %d 0 0\n",
-			p.pid, p.pid, p.pid, p.pid, p.utime, p.stime, p.start)
-		fmt.Fprintf(&b, "VmRSS:\t   %d kB\n", p.rssKB)
-		b.WriteString(p.cmd + " \n")
+		fmt.Fprintf(&b, "@@P %d|%d|%d (comm) S 1 %d %d 0 -1 0 0 0 0 0 %d %d 0 0 20 0 1 0 %d 0 0|%s\n",
+			p.pid, p.rssKB, p.pid, p.pid, p.pid, p.utime, p.stime, p.start, p.cmd)
 	}
 	return b.String()
+}
+
+// hardwareOutput is what hardwareScript prints: the identity that never
+// changes while a device is connected.
+func (r sampleRound) hardwareOutput() string {
+	return fmt.Sprintf("@@CPU\n%d\n%s\n@@GPU\n", r.cores, r.model)
 }
 
 // defaultRound is one healthy device reading with two applications.
@@ -68,6 +71,10 @@ func (f *managerFixture) serveRounds(t *testing.T, rounds ...sampleRound) {
 	f.runner.setHandler(func(_ context.Context, c Command) (Result, error) {
 		if contains(c.Args, "get-state") {
 			return Result{Output: "device\n"}, nil
+		}
+		if containsSubstring(c.Args, "@@CPU") {
+			round := rounds[min(next, len(rounds)-1)]
+			return Result{Output: round.hardwareOutput()}, nil
 		}
 		if !containsSubstring(c.Args, "@@STAT") {
 			return Result{}, nil

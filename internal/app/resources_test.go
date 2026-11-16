@@ -20,21 +20,11 @@ func samplingRound(stat string, utime uint64, gpu string) string {
 	var b strings.Builder
 	b.WriteString("@@STAT\ncpu " + stat + "\n")
 	b.WriteString("@@MEM\nMemTotal: 8000000 kB\nMemAvailable: 2000000 kB\n")
-	b.WriteString("@@CPU\n8\nHardware\t: Qualcomm Technologies, Inc SM8150\n")
 	b.WriteString("@@GPU\n" + gpu + "\n")
 	b.WriteString("@@PROC\n")
-	b.WriteString("@@P 100\n")
-	b.WriteString("100 (comm) S 1 100 100 0 -1 0 0 0 0 0 " + itoa(int(utime)) + " 0 0 0 20 0 1 0 500 0 0\n")
-	b.WriteString("VmRSS:\t   20480 kB\n")
-	b.WriteString("com.foo \n")
-	b.WriteString("@@P 101\n")
-	b.WriteString("101 (comm) S 1 101 101 0 -1 0 0 0 0 0 5 0 0 0 20 0 1 0 600 0 0\n")
-	b.WriteString("VmRSS:\t   1024 kB\n")
-	b.WriteString("com.foo:remote \n")
-	b.WriteString("@@P 200\n")
-	b.WriteString("200 (comm) S 1 200 200 0 -1 0 0 0 0 0 1 0 0 0 20 0 1 0 700 0 0\n")
-	b.WriteString("VmRSS:\t   4096 kB\n")
-	b.WriteString("system_server \n")
+	b.WriteString("@@P 100|20480|100 (comm) S 1 100 100 0 -1 0 0 0 0 0 " + itoa(int(utime)) + " 0 0 0 20 0 1 0 500 0 0|com.foo\n")
+	b.WriteString("@@P 101|1024|101 (comm) S 1 101 101 0 -1 0 0 0 0 0 5 0 0 0 20 0 1 0 600 0 0|com.foo:remote\n")
+	b.WriteString("@@P 200|4096|200 (comm) S 1 200 200 0 -1 0 0 0 0 0 1 0 0 0 20 0 1 0 700 0 0|system_server\n")
 	return b.String()
 }
 
@@ -53,6 +43,8 @@ func resourceFixtureWith(t *testing.T, opts ...func(*core.ManagerOptions)) (*Vie
 		switch {
 		case strings.Contains(joined, "get-state"):
 			return core.Result{Output: "device\n"}, nil
+		case strings.Contains(joined, "@@CPU"):
+			return core.Result{Output: "@@CPU\n8\nHardware\t: Qualcomm Technologies, Inc SM8150\n@@GPU\n"}, nil
 		case strings.Contains(joined, "@@STAT"):
 			round++
 			if round == 1 {
@@ -127,8 +119,8 @@ func TestResourcePageStopsPollingWhenTheTabCloses(t *testing.T) {
 
 	vm.DetailTab = detailLog
 	ui.NewTester(vm.ContentView, 900, 800)
-	if _, ok := vm.Manager.Resources(profile.ID); ok {
-		t.Fatal("the closed tab kept its sampling loop and reading")
+	if _, ok := vm.Manager.Resources(profile.ID); !ok {
+		t.Fatal("leaving the tab threw the reading away and would reload the device")
 	}
 }
 
@@ -347,15 +339,11 @@ func samplingRoundMany(apps int) string {
 	var b strings.Builder
 	b.WriteString("@@STAT\ncpu 100 0 100 800 0 0 0 0 0 0\n")
 	b.WriteString("@@MEM\nMemTotal: 8000000 kB\nMemAvailable: 2000000 kB\n")
-	b.WriteString("@@CPU\n8\nHardware\t: Qualcomm Technologies, Inc SM8150\n")
 	b.WriteString("@@GPU\n")
 	b.WriteString("@@PROC\n")
 	for i := 0; i < apps; i++ {
 		pid := 1000 + i
-		b.WriteString("@@P " + itoa(pid) + "\n")
-		b.WriteString(itoa(pid) + " (comm) S 1 1 1 0 -1 0 0 0 0 0 1 0 0 0 20 0 1 0 500 0 0\n")
-		b.WriteString("VmRSS:\t   1024 kB\n")
-		b.WriteString("com.app" + itoa(i) + " \n")
+		b.WriteString("@@P " + itoa(pid) + "|1024|" + itoa(pid) + " (comm) S 1 1 1 0 -1 0 0 0 0 0 1 0 0 0 20 0 1 0 500 0 0|com.app" + itoa(i) + "\n")
 	}
 	return b.String()
 }
@@ -367,6 +355,9 @@ func manyAppsViewModel(t *testing.T, apps int) *ViewModel {
 		joined := strings.Join(c.Args, " ")
 		if strings.Contains(joined, "get-state") {
 			return core.Result{Output: "device\n"}, nil
+		}
+		if strings.Contains(joined, "@@CPU") {
+			return core.Result{Output: "@@CPU\n8\nHardware\t: CPU\n@@GPU\n"}, nil
 		}
 		if strings.Contains(joined, "@@STAT") {
 			return core.Result{Output: samplingRoundMany(apps)}, nil
@@ -471,5 +462,32 @@ func TestProcessTableHidesResolveButtonOnceNamed(t *testing.T) {
 	tt := ui.NewTester(vm.ContentView, 900, 900)
 	if tt.HasText("解析应用信息") {
 		t.Fatalf("a named application still offers to resolve itself; texts = %v", tt.Texts())
+	}
+}
+
+func TestProcessTableShowsASpinnerWhileResolving(t *testing.T) {
+	vm, _ := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	count := func(tt *ui.Tester) int {
+		n := 0
+		for _, text := range tt.Texts() {
+			if text == "解析应用信息" {
+				n++
+			}
+		}
+		return n
+	}
+
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	before := count(tt)
+	if before == 0 {
+		t.Fatalf("no row offers to resolve itself; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("解析应用信息"); err != nil {
+		t.Fatalf("clicking the row button: %v", err)
+	}
+
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if after := count(tt); after != before-1 {
+		t.Fatalf("resolve buttons %d → %d; the clicked row should show a spinner instead", before, after)
 	}
 }

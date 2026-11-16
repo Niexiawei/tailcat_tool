@@ -236,8 +236,102 @@ func (s *Store) apkIdentity(queued job, apk string) (int64, string) {
 	return size, stamp
 }
 
-// readApk pulls the APK into a temporary file and reads its manifest.
+// readApk reads one application's name and icon: entries first, whole APK only
+// as a fallback.
 func (s *Store) readApk(queued job, apk string) (string, []byte) {
+	if label, icon, ok := s.readApkEntries(queued, apk); ok {
+		return label, icon
+	}
+	return s.readWholeApk(queued, apk)
+}
+
+// readApkEntries pulls just the three entries reading a name needs: the
+// manifest, the resource table that resolves it, and the icon. Pulling a whole
+// 100 MB APK for that is what made resolution take minutes over a tailcat
+// channel.
+func (s *Store) readApkEntries(queued job, apk string) (label string, icon []byte, ok bool) {
+	defer func() {
+		if recover() != nil {
+			label, icon, ok = "", nil, false
+		}
+	}()
+
+	dir, err := os.MkdirTemp("", "tailcat-entries-")
+	if err != nil {
+		return "", nil, false
+	}
+	defer os.RemoveAll(dir)
+
+	manifestPath := filepath.Join(dir, "AndroidManifest.xml")
+	if !s.extractEntry(queued, apk, "AndroidManifest.xml", manifestPath) {
+		return "", nil, false
+	}
+
+	// resources.arsc is optional: without it the manifest's literal values
+	// still resolve, only references do not.
+	var resources *apkparser.ResourceTable
+	arscPath := filepath.Join(dir, "resources.arsc")
+	if s.extractEntry(queued, apk, "resources.arsc", arscPath) {
+		if file, err := os.Open(arscPath); err == nil {
+			resources, _ = apkparser.ParseResourceTable(file)
+			file.Close()
+		}
+	}
+
+	scanner := &manifestScanner{}
+	file, err := os.Open(manifestPath)
+	if err != nil {
+		return "", nil, false
+	}
+	parseErr := apkparser.ParseXml(file, scanner, resources)
+	file.Close()
+	if parseErr != nil {
+		return "", nil, false
+	}
+	label = cleanLabel(scanner.label)
+	if label == "" {
+		return "", nil, false
+	}
+	if isImageFile(scanner.icon) {
+		iconPath := filepath.Join(dir, "icon")
+		if s.extractEntry(queued, apk, scanner.icon, iconPath) {
+			icon = readFileLimited(iconPath, maxIconBytes)
+		}
+	}
+	return label, icon, true
+}
+
+// extractEntry writes one zip entry of the APK to path. A device without
+// `unzip`, or an entry the shell cannot read, reports false and the caller
+// falls back to the whole APK.
+func (s *Store) extractEntry(queued job, apk, entry, path string) bool {
+	res, err := s.runner.RunToFile(context.Background(), core.Command{
+		Path:    queued.adb,
+		Args:    []string{"-s", queued.serial, "shell", "unzip -p '" + apk + "' '" + entry + "'"},
+		Timeout: adbMetaTimeout,
+	}, path)
+	if err != nil || res.ExitCode != 0 {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Size() > 0
+}
+
+func readFileLimited(path string, limit int64) []byte {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil || len(data) == 0 || int64(len(data)) > limit {
+		return nil
+	}
+	return data
+}
+
+// readWholeApk falls back to pulling the APK into a temporary file.
+func (s *Store) readWholeApk(queued job, apk string) (string, []byte) {
 	dir, err := os.MkdirTemp("", "tailcat-apk-")
 	if err != nil {
 		return "", nil

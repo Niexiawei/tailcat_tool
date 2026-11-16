@@ -1,8 +1,10 @@
 package appmeta
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -19,6 +21,8 @@ type fakeFileRunner struct {
 	apkPath string
 	apkSize string
 	payload []byte
+	// entries answers `unzip -p`: entry name to its bytes.
+	entries map[string][]byte
 	calls   []string
 }
 
@@ -46,10 +50,46 @@ func (f *fakeFileRunner) Run(_ context.Context, c core.Command, _ func(string)) 
 
 func (f *fakeFileRunner) RunToFile(_ context.Context, c core.Command, path string) (core.Result, error) {
 	f.record(c)
+	line := strings.Join(c.Args, " ")
+	if i := strings.Index(line, "unzip -p"); i >= 0 {
+		fields := strings.Fields(line[i:])
+		if len(fields) < 4 {
+			return core.Result{ExitCode: 1}, nil
+		}
+		data, ok := f.entries[strings.Trim(fields[3], "'")]
+		if !ok {
+			return core.Result{ExitCode: 11}, nil
+		}
+		return core.Result{}, os.WriteFile(path, data, 0o600)
+	}
 	if f.payload == nil {
 		return core.Result{ExitCode: 1}, nil
 	}
 	return core.Result{}, os.WriteFile(path, f.payload, 0o600)
+}
+
+// zipEntries opens the fixture APK and returns its entries by name, so the fake
+// `unzip -p` can answer exactly what a device would.
+func zipEntries(t *testing.T, apk []byte) map[string][]byte {
+	t.Helper()
+	reader, err := zip.NewReader(bytes.NewReader(apk), int64(len(apk)))
+	if err != nil {
+		t.Fatalf("opening the test apk: %v", err)
+	}
+	out := map[string][]byte{}
+	for _, file := range reader.File {
+		f, err := file.Open()
+		if err != nil {
+			t.Fatalf("opening %s: %v", file.Name, err)
+		}
+		data, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("reading %s: %v", file.Name, err)
+		}
+		out[file.Name] = data
+	}
+	return out
 }
 
 func (f *fakeFileRunner) record(c core.Command) {
@@ -85,9 +125,15 @@ func newTestStore(t *testing.T, runner core.FileRunner) *Store {
 	return s
 }
 
-// apkRunner serves one APK for any package it is asked about.
+// apkRunner serves one APK for any package it is asked about, both whole and
+// entry by entry.
 func apkRunner(apk []byte, size string) *fakeFileRunner {
-	return &fakeFileRunner{apkPath: "/data/app/com.foo-1/base.apk", apkSize: size, payload: apk}
+	return &fakeFileRunner{
+		apkPath: "/data/app/com.foo-1/base.apk",
+		apkSize: size,
+		payload: apk,
+		entries: nil,
+	}
 }
 
 func TestStoreReadsLabelAndIconFromApk(t *testing.T) {
@@ -246,5 +292,46 @@ func TestStoreKeepsLabelWhenIconIsVector(t *testing.T) {
 	}
 	if len(meta.Icon) != 0 {
 		t.Fatalf("a vector icon became %d bytes", len(meta.Icon))
+	}
+}
+
+func TestStoreReadsEntriesInsteadOfTheWholeApk(t *testing.T) {
+	apk := buildTestAPK(t, "微信", "res/mipmap-xxhdpi/ic.png", testPNG)
+	runner := apkRunner(apk, "4096 1700000000")
+	runner.entries = zipEntries(t, apk)
+	s := newTestStore(t, runner)
+
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
+	s.waitIdle()
+
+	meta, ok := s.Lookup("dev", "com.foo")
+	if !ok || meta.Label != "微信" {
+		t.Fatalf("meta = %+v, ok=%v", meta, ok)
+	}
+	if !bytes.Equal(meta.Icon, testPNG) {
+		t.Fatalf("Icon = %d bytes, want the fixture PNG", len(meta.Icon))
+	}
+	if got := runner.count("exec-out cat"); got != 0 {
+		t.Fatalf("pulled the whole APK %d times instead of its entries", got)
+	}
+	if got := runner.count("unzip -p"); got < 2 {
+		t.Fatalf("unzip calls = %d, want the manifest and the icon", got)
+	}
+}
+
+func TestStoreFallsBackToTheWholeApkWithoutUnzip(t *testing.T) {
+	apk := buildTestAPK(t, "微信", "res/mipmap-xxhdpi/ic.png", testPNG)
+	// No entries map: `unzip -p` fails the way a device without unzip does.
+	runner := apkRunner(apk, "4096 1700000000")
+	s := newTestStore(t, runner)
+
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
+	s.waitIdle()
+
+	if meta, ok := s.Lookup("dev", "com.foo"); !ok || meta.Label != "微信" {
+		t.Fatalf("meta = %+v, ok=%v", meta, ok)
+	}
+	if got := runner.count("exec-out cat"); got != 1 {
+		t.Fatalf("whole-APK pulls = %d, want the fallback to run once", got)
 	}
 }

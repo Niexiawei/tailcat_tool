@@ -51,7 +51,7 @@ func GroupProcesses(entries []procEntry, cpuPercent map[int]float64) []AppUsage 
 		}
 		app.Processes = append(app.Processes, ProcessUsage{
 			PID:        entry.PID,
-			Name:       entry.Command,
+			Name:       displayName(entry.Command),
 			CPUPercent: cpuPercent[entry.PID],
 			MemBytes:   entry.RSS,
 		})
@@ -84,16 +84,30 @@ func GroupProcesses(entries []procEntry, cpuPercent map[int]float64) []AppUsage 
 	return apps
 }
 
-// appKey names the application a command belongs to: the executable's file
-// name without any ":suffix" the app gave its extra process.
+// appKey names the application a command belongs to: its executable without
+// the ":suffix" an app gave an extra process.
 func appKey(command string) string {
+	return trimCommand(displayName(command), ":")
+}
+
+// displayName is a process's own name for the table: the executable's file
+// name, still carrying its ":suffix" (which tells "com.foo" from
+// "com.foo:remote") but without run-together arguments. The sampling shell
+// reads /proc/<pid>/cmdline with a builtin that drops the NUL separators, so a
+// daemon with arguments arrives as "adbd--root_seclabel=u".
+func displayName(command string) string {
 	fields := strings.Fields(command)
 	if len(fields) == 0 {
 		return ""
 	}
-	name := path.Base(fields[0])
-	if before, _, found := strings.Cut(name, ":"); found {
-		name = before
+	return trimCommand(path.Base(fields[0]), "--", "=")
+}
+
+func trimCommand(name string, cuts ...string) string {
+	for _, cut := range cuts {
+		if before, _, found := strings.Cut(name, cut); found && before != "" {
+			name = before
+		}
 	}
 	return name
 }

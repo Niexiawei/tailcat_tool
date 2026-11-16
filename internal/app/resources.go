@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"time"
 
@@ -18,6 +19,9 @@ type resourceState struct {
 	table    components.TableState
 	expanded map[string]bool
 	scroll   ui.ScrollState
+	// resolving remembers which applications the user asked to read, so the
+	// row can show a spinner until the name arrives.
+	resolving map[string]time.Time
 	// refreshing is set while a manual refresh runs, so the button cannot be
 	// pressed twice and the user sees why nothing changed yet.
 	refreshing bool
@@ -34,7 +38,7 @@ func (vm *ViewModel) resourceStateFor(device uuid.UUID) *resourceState {
 	}
 	state, ok := vm.resources[device]
 	if !ok {
-		state = &resourceState{expanded: map[string]bool{}}
+		state = &resourceState{expanded: map[string]bool{}, resolving: map[string]time.Time{}}
 		vm.resources[device] = state
 	}
 	return state
@@ -116,12 +120,13 @@ func (vm *ViewModel) donutRow(c *ui.Context, state *resourceState, snapshot core
 	})
 }
 
-// usageRing is one share of the whole: a ring, with the usage in the middle
-// where the eye lands first.
+// usageRing is one share of the whole: a thick ring with the usage written in
+// the middle. components.ProgressRing paints the same thing with a stroke of
+// theme.Space(0.75) and offers no way to thicken it, which reads as a hairline
+// at this size, so the ring is painted here — one place, same semantics
+// (RoleProgress with Range(0,1,value)).
 func (vm *ViewModel) usageRing(c *ui.Context, title string, percent float64, available bool) {
 	theme := c.Theme()
-	// The component's own diameter is 32 DIPs, far too small to hold a number
-	// for three rings side by side; it keeps the ring circular at any size.
 	size := theme.Space(30)
 	ui.Column(c).Grow(1).MinWidth(0).Gap(4).AlignItems(ui.Center).Children(func() {
 		components.Text(c, title).FontSize(11).TextColor(theme.TextMuted)
@@ -131,7 +136,30 @@ func (vm *ViewModel) usageRing(c *ui.Context, title string, percent float64, ava
 			return
 		}
 		used := clampPercent(percent)
-		ring := components.ProgressRing(c, used/100).Width(size).Height(size)
+		ring := ui.Box(c).Size(size, size).Shrink(0)
+		ring.Role(ui.RoleProgress).Range(0, 1, used/100).Label(title)
+		ring.Draw(func(p *ui.Painter, r ui.Rect) {
+			d := min(r.W, r.H)
+			if d <= 0 {
+				return
+			}
+			width := d / 9
+			radius := (d - width) / 2
+			cx, cy := r.X+r.W/2, r.Y+r.H/2
+			var track ui.Path
+			track.Circle(cx, cy, radius)
+			p.StrokePath(&track, width, theme.Border)
+			if used <= 0 {
+				return
+			}
+			var fill ui.Path
+			if used >= 100 {
+				fill.Circle(cx, cy, radius)
+			} else {
+				ringArc(&fill, cx, cy, radius, used)
+			}
+			p.StrokePath(&fill, width, theme.Accent)
+		})
 		ring.Children(func() {
 			ui.Column(c).Absolute().Left(0).Top(0).WidthPercent(100).HeightPercent(100).
 				AlignItems(ui.Center).Justify(ui.Center).Children(func() {
@@ -139,6 +167,23 @@ func (vm *ViewModel) usageRing(c *ui.Context, title string, percent float64, ava
 			})
 		})
 	})
+}
+
+// ringArc walks a clockwise arc from twelve o'clock, one degree per segment:
+// ui.Path has circles and quadratic curves but no arc primitive.
+func ringArc(path *ui.Path, cx, cy, radius float32, percent float64) {
+	steps := int(max(1, min(360, percent/100*360)))
+	start := -math.Pi / 2
+	point := func(i int) (float32, float32) {
+		angle := start + float64(i)/float64(steps)*percent/100*2*math.Pi
+		return cx + float32(math.Cos(angle))*radius, cy + float32(math.Sin(angle))*radius
+	}
+	x, y := point(0)
+	path.MoveTo(x, y)
+	for i := 1; i <= steps; i++ {
+		x, y = point(i)
+		path.LineTo(x, y)
+	}
 }
 
 // warnings prints what this reading could not fill in. The GPU warning is
@@ -259,7 +304,7 @@ func (vm *ViewModel) processTable(c *ui.Context, state *resourceState, device uu
 			for _, app := range snapshot.Apps {
 				label := appLabel(app)
 				row := components.TableRow(c, app.Package, label, state.expanded[app.Package], func(col int) {
-					vm.appCell(c, col, device, app, label)
+					vm.appCell(c, col, state, device, app, label)
 				})
 				if row.Clicked() {
 					state.expanded[app.Package] = !state.expanded[app.Package]
@@ -289,7 +334,7 @@ func processColumns() []ui.TableColumn {
 	}
 }
 
-func (vm *ViewModel) appCell(c *ui.Context, col int, device uuid.UUID, app core.AppUsage, label string) {
+func (vm *ViewModel) appCell(c *ui.Context, col int, state *resourceState, device uuid.UUID, app core.AppUsage, label string) {
 	theme := c.Theme()
 	switch col {
 	case 0:
@@ -300,12 +345,22 @@ func (vm *ViewModel) appCell(c *ui.Context, col int, device uuid.UUID, app core.
 				components.Text(c, "7 天前更新").FontSize(10).TextColor(theme.TextMuted)
 			}
 			// Names and icons cost an APK pull per application, which is slow
-			// over a tailcat channel, so each row offers to read itself.
+			// over a tailcat channel, so each row offers to read itself, and
+			// says so while it works.
 			if app.Label == "" {
+				if state.resolving[app.Package] != (time.Time{}) {
+					if time.Since(state.resolving[app.Package]) < resolveTimeout {
+						components.Spinner(c, components.SpinnerRing).Width(14).Height(14)
+						return
+					}
+					delete(state.resolving, app.Package)
+				}
 				if components.IconButton(c, lucide.PackageSearch(), "解析应用信息", components.IconButtonCompact).Clicked() {
+					state.resolving[app.Package] = time.Now()
 					go func(pkg string) {
 						vm.Fail(vm.Manager.ResolveAppMeta(context.Background(), device, []string{pkg}))
 					}(app.Package)
+					c.Invalidate()
 				}
 			}
 		})
@@ -344,6 +399,10 @@ func appLabel(app core.AppUsage) string {
 	}
 	return app.Package
 }
+
+// resolveTimeout stops a spinner that will never end: a read whose result never
+// arrives must not leave the row busy forever.
+const resolveTimeout = 2 * time.Minute
 
 // gpuCellText never prints 0% for a device without GPU counters.
 func gpuCellText(available bool, percent float64) string {

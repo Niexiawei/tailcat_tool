@@ -466,9 +466,9 @@ go test ./internal/compat/    # 第三方 API 契约
 | 干预类型 | 只实现 3 种（`serialDetached`/`portChanged`/`portDrift`） | `adb kill-server` 会表现为多条提示 |
 | 契约测试 | 断言放在 `_test.go` 里（零二进制体积） | 只由 `go test` 触发 |
 | GPU 使用率 | 只读厂商 sysfs（kgsl/devfreq/MTK），读不到就标「不可用」，不做估算 | 多数设备 GPU 列显示「不可用」；逐进程 GPU 未实现 |
-| 应用名与图标 | 用 `pm path` 拉 base.apk 到临时文件，`apkparser` 读 manifest 的 label/icon，只缓存小图标 | 首次见到每个应用要拉几十 MB；自适应图标（XML 矢量）拿不到位图，退回首字母头像 |
+| 应用名与图标 | 用 `pm path` + `unzip -p` 只取 `AndroidManifest.xml`/`resources.arsc`/图标，`apkparser` 解析；没有 `unzip` 才回退整包；默认不解析，由用户按行或点刷新触发 | 自适应图标（XML 矢量）拿不到位图时退回首字母头像；依赖设备的 `unzip` |
 | 应用信息缓存 | 7 天有效期 + 包名/apk 路径/size/mtime 键，过期仍显示旧值并后台重抓 | 应用原地更新后最多 7 天内仍显示旧名字（或用户手动刷新）；`appmeta/` 目录 100 条 ~64 MB 上限 |
-| 采样范围 | 单次 `adb shell` 输出全部进程 + `/proc/stat` 等，2 秒一轮，只在资源页可见时运行 | 一次采样输出约几十 KB~1 MB，设备侧有 `/proc` 遍历开销；页面隐藏即停止 |
+| 采样范围 | 单次 `adb shell`（只用 shell 内建命令）输出全部进程 + `/proc/stat`，2 秒一轮；CPU/GPU 型号连上后只读一次；读数保留到断开连接 | 一次采样约 1 秒、几十 KB；页面隐藏即停止采样，但不清空读数 |
 
 ---
 
