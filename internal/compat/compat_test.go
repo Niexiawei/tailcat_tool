@@ -80,6 +80,8 @@ var (
 	_                   = components.TabsSegmented
 	_                   = components.Table
 	_                   = components.TableRow
+	_                   = components.Tooltip
+	_                   = ui.RoleTooltip
 	_                   = components.IconButton
 	_                   = components.IconButtonPlain
 	_ func() *ui.SVG    = lucide.CircleCheck

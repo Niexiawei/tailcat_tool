@@ -271,18 +271,20 @@ func (vm *ViewModel) deviceRow(c *ui.Context, profile core.Profile, temporary bo
 	if selected {
 		row.Background(theme.Selection)
 	}
+	line := session.State.Label()
+	switch {
+	case profile.DirectADB:
+		line += " · " + orPlaceholder(profile.DirectTarget, "未填地址")
+	case session.Port != 0:
+		line += " · " + itoa(session.Port)
+	}
 	row.Children(func() {
 		statusDot(c, session.State)
 		ui.Column(c).Gap(1).Children(func() {
-			components.Text(c, profile.Name).Bold().SingleLine()
-			line := session.State.Label()
-			switch {
-			case profile.DirectADB:
-				line += " · " + orPlaceholder(profile.DirectTarget, "未填地址")
-			case session.Port != 0:
-				line += " · " + itoa(session.Port)
-			}
-			components.Text(c, line).FontSize(11).SingleLine()
+			// The sidebar is narrow: a long name or a port line gets clipped,
+			// so each one carries its full text as a tooltip.
+			components.Tooltip(c, components.Text(c, profile.Name).Bold().SingleLine(), profile.Name)
+			components.Tooltip(c, components.Text(c, line).FontSize(11).SingleLine(), line)
 		})
 		if temporary {
 			components.Icon(c, lucide.Zap).Width(12).Height(12)

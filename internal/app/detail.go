@@ -85,11 +85,12 @@ func (vm *ViewModel) deviceCard(c *ui.Context, profile core.Profile) {
 	row := ui.ButtonBase(c)
 	row.FillWidth().Shrink(0).Padding(theme.Space(1.5), theme.Space(2)).Gap(theme.Space(1.5)).
 		Justify(ui.Start).AlignItems(ui.Center).Radius(theme.Radius).Border(1, theme.Border)
+	transport := vm.transportLine(profile, session)
 	row.Children(func() {
 		statusDot(c, session.State)
 		ui.Column(c).Gap(1).Grow(1).Children(func() {
-			components.Text(c, profile.Name).Bold().SingleLine()
-			components.Text(c, vm.transportLine(profile, session)).FontSize(11).SingleLine()
+			components.Tooltip(c, components.Text(c, profile.Name).Bold().SingleLine(), profile.Name)
+			components.Tooltip(c, components.Text(c, transport).FontSize(11).SingleLine(), transport)
 		})
 		components.Text(c, session.State.Label()).FontSize(11).TextColor(theme.TextMuted)
 	})

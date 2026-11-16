@@ -306,6 +306,7 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 行内 `Text` 不 `SingleLine()` | 长设备名把行撑高 | `.SingleLine()` |
 | 持锁调用 `Recorder` | 磁盘一慢，界面冻住 | 入队，由独立协程写 |
 | `ButtonGhost` 用在页面级动作上 | 按钮读成正文（无底色无边框），用户找不到入口 | 页面级动作用 `ButtonOutline`/`Secondary`/`Primary`；ghost 只留给文字里的链接与对话框里的「取消」 |
+| 单行文本被截断却不给全文 | `.SingleLine()` 只画省略号，用户拿不到完整名称/探测详情（如「没有有效连接凭据，请编辑设…」） | 每个可能被截断的 `SingleLine` 都要 `components.Tooltip(c, anchor, 全文)`：在 anchor 之后、同一帧内调用，忽略它的返回值（隐藏时无效）；悬停延迟由 MyGo 管（约 1 秒） |
 | 对话框一打开就自动跑批量作业（如「全部设备连通测试」） | 用户没同意就花掉每台 8 秒的探测，设备多时打开即卡；而且结果没人等 | 打开只展示、由「开始测试」发起；关闭对话框时 `Checker.Cancel()` 中止在跑的批次——看不见的结果不值得继续探测 |
 | 用内嵌横幅报一次性结果 | 同一句提示出现在两个槽位、不会消失，用户看不见也关不掉 | 事件走 `vm.Notify` / `vm.Fail`，页面只留状态 |
 | 每帧 `ui.TextBuffer.Set` | 选区与 caret 被重置，正在复制的日志跳走 | 只在渲染文本变化时写（`logState.text` 比对） |
@@ -335,6 +336,7 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 未连接终端 | `lineConsole` 单测：banner、回显、回车回调、转义序列吞掉 |
 | 动作顺序 | `Find("添加设备")`/`Find("临时连接")`/`Find("测试全部设备")` 的 `X` 递增 |
 | 对话框关闭动画 | 打开 → 关闭 → `Advance(20ms) + Frame()` 十次，任何跨帧持有 Element 的绘制回调都会 panic（`TestDialogsCloseWithoutPanic`） |
+| 截断文本有全文提示 | `Tester.Move` 到该元素中心 → `Advance(1500ms)` → `Frame()`，断言 `AccessByRole(ui.RoleTooltip, 全文)`；悬停前断言同一查询为空 |
 | 关闭对话框会中止批次 | 注入永久阻塞的 `Prober`（`blockingProber`），断言 `Running()` 后才点右上角「关闭」，再断言 `Wait()` 后没有行停在「正在测试」 |
 | 是提示条还是内嵌横幅 | 点完动作后断言文案出现、**没有**「关闭」按钮，且 `Advance(5s)` 后消失 |
 

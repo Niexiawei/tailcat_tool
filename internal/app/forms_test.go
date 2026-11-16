@@ -247,6 +247,46 @@ func TestReachabilityCloseCancelsTheRunningBatch(t *testing.T) {
 	}
 }
 
+func TestReachabilityTruncatedDetailShowsATooltip(t *testing.T) {
+	// A device without credentials fails with the long message the table can
+	// only show cut off.
+	creds := core.NewMemoryCredentialStore()
+	m := core.NewManager(core.ManagerOptions{
+		Configuration: core.Configuration{
+			Profiles: []core.Profile{{ID: uuid.New(), Name: "本地模拟器api30", RemotePort: 5555}},
+			Tools:    core.ToolSettings{ADB: os.Args[0]},
+		},
+		Credentials:     creds,
+		Identities:      core.NewIdentityStore(t.TempDir()),
+		Runner:          stubRunner{},
+		Locate:          func(string) (string, bool) { return "", false },
+		MonitorInterval: 3600 * 1e9,
+	})
+	vm := NewViewModel(m, func(string) (string, bool) { return "", false })
+	vm.openReachability()
+	tt := ui.NewTester(vm.ContentView, 1100, 700)
+	if err := tt.Click("开始测试"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	m.Reachability().Wait()
+	tt.Frame()
+	const full = "没有有效连接凭据，请编辑设备后重试"
+	if _, ok := tt.AccessByRole(ui.RoleTooltip, full); ok {
+		t.Fatal("the tooltip is showing before any hover")
+	}
+	rect, ok := tt.Find(full)
+	if !ok {
+		t.Fatalf("no detail cell; texts = %v", tt.Texts())
+	}
+	tt.Move(rect.X+rect.W/2, rect.Y+rect.H/2)
+	// MyGo owns the hover delay; one second of clock is enough for it.
+	tt.Advance(1500 * time.Millisecond)
+	tt.Frame()
+	if _, ok := tt.AccessByRole(ui.RoleTooltip, full); !ok {
+		t.Fatalf("hovering the truncated detail showed no tooltip; access = %v", tt.AccessAll())
+	}
+}
+
 func TestReachabilityStatusUsesGreenCheckAndRedCross(t *testing.T) {
 	th := &ui.Theme{Success: ui.Hex("#00ff00"), Danger: ui.Hex("#ff0000"), TextMuted: ui.Hex("#888888"), Accent: ui.Hex("#0000ff")}
 	check, green := reachStatus(th, core.ReachReachable)
@@ -397,4 +437,37 @@ func iconPointer(icon func() *ui.SVG) uintptr {
 		return 0
 	}
 	return reflect.ValueOf(icon).Pointer()
+}
+
+func TestTruncatedDeviceNamesShowATooltip(t *testing.T) {
+	vm := newTestViewModel(t)
+	// The sidebar is 220 wide and the card's text column is narrower still, so
+	// a long name is cut off with an ellipsis; hovering must give the full one.
+	long := "本地模拟器api30-实验室里那台专门跑回归的设备"
+	id := vm.Manager.Profiles()[0].ID
+	if _, err := vm.Manager.SaveDevice(core.SaveDeviceRequest{
+		ID: &id, Name: long, Address: testAddress, RemotePort: 5555,
+	}); err != nil {
+		t.Fatalf("SaveDevice() error: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		view func(c *ui.Context)
+		w, h int
+	}{
+		{"sidebar", vm.SidebarView, 220, 600},
+		{"index card", vm.ContentView, 700, 400},
+	} {
+		tt := ui.NewTester(tc.view, tc.w, tc.h)
+		rect, ok := tt.Find(long)
+		if !ok {
+			t.Fatalf("%s: no row for the long name; texts = %v", tc.name, tt.Texts())
+		}
+		tt.Move(rect.X+rect.W/2, rect.Y+rect.H/2)
+		tt.Advance(1500 * time.Millisecond)
+		tt.Frame()
+		if _, ok := tt.AccessByRole(ui.RoleTooltip, long); !ok {
+			t.Fatalf("%s: hovering the clipped name showed no tooltip", tc.name)
+		}
+	}
 }

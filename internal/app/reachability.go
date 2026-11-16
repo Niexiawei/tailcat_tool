@@ -83,7 +83,7 @@ func reachabilityTable(c *ui.Context, results []core.ReachabilityResult) {
 			components.TableRow(c, result.ID, result.Name+" "+result.State.Label(), false, func(col int) {
 				switch col {
 				case 0:
-					components.Text(c, result.Name).SingleLine()
+					components.Tooltip(c, components.Text(c, result.Name).SingleLine(), result.Name)
 				case 1:
 					icon, color := reachStatus(theme, result.State)
 					ui.Row(c).AlignItems(ui.Center).Gap(theme.Space(1)).Children(func() {
@@ -93,7 +93,10 @@ func reachabilityTable(c *ui.Context, results []core.ReachabilityResult) {
 				case 2:
 					components.Text(c, result.Latency).SingleLine()
 				case 3:
-					components.Text(c, reachDetail(result)).SingleLine()
+					// The column is narrow and the probe messages are long, so
+					// the full text belongs in a tooltip.
+					detail := reachDetail(result)
+					components.Tooltip(c, components.Text(c, detail).SingleLine(), detail)
 				}
 			})
 		}
