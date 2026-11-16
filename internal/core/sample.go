@@ -403,3 +403,65 @@ func cpuModelFromLine(line string) string {
 	}
 	return strings.TrimSpace(rest)
 }
+
+// StartResourceSampling re-reads the device every resourceInterval until
+// StopResourceSampling, so the page costs nothing while it is not open. It is
+// safe to call on every frame.
+func (m *Manager) StartResourceSampling(id uuid.UUID) {
+	m.mu.Lock()
+	if _, running := m.samplers[id]; running {
+		m.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.samplers[id] = cancel
+	interval := m.resourceInterval
+	generation := m.generations[id]
+	m.mu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			m.mu.Lock()
+			current := m.isCurrentLocked(id, generation)
+			m.mu.Unlock()
+			if !current {
+				return
+			}
+			if _, err := m.SampleResources(ctx, id); err != nil {
+				// A device that went away ends the loop; a transient busy
+				// device just misses this round.
+				m.mu.Lock()
+				current := m.isCurrentLocked(id, generation)
+				m.mu.Unlock()
+				if !current {
+					return
+				}
+			}
+		}
+	}()
+}
+
+// StopResourceSampling ends the loop and forgets what it read, so a device that
+// comes back cannot show the previous channel's numbers.
+func (m *Manager) StopResourceSampling(id uuid.UUID) {
+	m.mu.Lock()
+	m.stopResourceSamplingLocked(id)
+	delete(m.resources, id)
+	delete(m.sampleCounters, id)
+	m.notify()
+	m.mu.Unlock()
+}
+
+func (m *Manager) stopResourceSamplingLocked(id uuid.UUID) {
+	if cancel, ok := m.samplers[id]; ok {
+		cancel()
+		delete(m.samplers, id)
+	}
+}

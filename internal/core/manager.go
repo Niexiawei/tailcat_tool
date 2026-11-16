@@ -67,6 +67,7 @@ type Manager struct {
 	resources        map[uuid.UUID]ResourceSnapshot
 	sampleCounters   map[uuid.UUID]*resourceCounters
 	hardware         map[uuid.UUID]*hardwareInfo
+	samplers         map[uuid.UUID]context.CancelFunc
 
 	notice              string
 	nextTemporaryNumber int
@@ -152,6 +153,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		resources:           map[uuid.UUID]ResourceSnapshot{},
 		sampleCounters:      map[uuid.UUID]*resourceCounters{},
 		hardware:            map[uuid.UUID]*hardwareInfo{},
+		samplers:            map[uuid.UUID]context.CancelFunc{},
 		nextTemporaryNumber: 1,
 		monitorInterval:     interval,
 		resourceInterval:    resourceInterval,
@@ -581,12 +583,16 @@ func sanitizeError(err error) error {
 func (m *Manager) Disconnect(ctx context.Context, id uuid.UUID) {
 	m.mu.Lock()
 	m.stopMonitorLocked(id)
+	m.stopResourceSamplingLocked(id)
 	generation := uuid.New()
 	m.generations[id] = generation
 	runtime := m.runtimes[id]
 	delete(m.runtimes, id)
 	delete(m.retryCounts, id)
 	delete(m.nextRetries, id)
+	delete(m.resources, id)
+	delete(m.sampleCounters, id)
+	delete(m.hardware, id)
 	m.setStateLocked(id, func(s *Session) {
 		s.State = StateDisconnecting
 	})
@@ -648,10 +654,14 @@ func (m *Manager) Shutdown(ctx context.Context) {
 	}
 	m.mu.Lock()
 	for _, p := range m.temporary {
+		m.stopResourceSamplingLocked(p.ID)
 		delete(m.sessions, p.ID)
 		delete(m.generations, p.ID)
 		delete(m.retryCounts, p.ID)
 		delete(m.nextRetries, p.ID)
+		delete(m.resources, p.ID)
+		delete(m.sampleCounters, p.ID)
+		delete(m.hardware, p.ID)
 	}
 	m.temporary = nil
 	m.tempCredentials = map[uuid.UUID]string{}
