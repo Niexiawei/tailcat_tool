@@ -28,7 +28,7 @@
   - 未连接时终端里打印「设备未连接」并说明原因，输入的命令不执行、直接返回，同时弹出错误提示。
 - 技术文档：`docs/architecture.md`（架构、状态机、两种连接方式、干预检测、安全设计、决策记录）、`docs/build-notes.md`（依赖版本、体积与构建耗时实测）、`docs/ui-and-console.md`（界面布局、路由与内嵌终端）。
 - 仓库规则 `AGENTS.md`，说明硬约束、TDD 流程、常见改动路径与红线，并规定 GUI 一律优先使用 onevra 组件。
-- 变更记录 `docs/CHANGELOG.md`（本文件）与 `docs/superpowers/plans/2026-11-15-gui-layout-and-direct-device-fixes.md`（本轮的布局修复方案）。
+- 变更记录 `docs/CHANGELOG.md`（本文件）；实施计划 `docs/superpowers/plans/2026-11-15-gui-layout-and-direct-device-fixes.md`（本轮布局修复）与 `docs/superpowers/plans/2026-11-16-remaining-work.md`（打包、真机验收、启动错误页、聚合提示、历史界面、托盘提示）。
 
 ### 变更
 
