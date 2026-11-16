@@ -501,6 +501,8 @@ go test ./internal/compat/    # 第三方 API 契约
 | 外部干预 | `internal/core/attention.go`、`internal/app/attention.go` |
 | 历史 | `internal/history/sqlite.go`、`internal/core/history.go` |
 | 界面结构 | `internal/app/state.go`、`internal/app/detail.go` |
+| 设备详情页与资源页 | `docs/device-detail-page.md`（采样脚本、进程分组、应用信息缓存、页面优化清单） |
+| 资源采样与应用信息 | `internal/core/sample.go`、`internal/core/procfs.go`、`internal/appmeta/` |
 | 表单与校验 | `internal/app/editor.go`、`internal/app/transfer.go` |
 | 第三方契约 | `internal/compat/compat_test.go` |
 | 计划与执行账本 | `docs/superpowers/plans/2026-11-15-tailcat-manager-go-port.md`、`.superpowers/sdd/<plan>/progress.md`（git-ignore，本地保留） |
