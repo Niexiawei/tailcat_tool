@@ -44,7 +44,7 @@ func (vm *ViewModel) SettingsView(c *ui.Context) {
 						vm.SettingsError = err.Error()
 					} else {
 						vm.SettingsOpen = false
-						vm.Notice = "已保存工具设置"
+						vm.Notify("已保存工具设置")
 					}
 				}
 			})

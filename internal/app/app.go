@@ -33,7 +33,9 @@ type App struct {
 // New builds the app from the environment.
 func New(env Environment) *App {
 	vm := NewViewModel(env.Manager, env.Locate)
-	vm.Notice = env.Notice
+	// Startup problems (a configuration or history store that would not open)
+	// surface as an error toast instead of a banner that only some page shows.
+	vm.FailText(env.Notice)
 	vm.Demo = env.Demo
 	return &App{env: env, vm: vm}
 }
@@ -115,7 +117,7 @@ func (a *App) installComponent(component core.ToolComponent) {
 		if err != nil {
 			a.vm.Fail(err)
 		} else {
-			a.vm.Notice = component.Label() + " 已配置完成"
+			a.vm.Notify(component.Label() + " 已配置完成")
 		}
 		mygo.RunOnMain(func() { a.shell.Window().Invalidate() })
 	}()

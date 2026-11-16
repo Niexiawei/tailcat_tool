@@ -648,3 +648,41 @@ func TestSidebarFooterOpensToolSettings(t *testing.T) {
 		t.Fatal("the footer action did not open the settings dialog")
 	}
 }
+
+func TestStartupNoticeArrivesAsAToast(t *testing.T) {
+	m, _ := newTestManager(t)
+	a := New(Environment{
+		Manager: m,
+		Locate:  func(string) (string, bool) { return "", false },
+		Notice:  "历史库无法打开，本次运行的历史不会保存：disk full",
+	})
+	queued := a.vm.drainToasts()
+	if len(queued) != 1 {
+		t.Fatalf("startup notice queued %d toasts, want 1", len(queued))
+	}
+	if queued[0].Type != components.ToastError || !strings.Contains(queued[0].Description, "历史库无法打开") {
+		t.Fatalf("startup toast = %+v", queued[0])
+	}
+}
+
+func TestSavedToolSettingsIsAToastNotInlineText(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.openSettings()
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if err := tt.Click("保存"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if !tt.HasText("已保存工具设置") {
+		t.Fatalf("no toast after saving; texts = %v", tt.Texts())
+	}
+	// A toast is transient and has no dismiss button; the banner it replaced
+	// stayed on the page until the user closed it.
+	if tt.HasText("关闭") {
+		t.Fatalf("the message still has an inline dismiss button; texts = %v", tt.Texts())
+	}
+	tt.Advance(5 * time.Second)
+	tt.Frame()
+	if tt.HasText("已保存工具设置") {
+		t.Fatalf("the message did not expire, so it is not a toast; texts = %v", tt.Texts())
+	}
+}

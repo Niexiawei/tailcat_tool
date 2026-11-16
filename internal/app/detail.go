@@ -25,14 +25,6 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 	vm.SettingsView(c)
 	vm.ReachabilityView(c)
 	vm.AttentionDialog(c)
-	if note := vm.Notice; note != "" {
-		ui.Row(c).FillWidth().Padding(12, 16).Gap(8).Children(func() {
-			components.Text(c, note).FontSize(11)
-			if components.Button(c, "关闭", components.ButtonLink).Clicked() {
-				vm.Notice = ""
-			}
-		})
-	}
 }
 
 // routedPage builds the page the router shows.

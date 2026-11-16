@@ -140,8 +140,9 @@ func TestDemoModeUsesSimulatedDevices(t *testing.T) {
 	if !env.Demo {
 		t.Fatal("the demo environment is not marked as a demo")
 	}
-	vm := New(env)
-	vm.vm.Notice = "demo"
+	if app := New(env); app.vm.Demo != env.Demo {
+		t.Fatal("the view model did not inherit the demo flag")
+	}
 	profiles := env.Manager.Profiles()
 	if len(profiles) != 2 {
 		t.Fatalf("demo has %d devices, want 2", len(profiles))

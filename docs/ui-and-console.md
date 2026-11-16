@@ -140,7 +140,7 @@ ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), Space(2), 0, Space(2)).Chil
 
 - **分组**：`components.Accordion` 两个 `group.Item`，标题带数量（`我的设备 (3)` / `临时设备 (空)`），展开状态在 `ViewModel.SavedOpen / TemporaryOpen`，默认都展开。空组给一句说明而不是空白。
 - **设备行**：`ui.ButtonBase(c).FillWidth().Shrink(0).Justify(ui.Start).AlignItems(ui.Center).Radius(t.Radius)`，选中时 `Background(t.Selection)`。`ButtonBase` 内部是 `coreRow(c).Center()`，**必须显式 `Justify(Start)`**，否则内容居中。
-- **底栏**：两个工具的健康状态（缺失时给「安装」按钮）、一行提示文本。不放动作按钮，也不放通道计数（它与设备行上的状态点重复，且无法操作）。
+- **底栏**：两个工具的健康状态（缺失时给「安装」按钮），以及带图标的「工具设置」动作（它配置的就是这两行显示的工具）。不放通道计数（它与设备行上的状态点重复，且无法操作），也不放提示文本。
 
 ## 5. 内嵌终端
 
@@ -215,9 +215,12 @@ vm.Notify("已复制…")   // 成功级：3 秒
 |---|---|
 | 连接/断开失败、探测失败、刷新信息失败、屏幕控制失败 | 错误提示 |
 | 安装 APK、上传、下载、终端命令失败、组件安装失败 | 错误提示 |
-| 复制成功、保存临时设备成功 | 成功提示 |
+| 复制成功、保存临时设备成功、工具设置已保存、组件安装完成、设备「等待处理」 | 成功/信息提示条 |
+| 启动问题（配置、历史库、凭据库打不开） | 错误提示条（10 秒）+ stderr 一行，**不再**是页面横幅 |
 | 表单字段校验（地址为空、端口越界、名称过长） | **内联**文案：错误指向具体输入框，弹窗反而找不到落点 |
 | 中继历史补录（`relayHistory`）失败 | **不提示**：它只是编辑器的便利数据，不影响设备是否保存成功 |
+
+**横幅已经没有了。** 早期的 `vm.Notice` 是一条内嵌横幅，同一个字符串在内容区底部和侧栏底栏各画一遍，用户很难注意到、也不会自己消失。规则现在是：**一次性反馈（事件）走提示条，页面上的文字只描述状态**——连接失败原因（`session.Err`）、表单字段校验、终端不可用、连通测试的逐行结果都属于状态，留在原处。
 
 ### 6.3 不要静默吞掉错误
 
@@ -290,6 +293,7 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 行内 `Text` 不 `SingleLine()` | 长设备名把行撑高 | `.SingleLine()` |
 | 持锁调用 `Recorder` | 磁盘一慢，界面冻住 | 入队，由独立协程写 |
 | `ButtonGhost` 用在页面级动作上 | 按钮读成正文（无底色无边框），用户找不到入口 | 页面级动作用 `ButtonOutline`/`Secondary`/`Primary`；ghost 只留给文字里的链接与对话框里的「取消」 |
+| 用内嵌横幅报一次性结果 | 同一句提示出现在两个槽位、不会消失，用户看不见也关不掉 | 事件走 `vm.Notify` / `vm.Fail`，页面只留状态 |
 | 每帧 `ui.TextBuffer.Set` | 选区与 caret 被重置，正在复制的日志跳走 | 只在渲染文本变化时写（`logState.text` 比对） |
 | 在 `components.Dialog` 的内容里放 `components.Tabs(..., TabsSegmented, ...)` | 关闭对话框时崩 `ui: element from pass N used in pass M`：分段控件的 `Draw` 回调闭包住了"选中的那个 tab"元素，而 MyGo 的 overlay 关闭动画会在**不重建**的情况下继续绘制旧面板 | 对话框内用 `ui.Segmented`（mygo 原生分段控件）或 `components.Radio`；`components.Tabs` 只用在常驻页面上（如设备页的三个页签） |
 | `TrackScroll` 挂在不是滚动容器的元素上 | `MaxY` 一直是 0，跟随尾部失效 | `TrackScroll` 只接管 `Scroll`/`List` 这类容器；`TextAreaBuffer` 自带 `flagScrollY`，实测可用，但换控件时要重新确认 |

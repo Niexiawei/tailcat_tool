@@ -58,7 +58,7 @@ func (vm *ViewModel) AttentionDialog(c *ui.Context) {
 					vm.Manager.AckAttention(attention.DeviceID)
 					vm.AttentionOpen = false
 					open = false
-					vm.Notice = "该设备保持“等待处理”，可随时重新打开提示"
+					vm.Notify("该设备保持“等待处理”，可随时重新打开提示")
 				}
 			})
 		})

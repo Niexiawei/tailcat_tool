@@ -37,8 +37,6 @@ type ViewModel struct {
 	ConsoleTab int
 	// Demo marks the simulated environment.
 	Demo bool
-	// Notice is the one-line banner; empty hides it.
-	Notice string
 	// PendingEditor is the device form that is open, nil when closed.
 	PendingEditor *EditorRequest
 
@@ -378,9 +376,6 @@ func (vm *ViewModel) SidebarFooter(c *ui.Context) {
 		}
 		if actionButton(c, lucide.Settings, "工具设置", components.ButtonSecondary).Clicked() {
 			vm.openSettings()
-		}
-		if notice := vm.Notice; notice != "" {
-			components.Text(c, notice).FontSize(11)
 		}
 	})
 }
