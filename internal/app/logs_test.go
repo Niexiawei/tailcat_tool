@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -141,5 +142,45 @@ func TestRunningTasksFiltersByDeviceAndState(t *testing.T) {
 	}
 	if got := runningTasks(tasks, mine); len(got) != 1 {
 		t.Fatalf("runningTasks() = %+v, want only this device's running task", got)
+	}
+}
+
+func TestLogPagePausesWhileReadingUp(t *testing.T) {
+	vm := newTestViewModel(t)
+	profile := vm.Manager.Profiles()[0]
+	base := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	session := core.Session{}
+	for i := 0; i < 200; i++ {
+		session.Logs = append(session.Logs, core.SessionLog{At: base.Add(time.Duration(i) * time.Second), Text: "第" + itoa(i) + "行"})
+	}
+	// The page runs against this snapshot on every frame, the way the device
+	// page passes the manager's session.
+	tt := ui.NewTester(func(c *ui.Context) { vm.logPage(c, profile, session) }, 900, 700)
+	tt.Frame()
+	state := vm.logState(profile.ID)
+	if state.scroll.MaxY == 0 {
+		t.Fatal("the log page does not scroll")
+	}
+
+	state.scroll.Y = 0
+	tt.Frame()
+	if state.follow {
+		t.Fatal("scrolling up must stop following")
+	}
+	session.Logs = append(session.Logs, core.SessionLog{At: base.Add(time.Hour), Text: "新的一行"})
+	tt.Frame()
+	// Rewriting the buffer moves the caret to the tail and drags the view
+	// with it, so a paused page must not touch the text at all.
+	if strings.Contains(state.text, "新的一行") {
+		t.Fatal("a paused log page rewrote the text under the reader")
+	}
+	if state.scroll.Y > 1 {
+		t.Fatalf("the view jumped to y=%.0f while the reader was scrolled up", state.scroll.Y)
+	}
+
+	state.scroll.Y = math.MaxFloat32
+	tt.Frame()
+	if !strings.Contains(state.text, "新的一行") {
+		t.Fatalf("returning to the tail did not catch up: %q", state.text)
 	}
 }

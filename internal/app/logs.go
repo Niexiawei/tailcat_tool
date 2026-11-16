@@ -107,13 +107,17 @@ func (vm *ViewModel) logState(id uuid.UUID) *logState {
 func (vm *ViewModel) logPageText(id uuid.UUID, session core.Session) {
 	state := vm.logState(id)
 	state.follow = state.text == "" || state.scroll.Y >= state.scroll.MaxY-4
+	if !state.follow {
+		// Reading up: leave the text alone until the reader comes back to the
+		// tail. Rewriting it reloads the editor, whose caret sits at the end,
+		// and the reload would drag the view back down on every new line.
+		return
+	}
 	if text := logText(deviceTimeline(session, deviceTasks(vm.Manager.Tasks(), id))); text != state.text {
 		state.text = text
 		state.buffer.Set(text)
 	}
-	if state.follow {
-		state.scroll.Y = math.MaxFloat32
-	}
+	state.scroll.Y = math.MaxFloat32
 }
 
 // logPage renders the log tab: a header line, the optional cancel action and
