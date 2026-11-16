@@ -2,12 +2,15 @@ package app
 
 import (
 	"context"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo/ui"
+	"github.com/google/uuid"
 )
 
 func TestDeviceEditorValidation(t *testing.T) {
@@ -121,17 +124,147 @@ func TestLogPageShowsFinishedTasks(t *testing.T) {
 func TestReachabilityTableRows(t *testing.T) {
 	vm := newTestViewModel(t)
 	vm.openReachability()
-	deadline := time.Now().Add(3 * time.Second)
-	for vm.Manager.Reachability().Running() && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
 	tt := ui.NewTester(vm.ContentView, 900, 700)
+	if err := tt.Click("开始测试"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	vm.Manager.Reachability().Wait()
+	tt.Frame()
 	joined := strings.Join(tt.Texts(), " | ")
 	if !strings.Contains(joined, "全部设备连通测试") {
 		t.Fatalf("reachability dialog missing: %s", joined)
 	}
 	if !strings.Contains(joined, "E245") {
 		t.Fatalf("reachability table lacks the device: %s", joined)
+	}
+}
+
+func TestReachabilityWaitsForTheUserToStart(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.openReachability()
+	if vm.Manager.Reachability().Running() {
+		t.Fatal("opening the dialog started probing on its own")
+	}
+	if rows := vm.Manager.Reachability().Results(); len(rows) != 0 {
+		t.Fatalf("opening the dialog built %d rows before the user asked", len(rows))
+	}
+}
+
+func TestReachabilityStartsFromTheButton(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.openReachability()
+	tt := ui.NewTester(vm.ContentView, 900, 700)
+	if !tt.HasText("还没有测试过") {
+		t.Fatalf("the dialog does not explain the empty table: %v", tt.Texts())
+	}
+	if err := tt.Click("开始测试"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	// The fake prober answers instantly, so wait for the batch instead of
+	// sampling Running() the same frame.
+	vm.Manager.Reachability().Wait()
+	rows := vm.Manager.Reachability().Results()
+	if len(rows) == 0 {
+		t.Fatal("「开始测试」did not start the batch")
+	}
+	for _, row := range rows {
+		if row.State == core.ReachQueued || row.State == core.ReachTesting {
+			t.Fatalf("row %q never finished", row.State.Label())
+		}
+	}
+}
+
+func TestReachabilityCloseButtonClosesTheDialog(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.openReachability()
+	tt := ui.NewTester(vm.ContentView, 900, 700)
+	if err := tt.Click("关闭"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if vm.ReachabilityOpen {
+		t.Fatal("the corner close button did not close the dialog")
+	}
+}
+
+// blockingProber holds every probe until the test releases it, so a batch can
+// be closed while it is genuinely still running.
+type blockingProber struct{ release chan struct{} }
+
+func (p blockingProber) Ping(ctx context.Context, _ uuid.UUID, _ string, _ int, _ core.RelayConfig) (core.PingOutcome, error) {
+	select {
+	case <-p.release:
+		return core.PingOutcome{Latency: time.Millisecond, Route: "DERP"}, nil
+	case <-ctx.Done():
+		return core.PingOutcome{}, core.ErrCancelled
+	}
+}
+
+func TestReachabilityCloseCancelsTheRunningBatch(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	creds := core.NewMemoryCredentialStore()
+	m := core.NewManager(core.ManagerOptions{
+		Configuration: core.Configuration{
+			Profiles: []core.Profile{{ID: uuid.New(), Name: "E245", RemotePort: 5555}},
+			Tools:    core.ToolSettings{ADB: os.Args[0]},
+		},
+		Credentials:     creds,
+		Identities:      core.NewIdentityStore(t.TempDir()),
+		Runner:          stubRunner{},
+		Locate:          func(string) (string, bool) { return "", false },
+		MonitorInterval: 3600 * 1e9,
+		Prober:          blockingProber{release: release},
+	})
+	for _, profile := range m.Profiles() {
+		if err := creds.Write(testAddress, profile.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	vm := NewViewModel(m, func(string) (string, bool) { return "", false })
+	vm.openReachability()
+	tt := ui.NewTester(vm.ContentView, 900, 700)
+	if err := tt.Click("开始测试"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !m.Reachability().Running() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !m.Reachability().Running() {
+		t.Fatal("the batch never started, so closing it proves nothing")
+	}
+	if err := tt.Click("关闭"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if vm.ReachabilityOpen {
+		t.Fatal("closing the dialog mid-test did not close it")
+	}
+	m.Reachability().Wait()
+	for _, row := range m.Reachability().Results() {
+		if row.State == core.ReachQueued || row.State == core.ReachTesting {
+			t.Fatalf("closing the dialog left a row in %q", row.State.Label())
+		}
+	}
+}
+
+func TestReachabilityStatusUsesGreenCheckAndRedCross(t *testing.T) {
+	th := &ui.Theme{Success: ui.Hex("#00ff00"), Danger: ui.Hex("#ff0000"), TextMuted: ui.Hex("#888888"), Accent: ui.Hex("#0000ff")}
+	check, green := reachStatus(th, core.ReachReachable)
+	if check == nil || green != th.Success {
+		t.Fatalf("reachable row uses color %v, want the success color", green)
+	}
+	cross, red := reachStatus(th, core.ReachUnreachable)
+	if cross == nil || red != th.Danger {
+		t.Fatalf("unreachable row uses color %v, want the danger color", red)
+	}
+	if _, failed := reachStatus(th, core.ReachFailed); failed != th.Danger {
+		t.Fatalf("failed row uses color %v, want the danger color", failed)
+	}
+	if iconPointer(check) == iconPointer(cross) {
+		t.Fatal("success and failure share one icon")
+	}
+	if _, wait := reachStatus(th, core.ReachQueued); wait != th.TextMuted {
+		t.Fatalf("queued row uses color %v, want the muted color", wait)
 	}
 }
 
@@ -256,4 +389,12 @@ func TestClosingTheEditorDoesNotPanic(t *testing.T) {
 	if vm.PendingEditor != nil {
 		t.Fatal("the editor did not close")
 	}
+}
+
+// iconPointer identifies an icon accessor, so a test can tell two icons apart.
+func iconPointer(icon func() *ui.SVG) uintptr {
+	if icon == nil {
+		return 0
+	}
+	return reflect.ValueOf(icon).Pointer()
 }

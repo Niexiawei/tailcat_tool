@@ -79,6 +79,13 @@ var (
 	_                   = components.Tabs
 	_                   = components.TabsSegmented
 	_                   = components.Table
+	_                   = components.TableRow
+	_                   = components.IconButton
+	_                   = components.IconButtonPlain
+	_ func() *ui.SVG    = lucide.CircleCheck
+	_ func() *ui.SVG    = lucide.CircleX
+	_ func() *ui.SVG    = lucide.Play
+	_ func() *ui.SVG    = lucide.X
 	_                   = components.Dialog
 	_                   = components.AlertDialog
 	_                   = components.Collapsible
