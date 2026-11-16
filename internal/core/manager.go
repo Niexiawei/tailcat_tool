@@ -62,6 +62,12 @@ type Manager struct {
 	recorder    Recorder
 	checker     *Checker
 
+	appMeta          AppMetaSource
+	resourceInterval time.Duration
+	resources        map[uuid.UUID]ResourceSnapshot
+	sampleCounters   map[uuid.UUID]*resourceCounters
+	hardware         map[uuid.UUID]*hardwareInfo
+
 	notice              string
 	nextTemporaryNumber int
 
@@ -92,9 +98,14 @@ type ManagerOptions struct {
 	Prober Prober
 	// Recorder persists tasks, logs and reachability results; nil keeps
 	// everything in memory.
-	Recorder        Recorder
-	Locate          LocateTool
-	MonitorInterval time.Duration
+	Recorder Recorder
+	Locate   LocateTool
+	// AppMeta supplies application names and icons; nil means the resource
+	// page shows package names.
+	AppMeta AppMetaSource
+	// ResourceInterval is how often an open resource page re-reads a device.
+	ResourceInterval time.Duration
+	MonitorInterval  time.Duration
 	// ConnectPollInterval is the delay between get-state polls while
 	// connecting; tests use a small value.
 	ConnectPollInterval time.Duration
@@ -110,6 +121,10 @@ func NewManager(opts ManagerOptions) *Manager {
 	pollInterval := opts.ConnectPollInterval
 	if pollInterval <= 0 {
 		pollInterval = connectPollInterval
+	}
+	resourceInterval := opts.ResourceInterval
+	if resourceInterval <= 0 {
+		resourceInterval = defaultResourceInterval
 	}
 	m := &Manager{
 		changed:             make(chan struct{}, 1),
@@ -134,8 +149,13 @@ func NewManager(opts ManagerOptions) *Manager {
 		taskCancels:         map[uuid.UUID]context.CancelFunc{},
 		taskDone:            map[uuid.UUID]chan struct{}{},
 		attention:           map[uuid.UUID]Attention{},
+		resources:           map[uuid.UUID]ResourceSnapshot{},
+		sampleCounters:      map[uuid.UUID]*resourceCounters{},
+		hardware:            map[uuid.UUID]*hardwareInfo{},
 		nextTemporaryNumber: 1,
 		monitorInterval:     interval,
+		resourceInterval:    resourceInterval,
+		appMeta:             opts.AppMeta,
 		connectPoll:         pollInterval,
 		ctx:                 ctx,
 		cancel:              cancel,
