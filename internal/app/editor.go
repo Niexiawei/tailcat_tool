@@ -191,12 +191,7 @@ func (vm *ViewModel) EditorView(c *ui.Context) {
 				field(c, "远端 ADB 端口", &vm.EditorDraft.RemotePort, false)
 				ui.Column(c).Gap(3).Children(func() {
 					components.Text(c, "DERP 中继").FontSize(11)
-					// mygo's own segmented control, not components.Tabs: the
-					// onevra one keeps the chosen tab as an Element inside its
-					// paint callback, and a dialog's exit animation paints the
-					// old layer without rebuilding it, which panics with
-					// "element from pass N used in pass M".
-					ui.Segmented(c, &vm.EditorDraft.RelayTab, "官方默认", "自定义")
+					segmentedChoice(c, &vm.EditorDraft.RelayTab, "官方默认", "自定义")
 					if vm.EditorDraft.RelayTab == 1 {
 						vm.relaySourceFields(c)
 					}
@@ -246,6 +241,52 @@ func (vm *ViewModel) connectionModeRadio(c *ui.Context) {
 		components.Radio(c, &vm.EditorDraft.Mode, "tailcat", "通过 Tailcat 转发")
 		components.Radio(c, &vm.EditorDraft.Mode, "adb", "本地 ADB 直连")
 	})
+}
+
+// segmentedChoice is a two-way switch drawn the way the library draws its
+// segmented tabs (recessed track, raised thumb), because components.Tabs cannot
+// be used inside a dialog: it keeps the chosen tab as an Element in its paint
+// callback, and MyGo paints a closing dialog without rebuilding it, which
+// panics with "element from pass N used in pass M".
+func segmentedChoice(c *ui.Context, selected *int, labels ...string) ui.Element {
+	theme := c.Theme()
+	parts := ui.SegmentedBase(c, selected, len(labels))
+	track := parts.Track
+	pill := theme.Space(20)
+	track.AlignItems(ui.Stretch).Padding(theme.Space(.5)).Gap(theme.Space(.5)).
+		Radius(pill).Background(theme.Text.Alpha(.06)).AlignSelf(ui.Start)
+	face, shadow := raisedFace(theme)
+	track.Children(func() {
+		for i, label := range labels {
+			segment := parts.Segment(i).Padding(theme.Space(1.5), theme.Space(3)).Radius(pill)
+			chosen := i == *selected
+			if chosen {
+				segment.TextColor(theme.Text).Background(face).Shadow(0, 1, 2, 0, shadow)
+			} else {
+				segment.TextColor(theme.Text.Alpha(.6))
+				if segment.Hovered() {
+					segment.Background(theme.Text.Alpha(.04))
+				}
+			}
+			segment.Children(func() {
+				text := components.Text(c, label).SingleLine()
+				if chosen {
+					text.FontWeight(600)
+				}
+			})
+		}
+	})
+	return track
+}
+
+// raisedFace returns the face and cast shadow of a control raised off the
+// surface, as the chosen segment of a segmented track is drawn: a lighter
+// surface in either appearance.
+func raisedFace(theme *ui.Theme) (face, shadow ui.Color) {
+	if theme.Dark {
+		return theme.SurfaceHover, ui.RGBA(0, 0, 0, .4)
+	}
+	return theme.Surface, ui.RGBA(0, 0, 0, .14)
 }
 
 // relayHistoryOptions turns the recorded sources into the editor's history
