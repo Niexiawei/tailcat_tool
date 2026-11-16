@@ -136,6 +136,43 @@ vm.Router.View(c, func(r *ui.Route) {
 
 **不要**给动作只放文字：一行同尺寸的文字按钮读起来像正文（见 §10 的幽灵按钮一行）。
 
+### 3.6 对话框的固定写法
+
+所有 `components.Dialog` 都按同一套骨架排，`internal/app/reachability.go` 是完整例子：
+
+```go
+components.Dialog(c, &open, components.DialogOptions{Label: title}, func(panel ui.Element) {
+	panel.Padding(18).Gap(10).Width(760)
+	panel.Children(func() {
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Justify(ui.SpaceBetween).Gap(12).Children(func() {
+			components.Text(c, title).FontSize(18).Bold()
+			if components.IconButton(c, lucide.X(), "关闭", components.IconButtonPlain).Clicked() {
+				vm.closeReachability() // 关窗 + 中止后台批次
+				open = false
+			}
+		})
+		components.Text(c, "一句话说明它做什么、代价是什么。").FontSize(11).TextColor(theme.TextMuted)
+		// 内容：表格或表单
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(12).Children(func() {
+			if actionButton(c, lucide.Play, "开始测试", components.ButtonPrimary).Disabled(running).Clicked() {
+				vm.Manager.TestAllDevices()
+			}
+		})
+	})
+})
+if !open {
+	vm.closeReachability() // Esc、点遮罩、右上角 ✕ 都走到这里
+}
+```
+
+- **关闭只放右上角一个图标按钮**（`components.IconButton` + `lucide.X()`，`Label` 写「关闭」）。底栏不放「取消 / 关闭 / 完成」，只放这个对话框真正要做的那**一件**事；主作用按钮带图标、用 `ButtonPrimary`。
+  目前只有「全部设备连通测试」是这个形状；「添加设备 / 工具设置 / 上传下载」底栏还留着文字的「关闭」，迁移时照抄上面这段即可（在那之前，底栏里紧挨主按钮的次要动作仍用幽灵样式，见 §10 幽灵按钮一行）。
+- **`if !open` 是唯一的关闭出口**：Esc、遮罩、✕ 都会把它置为 false，收尾（中止后台批次、丢弃草稿）只写这一处。
+- **慢的、批量的、耗网络的事情由用户点按钮发起**，打开对话框不自动跑；关闭时中止它——看不见的结果不值得继续探测。
+- **结果要一眼看懂**：成功/失败同时给文字和图标，颜色取 `theme.Success` / `theme.Danger`（映射集中在一个纯函数 `reachStatus` 里，测试直接断言颜色）。
+- **表格用 `components.Table` + `TableRow`**，不要手拼行：列宽拖动、表头、上下键移动焦点都是组件给的。
+- **可能被截断的单行文本**都要挂 `components.Tooltip` 给全文（见 §10）。
+
 ## 4. 侧栏
 
 ```go
@@ -146,6 +183,7 @@ ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), Space(2), 0, Space(2)).Chil
 
 - **分组**：`components.Accordion` 两个 `group.Item`，标题带数量（`我的设备 (3)` / `临时设备 (空)`），展开状态在 `ViewModel.SavedOpen / TemporaryOpen`，默认都展开。空组给一句说明而不是空白。
 - **设备行**：`ui.ButtonBase(c).FillWidth().Shrink(0).Justify(ui.Start).AlignItems(ui.Center).Radius(t.Radius)`，选中时 `Background(t.Selection)`。`ButtonBase` 内部是 `coreRow(c).Center()`，**必须显式 `Justify(Start)`**，否则内容居中。
+- **提示**：设备行的名称与状态行都挂了 `components.Tooltip`，侧栏只有 220 宽，长名字必然被截断。
 - **底栏**：两个工具的健康状态（缺失时给「安装」按钮），以及带图标的「工具设置」动作（它配置的就是这两行显示的工具）。不放通道计数（它与设备行上的状态点重复，且无法操作），也不放提示文本。
 
 ## 5. 内嵌终端
