@@ -199,7 +199,7 @@ func (vm *ViewModel) devicePage(c *ui.Context, profile core.Profile) {
 			components.Tabs(c, &vm.ConsoleTab, components.TabsSegmented, "设备 Shell", "ADB 命令")
 			vm.consoleView(c, profile, session)
 		case 2:
-			vm.logs(c, session)
+			vm.logPage(c, profile, session)
 		default:
 			vm.overview(c, profile, session)
 		}
@@ -272,21 +272,6 @@ func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.
 		})
 
 		components.Text(c, "任务始终绑定启动时的设备和 ADB 入口。").FontSize(11)
-	})
-}
-
-func (vm *ViewModel) logs(c *ui.Context, session core.Session) {
-	ui.Column(c).Fill().Gap(3).Children(func() {
-		if len(session.Logs) == 0 {
-			components.Text(c, "暂无通道日志").FontSize(11)
-			return
-		}
-		for _, entry := range session.Logs {
-			ui.Row(c).Gap(8).Children(func() {
-				components.Text(c, entry.At.Format("15:04:05")).FontSize(11)
-				components.Text(c, entry.Text).FontSize(11)
-			})
-		}
 	})
 }
 

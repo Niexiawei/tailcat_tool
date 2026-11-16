@@ -26,6 +26,7 @@
   - **设备 Shell**：已连接时就是 `adb -s <serial> shell`，命令在该设备的 shell 中执行；
   - **ADB 命令**：按行执行任意 adb 子命令（`pull`、`push`、`shell`、`install` …），不需要写 `adb` 与 `-s`，命令作为任务记录并进入历史；
   - 未连接时终端里打印「设备未连接」并说明原因，输入的命令不执行、直接返回，同时弹出错误提示。
+- 设备页「日志」改为只读文本视图：可滚动、可选中复制，并按时间合并通道日志与设备任务；内容为空时给一句说明而不是空白框。
 - 技术文档：`docs/architecture.md`（架构、状态机、两种连接方式、干预检测、安全设计、决策记录）、`docs/build-notes.md`（依赖版本、体积与构建耗时实测）、`docs/ui-and-console.md`（界面布局、路由与内嵌终端）。
 - 仓库规则 `AGENTS.md`，说明硬约束、TDD 流程、常见改动路径与红线，并规定 GUI 一律优先使用 onevra 组件。
 - 变更记录 `docs/CHANGELOG.md`（本文件）；实施计划 `docs/superpowers/plans/2026-11-15-gui-layout-and-direct-device-fixes.md`（本轮布局修复）与 `docs/superpowers/plans/2026-11-16-remaining-work.md`（打包、真机验收、启动错误页、聚合提示、历史界面、托盘提示）。

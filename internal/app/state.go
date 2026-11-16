@@ -75,6 +75,8 @@ type ViewModel struct {
 
 	// consoles holds the embedded terminal of each device.
 	consoles map[uuid.UUID]*consoleHost
+	// logStates holds the log page's buffer and scroll position per device.
+	logStates map[uuid.UUID]*logState
 }
 
 // Fail reports an error as an error-level toast.
