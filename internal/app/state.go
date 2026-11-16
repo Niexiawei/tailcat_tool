@@ -312,6 +312,19 @@ func statusDot(c *ui.Context, state core.ConnectionState) {
 	ui.Column(c).Width(8).Height(8).Radius(4).Background(color)
 }
 
+// actionButton is a labelled button with a leading icon. Window-level actions
+// use it, so a row of them reads as actions rather than as body text.
+func actionButton(c *ui.Context, icon func() *ui.SVG, label string, variant components.ButtonVariant) ui.Element {
+	theme := c.Theme()
+	size := max(float32(12), theme.Rem(.875))
+	b := components.Button(c, "", variant).Label(label)
+	b.Gap(theme.Space(1)).Children(func() {
+		components.Icon(c, icon).Size(size, size)
+		components.Text(c, label).SingleLine()
+	})
+	return b
+}
+
 // SidebarView is the scrolling device list. The floating window header sits
 // above it, so it starts below HeaderHeight.
 func (vm *ViewModel) SidebarView(c *ui.Context) {
@@ -362,6 +375,9 @@ func (vm *ViewModel) SidebarFooter(c *ui.Context) {
 	ui.Column(c).FillWidth().Padding(theme.Space(2), theme.Space(2.5)).Gap(theme.Space(1.5)).Children(func() {
 		for _, component := range core.AllTools() {
 			vm.toolRow(c, component)
+		}
+		if actionButton(c, lucide.Settings, "工具设置", components.ButtonSecondary).Clicked() {
+			vm.openSettings()
 		}
 		if notice := vm.Notice; notice != "" {
 			components.Text(c, notice).FontSize(11)

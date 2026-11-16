@@ -7,6 +7,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/google/uuid"
 	"github.com/oneo-me/onevra/source/components"
+	"github.com/oneo-me/onevra/source/icons/lucide"
 	"github.com/oneo-me/onevra/source/shells/sidebar"
 )
 
@@ -130,17 +131,16 @@ func (vm *ViewModel) missingDevicePage(c *ui.Context) {
 // toolbar holds the window-wide actions.
 func (vm *ViewModel) toolbar(c *ui.Context) {
 	ui.Row(c).FillWidth().Padding(0, 16, 8, 16).Gap(6).AlignItems(ui.Center).Children(func() {
-		if components.Button(c, "测试全部设备", components.ButtonSecondary).Clicked() {
-			vm.openReachability()
-		}
-		if components.Button(c, "临时连接", components.ButtonSecondary).Clicked() {
-			vm.openEditor(&EditorRequest{Temporary: true})
-		}
-		if components.Button(c, "添加设备", components.ButtonPrimary).Clicked() {
+		// The primary action comes first; tool settings lives in the sidebar
+		// footer, where the tools it configures are shown.
+		if actionButton(c, lucide.Plus, "添加设备", components.ButtonPrimary).Clicked() {
 			vm.openEditor(&EditorRequest{})
 		}
-		if components.Button(c, "工具设置", components.ButtonSecondary).Clicked() {
-			vm.openSettings()
+		if actionButton(c, lucide.Zap, "临时连接", components.ButtonSecondary).Clicked() {
+			vm.openEditor(&EditorRequest{Temporary: true})
+		}
+		if actionButton(c, lucide.Radar, "测试全部设备", components.ButtonSecondary).Clicked() {
+			vm.openReachability()
 		}
 		if vm.Demo {
 			components.Text(c, "界面演示 · 使用模拟设备，不执行真实命令").FontSize(11)

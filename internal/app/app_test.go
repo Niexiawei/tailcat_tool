@@ -75,13 +75,13 @@ func TestToolbarOnlyOnTheIndexPage(t *testing.T) {
 	profile := vm.Manager.Profiles()[0]
 
 	index := ui.NewTester(vm.ContentView, 900, 700)
-	if !index.HasText("测试全部设备") || !index.HasText("工具设置") {
+	if !index.HasText("测试全部设备") || !index.HasText("添加设备") {
 		t.Fatalf("the index page lost the window actions; texts = %v", index.Texts())
 	}
 
 	vm.OpenDevice(profile.ID)
 	device := ui.NewTester(vm.ContentView, 900, 700)
-	for _, unwanted := range []string{"测试全部设备", "临时连接", "工具设置"} {
+	for _, unwanted := range []string{"测试全部设备", "临时连接", "添加设备"} {
 		if device.HasText(unwanted) {
 			t.Fatalf("the device page still shows %q; texts = %v", unwanted, device.Texts())
 		}
@@ -609,5 +609,42 @@ func TestSidebarFooterDropsTheChannelCount(t *testing.T) {
 	}
 	if !tt.HasText("scrcpy") {
 		t.Fatalf("the footer lost the tool health rows; texts = %v", tt.Texts())
+	}
+}
+
+func TestIndexToolbarPutsAddDeviceFirst(t *testing.T) {
+	vm := newTestViewModel(t)
+	tt := ui.NewTester(vm.ContentView, 900, 700)
+	add, ok := tt.Find("添加设备")
+	if !ok {
+		t.Fatalf("the toolbar lost 「添加设备」; texts = %v", tt.Texts())
+	}
+	temporary, ok := tt.Find("临时连接")
+	if !ok {
+		t.Fatalf("the toolbar lost 「临时连接」; texts = %v", tt.Texts())
+	}
+	probe, ok := tt.Find("测试全部设备")
+	if !ok {
+		t.Fatalf("the toolbar lost 「测试全部设备」; texts = %v", tt.Texts())
+	}
+	if !(add.X < temporary.X && temporary.X < probe.X) {
+		t.Fatalf("toolbar order is add=%.0f temporary=%.0f probe=%.0f, want add first", add.X, temporary.X, probe.X)
+	}
+	if tt.HasText("工具设置") {
+		t.Fatalf("tool settings still sits in the page toolbar; texts = %v", tt.Texts())
+	}
+}
+
+func TestSidebarFooterOpensToolSettings(t *testing.T) {
+	vm := newTestViewModel(t)
+	tt := sidebarTester(vm, 280, 420)
+	if !tt.HasText("工具设置") {
+		t.Fatalf("the footer has no tool settings action; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("工具设置"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if !vm.SettingsOpen {
+		t.Fatal("the footer action did not open the settings dialog")
 	}
 }
