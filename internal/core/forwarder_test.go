@@ -13,6 +13,12 @@ import (
 	"tailscale.com/types/key"
 )
 
+// testPreferredPortBase keeps the ports these tests pin out of 5556–5655, the
+// range the manager allocates from. `go test ./...` runs packages in parallel
+// and the app package connects real channels there, so pinning 5556 here failed
+// at random with "本地端口 5556 已被另一个会话使用或被占用".
+const testPreferredPortBase = 45500
+
 // fakeSession stands in for a tailcat client: dialing returns one end of an
 // in-memory pipe whose other end echoes, so the proxy path is real.
 type fakeSession struct {
@@ -122,20 +128,21 @@ func TestForwardAutoPortFrom5556(t *testing.T) {
 }
 
 func TestForwardPreferredPortBusy(t *testing.T) {
-	busy, err := net.Listen("tcp", "127.0.0.1:5559")
+	port := testPreferredPortBase + 59
+	busy, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
 	if err != nil {
-		t.Skipf("5559 is not available to occupy: %v", err)
+		t.Skipf("%d is not available to occupy: %v", port, err)
 	}
 	defer busy.Close()
 
 	f, _, _ := newForwarderForTest(t, "")
 	_, err = f.Open(context.Background(), ForwardRequest{
-		Address: sampleAddress, PreferredPort: 5559, RemotePort: 5555, NodeKey: key.NewNode(),
+		Address: sampleAddress, PreferredPort: port, RemotePort: 5555, NodeKey: key.NewNode(),
 	}, nil)
 	if err == nil {
 		t.Fatal("Open() silently ignored a busy preferred port")
 	}
-	if !strings.Contains(err.Error(), "5559") {
+	if !strings.Contains(err.Error(), strconv.Itoa(port)) {
 		t.Fatalf("error should name the port: %v", err)
 	}
 }
@@ -143,7 +150,7 @@ func TestForwardPreferredPortBusy(t *testing.T) {
 func TestForwardPortReadyImmediately(t *testing.T) {
 	f, _, _ := newForwarderForTest(t, "")
 	conn, err := f.Open(context.Background(), ForwardRequest{
-		Address: sampleAddress, PreferredPort: 5556, RemotePort: 5555, NodeKey: key.NewNode(),
+		Address: sampleAddress, PreferredPort: testPreferredPortBase + 56, RemotePort: 5555, NodeKey: key.NewNode(),
 	}, nil)
 	if err != nil {
 		t.Fatalf("Open() error: %v", err)
@@ -161,7 +168,7 @@ func TestForwardPortReadyImmediately(t *testing.T) {
 func TestForwardProxiesTraffic(t *testing.T) {
 	f, _, session := newForwarderForTest(t, "hello-from-device\n")
 	conn, err := f.Open(context.Background(), ForwardRequest{
-		Address: sampleAddress, PreferredPort: 5561, RemotePort: 5555, NodeKey: key.NewNode(),
+		Address: sampleAddress, PreferredPort: testPreferredPortBase + 61, RemotePort: 5555, NodeKey: key.NewNode(),
 	}, nil)
 	if err != nil {
 		t.Fatalf("Open() error: %v", err)
@@ -194,7 +201,7 @@ func TestForwardProxiesTraffic(t *testing.T) {
 func TestForwardCloseOrder(t *testing.T) {
 	f, _, session := newForwarderForTest(t, "x")
 	conn, err := f.Open(context.Background(), ForwardRequest{
-		Address: sampleAddress, PreferredPort: 5562, RemotePort: 5555, NodeKey: key.NewNode(),
+		Address: sampleAddress, PreferredPort: testPreferredPortBase + 62, RemotePort: 5555, NodeKey: key.NewNode(),
 	}, nil)
 	if err != nil {
 		t.Fatalf("Open() error: %v", err)
@@ -234,7 +241,7 @@ func TestForwardCloseOrder(t *testing.T) {
 func TestForwardPortReleasedAfterClose(t *testing.T) {
 	f, _, _ := newForwarderForTest(t, "")
 	conn, err := f.Open(context.Background(), ForwardRequest{
-		Address: sampleAddress, PreferredPort: 5563, RemotePort: 5555, NodeKey: key.NewNode(),
+		Address: sampleAddress, PreferredPort: testPreferredPortBase + 63, RemotePort: 5555, NodeKey: key.NewNode(),
 	}, nil)
 	if err != nil {
 		t.Fatalf("Open() error: %v", err)
@@ -256,7 +263,7 @@ func TestForwardInlineRelayUsesMap(t *testing.T) {
 	}
 	f, dialer, _ := newForwarderForTest(t, "")
 	conn, err := f.Open(context.Background(), ForwardRequest{
-		Address: sampleAddress, PreferredPort: 5564, RemotePort: 5555, NodeKey: key.NewNode(), Relay: relay,
+		Address: sampleAddress, PreferredPort: testPreferredPortBase + 64, RemotePort: 5555, NodeKey: key.NewNode(), Relay: relay,
 	}, nil)
 	if err != nil {
 		t.Fatalf("Open() error: %v", err)
@@ -276,7 +283,7 @@ func TestForwardRedactsLogs(t *testing.T) {
 	var mu sync.Mutex
 	var lines []string
 	conn, err := f.Open(context.Background(), ForwardRequest{
-		Address: sampleAddress, PreferredPort: 5565, RemotePort: 5555, NodeKey: key.NewNode(),
+		Address: sampleAddress, PreferredPort: testPreferredPortBase + 65, RemotePort: 5555, NodeKey: key.NewNode(),
 	}, func(s string) {
 		mu.Lock()
 		defer mu.Unlock()
