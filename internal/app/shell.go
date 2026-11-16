@@ -18,8 +18,9 @@ func (vm *ViewModel) OpenMainWindow() *sidebar.Shell {
 		StateKey: "tailcat-manager.main",
 		// Left is the scrolling device list, LeftToolbar the fixed footer:
 		// a footer inside Left competes with the list for height.
-		Left:        vm.SidebarView,
-		LeftToolbar: vm.SidebarFooter,
+		Left:         vm.SidebarView,
+		LeftToolbar:  vm.SidebarFooter,
+		ContentTitle: vm.ContentTitle,
 		Content: func(c *ui.Context) {
 			vm.ContentView(c)
 		},

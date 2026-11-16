@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/google/uuid"
 	"github.com/oneo-me/onevra/source/components"
+	"github.com/oneo-me/onevra/source/shells/sidebar"
 )
 
 const testAddress = "tc" + "AbC123_-xyz789" + "0123456789abcdef"
@@ -332,7 +333,7 @@ func TestDeviceIndexPageListsDevices(t *testing.T) {
 	vm := newTestViewModel(t)
 	profile := vm.Manager.Profiles()[0]
 	tt := ui.NewTester(vm.ContentView, 900, 700)
-	if !tt.HasText("我的设备") || !tt.HasText("E245") {
+	if !tt.HasText("E245") {
 		t.Fatalf("the index page is missing a device; texts = %v", tt.Texts())
 	}
 	if err := tt.Click("E245"); err != nil {
@@ -340,23 +341,6 @@ func TestDeviceIndexPageListsDevices(t *testing.T) {
 	}
 	if got, want := vm.Router.Path(), DeviceRoute(profile.ID); got != want {
 		t.Fatalf("route = %q, want %q", got, want)
-	}
-}
-
-func TestBreadcrumbReturnsToDeviceIndex(t *testing.T) {
-	vm := newTestViewModel(t)
-	profile := vm.Manager.Profiles()[0]
-	vm.OpenDevice(profile.ID)
-
-	tt := ui.NewTester(vm.ContentView, 900, 700)
-	if !tt.HasText("本地入口") {
-		t.Fatalf("the device page did not open; texts = %v", tt.Texts())
-	}
-	if err := tt.Click("我的设备"); err != nil {
-		t.Fatalf("Click() on the breadcrumb error: %v", err)
-	}
-	if got := vm.Router.Path(); got != DeviceIndexRoute {
-		t.Fatalf("route = %q, want %q", got, DeviceIndexRoute)
 	}
 }
 
@@ -466,16 +450,119 @@ func TestTaskPanelSitsBelowThePage(t *testing.T) {
 	if !ok {
 		t.Fatalf("the task panel is missing; texts = %v", tt.Texts())
 	}
-	crumb, ok := tt.Find("我的设备")
-	if !ok {
-		t.Fatalf("the breadcrumb is missing; texts = %v", tt.Texts())
-	}
 	// The panel used to be a second full-height column, so it laid out at the
-	// top and painted over the breadcrumb and the title.
-	if panel.Y < crumb.Y+crumb.H {
-		t.Fatalf("the task panel (y=%.0f) overlaps the page header (y=%.0f h=%.0f)", panel.Y, crumb.Y, crumb.H)
+	// top and painted over the page title.
+	header, ok := tt.Find("E245")
+	if !ok {
+		t.Fatalf("the page title is missing; texts = %v", tt.Texts())
+	}
+	if panel.Y < header.Y+header.H {
+		t.Fatalf("the task panel (y=%.0f) overlaps the page header (y=%.0f h=%.0f)", panel.Y, header.Y, header.H)
 	}
 	if title, ok := tt.Find("E245"); !ok || title.W == 0 || title.H == 0 {
 		t.Fatalf("the device title was clipped away: %+v", title)
+	}
+}
+
+func TestContentStaysBelowAFloatingHeader(t *testing.T) {
+	for _, bar := range []ui.TitleBar{{Height: 48}, {Height: 64}} {
+		vm := newTestViewModel(t)
+		vm.OpenDevice(vm.Manager.Profiles()[0].ID)
+		var header float32
+		tt := ui.NewTester(func(c *ui.Context) {
+			header = sidebar.HeaderHeight(c)
+			vm.ContentView(c)
+		}, 900, 700)
+		tt.SetTitleBar(bar)
+		tt.Frame()
+		// The device name and the action row are the topmost body content;
+		// the shell's floating header owns the strip above this height.
+		for _, text := range []string{"E245", "编辑"} {
+			rect, ok := tt.Find(text)
+			if !ok {
+				t.Fatalf("titlebar %v: %q is missing; texts = %v", bar, text, tt.Texts())
+			}
+			if rect.Y < header {
+				t.Fatalf("titlebar %v: %q (y=%.0f) is under the floating header (h=%.0f)", bar, text, rect.Y, header)
+			}
+		}
+	}
+}
+
+func TestIndexPageStaysBelowAFloatingHeader(t *testing.T) {
+	vm := newTestViewModel(t)
+	var header float32
+	tt := ui.NewTester(func(c *ui.Context) {
+		header = sidebar.HeaderHeight(c)
+		vm.ContentView(c)
+	}, 900, 700)
+	rect, ok := tt.Find("测试全部设备")
+	if !ok {
+		t.Fatalf("the toolbar is missing; texts = %v", tt.Texts())
+	}
+	if rect.Y < header {
+		t.Fatalf("the toolbar (y=%.0f) is under the floating header (h=%.0f)", rect.Y, header)
+	}
+}
+
+func TestDeviceIDFromPath(t *testing.T) {
+	id := uuid.New()
+	if got, ok := deviceIDFromPath(DeviceRoute(id)); !ok || got != id {
+		t.Fatalf("deviceIDFromPath(%q) = %v, %v", DeviceRoute(id), got, ok)
+	}
+	for _, path := range []string{DeviceIndexRoute, "", "/devices/nope", "/devices/" + id.String() + "/extra"} {
+		if _, ok := deviceIDFromPath(path); ok {
+			t.Fatalf("deviceIDFromPath(%q) accepted a non-device path", path)
+		}
+	}
+}
+
+func TestContentTitleShowsTheDevicePath(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.OpenDevice(vm.Manager.Profiles()[0].ID)
+	tt := ui.NewTester(vm.ContentTitle, 420, 48)
+	if !tt.HasText("我的设备") || !tt.HasText("E245") {
+		t.Fatalf("the title bar does not show the path; texts = %v", tt.Texts())
+	}
+}
+
+func TestContentTitleBreadcrumbReturnsToTheDeviceIndex(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.OpenDevice(vm.Manager.Profiles()[0].ID)
+	// The title bar is a strip of its own, so the click never races the
+	// window-drag area the way it did inside ContentView.
+	tt := ui.NewTester(vm.ContentTitle, 420, 48)
+	if err := tt.Click("我的设备"); err != nil {
+		t.Fatalf("Click() on the breadcrumb error: %v", err)
+	}
+	if got := vm.Router.Path(); got != DeviceIndexRoute {
+		t.Fatalf("route = %q, want %q", got, DeviceIndexRoute)
+	}
+}
+
+func TestContentTitleFollowsTheRouter(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.OpenDevice(vm.Manager.Profiles()[0].ID)
+	tt := ui.NewTester(vm.ContentTitle, 420, 48)
+	vm.Router.Back()
+	tt.Frame()
+	if tt.HasText("E245") {
+		t.Fatalf("the title bar kept the device after going back; texts = %v", tt.Texts())
+	}
+	if !tt.HasText("我的设备") {
+		t.Fatalf("the title bar lost the page name; texts = %v", tt.Texts())
+	}
+}
+
+func TestDevicePageHasNoSecondBreadcrumb(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.OpenDevice(vm.Manager.Profiles()[0].ID)
+	tt := ui.NewTester(vm.ContentView, 900, 700)
+	// The body must not repeat navigation the title bar already shows; the
+	// device name is body content, so only the crumb text counts.
+	for _, text := range tt.Texts() {
+		if text == "我的设备" {
+			t.Fatalf("the device page repeats the breadcrumb in the body; texts = %v", tt.Texts())
+		}
 	}
 }

@@ -2,6 +2,7 @@
 package app
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -194,6 +195,46 @@ func (vm *ViewModel) profileByID(raw string) (core.Profile, bool) {
 		}
 	}
 	return core.Profile{}, false
+}
+
+// deviceIDFromPath returns the device a route path names. It is the routing
+// the title bar needs without entering Router.View.
+func deviceIDFromPath(path string) (uuid.UUID, bool) {
+	rest, ok := strings.CutPrefix(path, DeviceIndexRoute+"/")
+	if !ok || strings.Contains(rest, "/") {
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(rest)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// ContentTitle fills the shell header's leading slot: the path back to the
+// device index on a device page, and the page name everywhere else. It lives
+// in the title bar so the header's drag strip can never swallow the click.
+func (vm *ViewModel) ContentTitle(c *ui.Context) {
+	pageName := "我的设备"
+	if vm.Router == nil {
+		components.Text(c, pageName).Bold().SingleLine()
+		return
+	}
+	id, ok := deviceIDFromPath(vm.Router.Path())
+	if !ok {
+		components.Text(c, pageName).Bold().SingleLine()
+		return
+	}
+	profile, found := vm.profileByID(id.String())
+	if !found {
+		components.Text(c, "设备不存在").Bold().SingleLine()
+		return
+	}
+	vm.CrumbChoice = -1
+	crumbs := components.Breadcrumbs(c, []string{pageName, profile.Name}, &vm.CrumbChoice)
+	if crumbs.Changed() && vm.CrumbChoice == 0 {
+		vm.OpenDevices()
+	}
 }
 
 // SelectedProfile returns the device the detail pane shows.

@@ -16,7 +16,7 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 	for _, toast := range vm.drainToasts() {
 		c.AddToast(toast)
 	}
-	ui.Column(c).Fill().Children(func() {
+	ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
 		ui.Column(c).FillWidth().Grow(1).Children(func() {
 			vm.routedPage(c)
 		})
@@ -74,7 +74,6 @@ func (vm *ViewModel) routedPage(c *ui.Context) {
 func (vm *ViewModel) deviceIndexPage(c *ui.Context) {
 	theme, profiles := c.Theme(), vm.Manager.AllProfiles()
 	ui.Column(c).Fill().Padding(20).Gap(10).Children(func() {
-		components.Text(c, "我的设备").FontSize(20).Bold()
 		if len(profiles) == 0 {
 			components.Text(c, "连接你的第一台设备").FontSize(13)
 			components.Text(c, "每台设备拥有独立通道，支持同时连接。").FontSize(11).TextColor(theme.TextMuted)
@@ -133,7 +132,7 @@ func (vm *ViewModel) missingDevicePage(c *ui.Context) {
 
 // toolbar holds the window-wide actions.
 func (vm *ViewModel) toolbar(c *ui.Context) {
-	ui.Row(c).FillWidth().Padding(sidebar.HeaderHeight(c), 16, 8, 16).Gap(6).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Padding(0, 16, 8, 16).Gap(6).AlignItems(ui.Center).Children(func() {
 		if components.Button(c, "测试全部设备", components.ButtonGhost).Clicked() {
 			vm.openReachability()
 		}
@@ -158,7 +157,6 @@ func (vm *ViewModel) devicePage(c *ui.Context, profile core.Profile) {
 	temporary := isTemporary(manager, profile.ID)
 
 	ui.Column(c).Fill().Padding(20).Gap(12).Children(func() {
-		vm.breadcrumbs(c, profile)
 		ui.Row(c).FillWidth().Gap(8).Children(func() {
 			ui.Column(c).Gap(2).Children(func() {
 				components.Text(c, profile.Name).FontSize(20).Bold()
@@ -206,15 +204,6 @@ func (vm *ViewModel) devicePage(c *ui.Context, profile core.Profile) {
 			vm.overview(c, profile, session)
 		}
 	})
-}
-
-// breadcrumbs shows where the page sits; the first crumb returns to the list.
-func (vm *ViewModel) breadcrumbs(c *ui.Context, profile core.Profile) {
-	vm.CrumbChoice = -1
-	crumbs := components.Breadcrumbs(c, []string{"我的设备", profile.Name}, &vm.CrumbChoice)
-	if crumbs.Changed() && vm.CrumbChoice == 0 {
-		vm.OpenDevices()
-	}
 }
 
 func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.Session) {
