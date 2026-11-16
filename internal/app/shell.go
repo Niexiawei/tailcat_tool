@@ -13,8 +13,8 @@ const AppName = "Tailcat Manager"
 // OpenMainWindow creates the manager window and returns its shell.
 func (vm *ViewModel) OpenMainWindow() *sidebar.Shell {
 	shell := sidebar.NewShell(sidebar.ShellOptions{
-		Title:    AppName,
-		Theme:    theme.Onevra,
+		Title: AppName,
+		//Theme:    theme.Onevra,
 		StateKey: "tailcat-manager.main",
 		// Left is the scrolling device list, LeftToolbar the fixed footer:
 		// a footer inside Left competes with the list for height.
@@ -23,6 +23,13 @@ func (vm *ViewModel) OpenMainWindow() *sidebar.Shell {
 		ContentTitle: vm.ContentTitle,
 		Content: func(c *ui.Context) {
 			vm.ContentView(c)
+		},
+		Theme: func(context *ui.Context) *ui.Theme {
+			t := theme.Onevra(context)
+			t.Accent = ui.Hex("#0052d9")
+			t.AccentHover = ui.Hex("#618dff")
+			t.AccentPressed = ui.Hex("#003cab")
+			return t
 		},
 	})
 	window := shell.Window()
