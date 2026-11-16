@@ -18,6 +18,15 @@ import (
 // the native terminal library.
 var newTerminal = terminal.New
 
+// consoleTheme is the console's colors: always a dark terminal, whatever the
+// window's appearance, so a device shell reads the way a terminal does.
+func consoleTheme() *terminal.Theme {
+	theme := terminal.DarkTheme()
+	theme.Background = ui.Hex("#000000")
+	theme.Foreground = ui.Hex("#f2f2f2")
+	return theme
+}
+
 // IdleConsoleText is what an idle console says; tests assert it.
 const IdleConsoleText = "设备未连接"
 
@@ -78,13 +87,19 @@ func (vm *ViewModel) consoleView(c *ui.Context, profile core.Profile, session co
 		host = created
 		vm.consoles[profile.ID] = host
 	}
-	device := profile.ID
+	device, theme := profile.ID, c.Theme()
 	ui.Column(c).Fill().Gap(6).Children(func() {
-		components.Text(c, vm.consoleHint(session)).FontSize(11).TextColor(c.Theme().TextMuted)
-		view := terminal.View(c, host.term).FillWidth().Grow(1).MinHeight(300).AutoFocus()
-		// Leaving the page closes the console: coming back starts a fresh
-		// process instead of a dead one.
-		view.OnUnmount(func() { vm.dropConsole(device) })
+		components.Text(c, vm.consoleHint(session)).FontSize(11).TextColor(theme.TextMuted)
+		// The console is its own black pane, so it gets a frame and rounded
+		// corners instead of bleeding into the page: the 1 DIP padding keeps
+		// the terminal's paint off the border.
+		ui.Column(c).FillWidth().Grow(1).MinHeight(300).Padding(1).
+			Radius(theme.Radius).Border(1, theme.Border).Clip().Children(func() {
+			view := terminal.View(c, host.term).Fill().Radius(theme.Radius).AutoFocus()
+			// Leaving the page closes the console: coming back starts a fresh
+			// process instead of a dead one.
+			view.OnUnmount(func() { vm.dropConsole(device) })
+		})
 	})
 }
 
@@ -120,6 +135,7 @@ func (vm *ViewModel) newConsole(profile core.Profile, session core.Session, key 
 		if adbPath := vm.Manager.Tools().FindToolPath(core.ToolADB, vm.Locate); adbPath != "" {
 			term, err := newTerminal(terminal.Options{
 				Command: []string{adbPath, "-s", session.Serial, "shell"},
+				Theme:   consoleTheme(),
 			})
 			if err == nil {
 				return &consoleHost{term: term, key: key}, nil
@@ -131,7 +147,7 @@ func (vm *ViewModel) newConsole(profile core.Profile, session core.Session, key 
 		// The command runs off the input path: a pull takes seconds, and
 		// the console must keep echoing while it does.
 		lines.onLine = func(line string) { go vm.runADBLine(profile, session, lines, line) }
-		term, err := newTerminal(terminal.Options{Conn: lines})
+		term, err := newTerminal(terminal.Options{Conn: lines, Theme: consoleTheme()})
 		if err != nil {
 			return nil, err
 		}
@@ -140,7 +156,7 @@ func (vm *ViewModel) newConsole(profile core.Profile, session core.Session, key 
 	// No connection, or no adb to drive it: an idle console.
 	lines := newLineConsole(IdleConsoleText, nil)
 	lines.onLine = vm.idleLineHandler(lines)
-	term, err := newTerminal(terminal.Options{Conn: lines})
+	term, err := newTerminal(terminal.Options{Conn: lines, Theme: consoleTheme()})
 	if err != nil {
 		return nil, err
 	}

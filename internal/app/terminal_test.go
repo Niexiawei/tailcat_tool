@@ -234,3 +234,13 @@ func TestADBConsoleErrorPathCompletes(t *testing.T) {
 		t.Fatalf("toasts = %+v", queued)
 	}
 }
+
+func TestConsoleThemeIsAlwaysDark(t *testing.T) {
+	theme := consoleTheme()
+	if theme.Background != ui.Hex("#000000") {
+		t.Fatalf("console background = %v, want black", theme.Background)
+	}
+	if theme.Foreground != ui.Hex("#f2f2f2") {
+		t.Fatalf("console foreground = %v, want near-white", theme.Foreground)
+	}
+}
