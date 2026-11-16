@@ -62,6 +62,13 @@ type Manager struct {
 	recorder    Recorder
 	checker     *Checker
 
+	appMeta          AppMetaSource
+	resourceInterval time.Duration
+	resources        map[uuid.UUID]ResourceSnapshot
+	sampleCounters   map[uuid.UUID]*resourceCounters
+	hardware         map[uuid.UUID]*hardwareInfo
+	samplers         map[uuid.UUID]context.CancelFunc
+
 	notice              string
 	nextTemporaryNumber int
 
@@ -92,9 +99,14 @@ type ManagerOptions struct {
 	Prober Prober
 	// Recorder persists tasks, logs and reachability results; nil keeps
 	// everything in memory.
-	Recorder        Recorder
-	Locate          LocateTool
-	MonitorInterval time.Duration
+	Recorder Recorder
+	Locate   LocateTool
+	// AppMeta supplies application names and icons; nil means the resource
+	// page shows package names.
+	AppMeta AppMetaSource
+	// ResourceInterval is how often an open resource page re-reads a device.
+	ResourceInterval time.Duration
+	MonitorInterval  time.Duration
 	// ConnectPollInterval is the delay between get-state polls while
 	// connecting; tests use a small value.
 	ConnectPollInterval time.Duration
@@ -110,6 +122,10 @@ func NewManager(opts ManagerOptions) *Manager {
 	pollInterval := opts.ConnectPollInterval
 	if pollInterval <= 0 {
 		pollInterval = connectPollInterval
+	}
+	resourceInterval := opts.ResourceInterval
+	if resourceInterval <= 0 {
+		resourceInterval = defaultResourceInterval
 	}
 	m := &Manager{
 		changed:             make(chan struct{}, 1),
@@ -134,8 +150,14 @@ func NewManager(opts ManagerOptions) *Manager {
 		taskCancels:         map[uuid.UUID]context.CancelFunc{},
 		taskDone:            map[uuid.UUID]chan struct{}{},
 		attention:           map[uuid.UUID]Attention{},
+		resources:           map[uuid.UUID]ResourceSnapshot{},
+		sampleCounters:      map[uuid.UUID]*resourceCounters{},
+		hardware:            map[uuid.UUID]*hardwareInfo{},
+		samplers:            map[uuid.UUID]context.CancelFunc{},
 		nextTemporaryNumber: 1,
 		monitorInterval:     interval,
+		resourceInterval:    resourceInterval,
+		appMeta:             opts.AppMeta,
 		connectPoll:         pollInterval,
 		ctx:                 ctx,
 		cancel:              cancel,
@@ -561,12 +583,16 @@ func sanitizeError(err error) error {
 func (m *Manager) Disconnect(ctx context.Context, id uuid.UUID) {
 	m.mu.Lock()
 	m.stopMonitorLocked(id)
+	m.stopResourceSamplingLocked(id)
 	generation := uuid.New()
 	m.generations[id] = generation
 	runtime := m.runtimes[id]
 	delete(m.runtimes, id)
 	delete(m.retryCounts, id)
 	delete(m.nextRetries, id)
+	delete(m.resources, id)
+	delete(m.sampleCounters, id)
+	delete(m.hardware, id)
 	m.setStateLocked(id, func(s *Session) {
 		s.State = StateDisconnecting
 	})
@@ -628,10 +654,14 @@ func (m *Manager) Shutdown(ctx context.Context) {
 	}
 	m.mu.Lock()
 	for _, p := range m.temporary {
+		m.stopResourceSamplingLocked(p.ID)
 		delete(m.sessions, p.ID)
 		delete(m.generations, p.ID)
 		delete(m.retryCounts, p.ID)
 		delete(m.nextRetries, p.ID)
+		delete(m.resources, p.ID)
+		delete(m.sampleCounters, p.ID)
+		delete(m.hardware, p.ID)
 	}
 	m.temporary = nil
 	m.tempCredentials = map[uuid.UUID]string{}

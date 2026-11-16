@@ -6,8 +6,10 @@ package compat
 
 import (
 	"context"
+	"io"
 	"net"
 
+	"github.com/avast/apkparser"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
@@ -66,44 +68,57 @@ var (
 
 // onevra: shells, theme, components and icons.
 var (
-	_                   = sidebar.NewShell
-	_                   = plain.NewShell
-	_                   = theme.Onevra
-	_                   = components.TextBox
-	_                   = components.Radio[string]
-	_                   = components.Accordion
-	_                   = (*components.AccordionGroup).Item
-	_                   = sidebar.HeaderHeight
-	_                   = components.Breadcrumbs
-	_                   = components.Switch
-	_                   = components.Tabs
-	_                   = components.TabsSegmented
-	_                   = components.Table
-	_                   = components.TableRow
-	_                   = components.Tooltip
-	_                   = ui.RoleTooltip
-	_                   = components.IconButton
-	_                   = components.IconButtonPlain
-	_ func() *ui.SVG    = lucide.CircleCheck
-	_ func() *ui.SVG    = lucide.CircleX
-	_ func() *ui.SVG    = lucide.Play
-	_ func() *ui.SVG    = lucide.X
-	_                   = components.Dialog
-	_                   = components.AlertDialog
-	_                   = components.Collapsible
-	_                   = components.Spinner
-	_                   = components.Progress
-	_                   = components.ButtonPrimary
-	_                   = components.ButtonOutline
-	_                   = components.ButtonLink
-	_                   = components.NativeSelect[string]
-	_                   = (*components.NativeSelectParts).Changed
-	_                   = components.TextBoxBuffer
-	_                   = components.TextBoxOptions{}.ReadOnly
-	_ func() *ui.SVG    = lucide.Search
-	_ string            = sidebar.ShellOptions{}.Title
-	_ func(*ui.Context) = sidebar.ShellOptions{}.Content
-	_ func(*ui.Context) = sidebar.ShellOptions{}.ContentTitle
+	_                                                                      = sidebar.NewShell
+	_                                                                      = plain.NewShell
+	_                                                                      = theme.Onevra
+	_                                                                      = components.TextBox
+	_                                                                      = components.Radio[string]
+	_                                                                      = components.Accordion
+	_                                                                      = (*components.AccordionGroup).Item
+	_                                                                      = sidebar.HeaderHeight
+	_                                                                      = components.Breadcrumbs
+	_                                                                      = components.Switch
+	_                                                                      = components.Tabs
+	_                                                                      = components.TabsSegmented
+	_                                                                      = components.Table
+	_                                                                      = components.TableRow
+	_                                                                      = components.Tooltip
+	_                                                                      = ui.RoleTooltip
+	_                                                                      = components.IconButton
+	_                                                                      = components.IconButtonPlain
+	_                                                                      = components.Avatar
+	_                                                                      = components.AvatarOptions{}.Image
+	_                                                                      = components.AvatarNoStatus
+	_                                                                      = components.ScrollView
+	_                                                                      = components.ScrollViewOptions{}.Axes
+	_                                                                      = components.TableState{}.Columns
+	_ func(*ui.Context, float64) ui.Element                                = components.ProgressRing
+	_ func(string, apkparser.ManifestEncoder) (error, error, error)        = apkparser.ParseApk
+	_ func(io.ReadSeeker) (*apkparser.ZipReader, error)                    = apkparser.OpenZipReader
+	_ func(io.Reader) (*apkparser.ResourceTable, error)                    = apkparser.ParseResourceTable
+	_ func(*apkparser.ZipReader, apkparser.ManifestEncoder) (error, error) = apkparser.ParseApkWithZip
+	_ func(*ui.Context, string, components.AvatarOptions) ui.Element       = components.Avatar
+	_ func(*ui.Context, components.ScrollViewOptions) ui.Element           = components.ScrollView
+	_ func() *ui.SVG                                                       = lucide.CircleCheck
+	_ func() *ui.SVG                                                       = lucide.CircleX
+	_ func() *ui.SVG                                                       = lucide.Play
+	_ func() *ui.SVG                                                       = lucide.X
+	_                                                                      = components.Dialog
+	_                                                                      = components.AlertDialog
+	_                                                                      = components.Collapsible
+	_                                                                      = components.Spinner
+	_                                                                      = components.Progress
+	_                                                                      = components.ButtonPrimary
+	_                                                                      = components.ButtonOutline
+	_                                                                      = components.ButtonLink
+	_                                                                      = components.NativeSelect[string]
+	_                                                                      = (*components.NativeSelectParts).Changed
+	_                                                                      = components.TextBoxBuffer
+	_                                                                      = components.TextBoxOptions{}.ReadOnly
+	_ func() *ui.SVG                                                       = lucide.Search
+	_ string                                                               = sidebar.ShellOptions{}.Title
+	_ func(*ui.Context)                                                    = sidebar.ShellOptions{}.Content
+	_ func(*ui.Context)                                                    = sidebar.ShellOptions{}.ContentTitle
 )
 
 // tailcat: address parsing, identities, and the forward/ping primitives.

@@ -465,6 +465,10 @@ go test ./internal/compat/    # 第三方 API 契约
 | 干预检测 | 跑在监视循环里，而非独立 3 秒扫描 | 检测延迟 = 监视间隔 |
 | 干预类型 | 只实现 3 种（`serialDetached`/`portChanged`/`portDrift`） | `adb kill-server` 会表现为多条提示 |
 | 契约测试 | 断言放在 `_test.go` 里（零二进制体积） | 只由 `go test` 触发 |
+| GPU 使用率 | 只读厂商 sysfs（kgsl/devfreq/MTK），读不到就标「不可用」，不做估算 | 多数设备 GPU 列显示「不可用」；逐进程 GPU 未实现 |
+| 应用名与图标 | 用 `pm path` + `unzip -p` 只取 `AndroidManifest.xml`/`resources.arsc`/图标，`apkparser` 解析；没有 `unzip` 才回退整包；默认不解析，由用户按行或点刷新触发 | 自适应图标（XML 矢量）拿不到位图时退回首字母头像；依赖设备的 `unzip` |
+| 应用信息缓存 | 7 天有效期 + 包名/apk 路径/size/mtime 键，过期仍显示旧值并后台重抓 | 应用原地更新后最多 7 天内仍显示旧名字（或用户手动刷新）；`appmeta/` 目录 100 条 ~64 MB 上限 |
+| 采样范围 | 单次 `adb shell`（只用 shell 内建命令）输出全部进程 + `/proc/stat`，2 秒一轮；CPU/GPU 型号连上后只读一次；读数保留到断开连接 | 一次采样约 1 秒、几十 KB；页面隐藏即停止采样，但不清空读数 |
 
 ---
 
@@ -476,6 +480,8 @@ go test ./internal/compat/    # 第三方 API 契约
 4. **配置读取失败**只打印一条提示，没有独立的启动错误页。
 5. **历史只读展示**：任务面板会载入上次运行的任务，但还没有"按设备/时间筛选历史"的界面。
 6. **托盘 Badge**：排队中的干预提示目前只会出现在托盘菜单文本里，没有数字角标。
+7. **应用信息缓存管理页未做**：`core.AppMetaCache`（`Entries`/`Invalidate`/`Purge`）与磁盘缓存已就位，但还没有列出、删除、清空的界面。
+8. **逐进程 GPU 未实现**：`GPUSample.PerProcessAvailable` 恒为 false，只有整机 GPU 使用率。
 
 ---
 
@@ -495,6 +501,8 @@ go test ./internal/compat/    # 第三方 API 契约
 | 外部干预 | `internal/core/attention.go`、`internal/app/attention.go` |
 | 历史 | `internal/history/sqlite.go`、`internal/core/history.go` |
 | 界面结构 | `internal/app/state.go`、`internal/app/detail.go` |
+| 设备详情页与资源页 | `docs/device-detail-page.md`（采样脚本、进程分组、应用信息缓存、页面优化清单） |
+| 资源采样与应用信息 | `internal/core/sample.go`、`internal/core/procfs.go`、`internal/appmeta/` |
 | 表单与校验 | `internal/app/editor.go`、`internal/app/transfer.go` |
 | 第三方契约 | `internal/compat/compat_test.go` |
 | 计划与执行账本 | `docs/superpowers/plans/2026-11-15-tailcat-manager-go-port.md`、`.superpowers/sdd/<plan>/progress.md`（git-ignore，本地保留） |

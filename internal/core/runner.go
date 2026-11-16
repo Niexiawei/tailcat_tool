@@ -120,7 +120,50 @@ func (r *ExecRunner) Run(ctx context.Context, c Command, onOutput func(string)) 
 	if err != nil {
 		return Result{}, err
 	}
+	return r.wait(ctx, c, proc), nil
+}
 
+// RunToFile streams the command's stdout into path and waits for it. The file
+// is closed before RunToFile returns, so the caller may read it immediately.
+func (r *ExecRunner) RunToFile(ctx context.Context, c Command, path string) (Result, error) {
+	if c.Path == "" {
+		return Result{}, Error("未指定要执行的命令")
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return Result{}, Errorf("无法写入文件：%v", err)
+	}
+
+	cmd := exec.Command(c.Path, c.Args...)
+	cmd.Env = append(os.Environ(), c.Env...)
+	platform.ConfigureProcess(cmd)
+	cmd.Stdout = file
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		file.Close()
+		return Result{}, Errorf("无法读取命令输出：%v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		file.Close()
+		return Result{}, Errorf("无法运行 %s：%v", filepath.Base(c.Path), err)
+	}
+
+	sink := newOutputSink(nil)
+	proc := &Proc{PID: cmd.Process.Pid, sink: sink}
+	done := make(chan int, 1)
+	proc.Done = done
+	go func() {
+		drain(stderr, sink)
+		waitErr := cmd.Wait()
+		file.Close()
+		sink.flush()
+		done <- exitCodeOf(waitErr)
+	}()
+	return r.wait(ctx, c, proc), nil
+}
+
+// wait collects the outcome of a started process, applying Timeout and ctx.
+func (r *ExecRunner) wait(ctx context.Context, c Command, proc *Proc) Result {
 	var timeout <-chan time.Time
 	if c.Timeout > 0 {
 		timer := time.NewTimer(c.Timeout)
@@ -142,7 +185,7 @@ func (r *ExecRunner) Run(ctx context.Context, c Command, onOutput func(string)) 
 		res.ExitCode = <-proc.Done
 	}
 	res.Output = proc.Output()
-	return res, nil
+	return res
 }
 
 func exitCodeOf(err error) int {

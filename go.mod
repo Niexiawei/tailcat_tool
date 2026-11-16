@@ -3,9 +3,13 @@ module github.com/Niexiawei/tailcat-tool
 go 1.27.3
 
 require (
+	github.com/avast/apkparser v0.0.0-20260423123151-7fcaee440f68
 	github.com/egoist/mygo v0.9.1
+	github.com/google/uuid v1.6.0
 	github.com/oneo-me/onevra/source v0.2026.18
 	github.com/tailscale/tailcat v0.7.0
+	golang.org/x/sys v0.49.0
+	modernc.org/sqlite v1.62.0
 	tailscale.com v1.103.0-pre.0.20260916030321-a2263542f260
 )
 
@@ -27,7 +31,6 @@ require (
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/hdevalence/ed25519consensus v0.2.0 // indirect
 	github.com/jsimonetti/rtnetlink v1.4.1 // indirect
 	github.com/klauspost/compress v1.19.1 // indirect
@@ -57,7 +60,6 @@ require (
 	golang.org/x/image v0.47.0 // indirect
 	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/term v0.47.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
@@ -67,5 +69,4 @@ require (
 	modernc.org/libc v1.80.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.62.0 // indirect
 )

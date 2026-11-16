@@ -29,6 +29,17 @@
 
 首轮依赖下载（`go mod download`）约 2–4 分钟，之后都在秒级。
 
+## 资源页与 APK 解析（2026-11-18 实测，Windows/amd64，CGO_ENABLED=0）
+
+| 项目 | 数值 |
+|---|---|
+| `github.com/avast/apkparser` | v0.0.0-20260423123151-7fcaee440f68（纯 Go；只额外带 `klauspost/compress`，图里已有） |
+| 单独链接体积增量 | hello world 1.85 MB → 引入 apkparser 2.83 MB，约 **+1.0 MB** |
+| 当前整包产物 | 默认 **48.8 MB**、`-s -w` **33.9 MB**（含终端插件与 tailscale，比上表的 19.2 MB 老数据新，上表数字来自更早的提交） |
+| 首次打开资源页 | 每个应用拉一次 base.apk（数十 MB × 应用数），之后 7 天只读缓存；页面本身每 2 秒一次 `adb shell` 采样 |
+
+结论：新增依赖对体积的影响约 1 MB，可接受；真正的成本在**首次**的资源页打开（网络与时间），已用 7 天磁盘缓存与手动刷新兜住。
+
 ## 终端插件（libghostty-vt）
 
 详情页的内嵌终端来自 `github.com/egoist/mygo/plugins/terminal`，它**不使用 cgo**，但运行期要加载 libghostty-vt：

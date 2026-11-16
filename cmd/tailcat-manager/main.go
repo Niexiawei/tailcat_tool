@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/Niexiawei/tailcat-tool/internal/app"
+	"github.com/Niexiawei/tailcat-tool/internal/appmeta"
 	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/Niexiawei/tailcat-tool/internal/credstore"
 	"github.com/Niexiawei/tailcat-tool/internal/history"
@@ -98,6 +99,17 @@ func buildEnvironment() app.Environment {
 	}
 
 	runner := core.NewExecRunner()
+	// Application names and icons come from the device's own APKs, cached for a
+	// week under the configuration directory. A cache that will not open costs
+	// the names, not the app.
+	var appMeta core.AppMetaSource
+	if store, err := appmeta.New(filepath.Join(configDir, "appmeta"), runner, 2); err != nil {
+		if notice == "" {
+			notice = "应用信息缓存不可用，资源页只显示包名：" + err.Error()
+		}
+	} else {
+		appMeta = store
+	}
 	manager := core.NewManager(core.ManagerOptions{
 		Config:        store,
 		Configuration: cfg,
@@ -106,6 +118,7 @@ func buildEnvironment() app.Environment {
 		Runner:        runner,
 		Locate:        platform.FindTool,
 		Recorder:      recorder,
+		AppMeta:       appMeta,
 	})
 	if recorder != nil {
 		if recent, err := recorder.RecentTasks(50); err == nil {
