@@ -17,6 +17,7 @@
 10. [陷阱清单](#10-陷阱清单)
 11. [测试手法](#11-测试手法)
 12. [文件索引](#12-文件索引)
+13. [设备文件页](#13-设备文件页「文件」页签)
 
 ---
 
@@ -77,7 +78,7 @@ sidebar.NewShell(sidebar.ShellOptions{
 
 ```go
 ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
-	vm.routedPage(c)   // 页面占满，含设备页的「概览 / 终端 / 日志」
+	vm.routedPage(c)   // 页面占满，含设备页的「概览 / 资源 / 终端 / 文件 / 日志」
 })
 ```
 
@@ -92,7 +93,7 @@ ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
 | 路由 | 页面 | 说明 |
 |---|---|---|
 | `/devices` | 设备列表页 | 卡片式列表（状态点 / 名称 / 连接方式与地址 / 状态），空态给出"添加设备"；页面标题在窗口标题栏里，正文不再重复 |
-| `/devices/{id}` | 设备页 | 面包屑 + 标题行（编辑 / 连接 / 断开）+ 页签（概览 / 终端 / 日志） |
+| `/devices/{id}` | 设备页 | 面包屑 + 标题行（编辑 / 连接 / 断开）+ 页签（概览 / 资源 / 终端 / 文件 / 日志） |
 | 其他 | 列表页 | 兜底 |
 | `/devices/{无效 id}` | "设备不存在"页 | 附带"返回我的设备" |
 
@@ -396,6 +397,79 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 日志入队与写库 | `internal/core/manager.go`（`writeLogs`）、`internal/history/sqlite.go` |
 | 设备信息读取与清空 | `internal/core/manager_tasks.go`、`internal/core/manager.go` |
 | 中继历史（`relayHistory`）与预设 | `internal/core/manager_devices.go`、`internal/core/config.go` |
+| 设备文件的读取与缓存 | `internal/core/remotefs.go`（纯解析）、`internal/core/manager_files.go`（静默读 + 缓存） |
+| 文件页视图与属性弹窗 | `internal/app/files.go` |
 | 对话框关闭动画回归 | `internal/app/dialog_test.go` |
-| 视图测试 | `internal/app/app_test.go`、`internal/app/forms_test.go`、`internal/app/terminal_test.go` |
+| 视图测试 | `internal/app/app_test.go`、`internal/app/forms_test.go`、`internal/app/terminal_test.go`、`internal/app/files_test.go` |
 | 锁不阻塞测试 | `internal/core/manager_test.go`（`TestSlowRecorderNeverBlocksTheManager`） |
+
+## 13. 设备文件页（「文件」页签）
+
+设备页第四个页签（概览 / 资源 / 终端 / 文件 / 日志）是文件浏览与传输：左边是可展开的文件夹树，右边是所选文件夹的条目表格（名称 / 大小 / 修改时间 / 权限）。点文件行弹出属性弹窗，可以下载到本地；目录行可以进入，弹窗里也能把本地文件上传到那个文件夹。
+
+### 13.1 布局
+
+```go
+components.Split(c, &state.treeWidth,
+	func() { vm.folderTree(c, profile, state) },   // 左：components.Tree + TreeItemWithLeading
+	func() { vm.fileTable(c, profile, state) },    // 右：路径行 + components.Table
+	components.SplitOptions{FirstMin: 180, SecondMin: 260, Default: 260},
+).Fill()
+```
+
+三条必须遵守的约定：
+
+| 约定 | 原因 |
+|---|---|
+| `Split` 的两个面板都要 `MinWidth(0)`（内部 `ui.Scroll` / `ScrollView` 都要带） | 不加的话长文件名会把左右两栏一起撑过窗口宽度，右侧被裁 |
+| 树节点展开指针来自 `fileState.openAt(path)` | `TreeItemWithLeading` 要 `*bool`，而 **map 的元素不可取址**（`&state.open[path]` 编译不过），所以 map 存 `*bool` |
+| 行式元素 `FillWidth()`，滚动容器 `Grow(1).MinHeight(0)` | `Fill()` 会同时抢高度（见 §10） |
+
+树的根是固定的五个路径（`/sdcard`、`/storage/emulated/0`、`/data/local/tmp`、`/system`、`/`），**用整条路径当标签**（`RemoteBase("/storage/emulated/0")` 只是 `0`）。根默认全部折叠，右侧默认列出 `/sdcard`。
+
+### 13.2 取数：一次 `stat` 往返，静默执行
+
+```sh
+cd '<目录>' || exit 9
+for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
+```
+
+- **名称放在格式串最后**，Go 侧 `SplitN(…, 6)`：文件名里有 `|` 也不会错位。
+- 路径里的 `'` 转义成 `'\''`；含换行/NUL/非绝对路径时**不发命令**，直接返回中文错误。
+- 单目录 **2000 条**上限，超出时脚本末尾打印 `@@TRUNCATED`，页面写「只显示前 2000 项」。这是为了防止 runner 的 1 MiB 输出上限把一个巨型目录**静默**截断成"看起来完整"的列表。
+- 退出码 `9` 是脚本自己的「`cd` 失败」，页面显示「目录不存在或不可读：<路径>」。
+- **不显示创建时间**：`%W`（birth time）在 Android 的 ext4/f2fs 上几乎总是 0，用户已裁决不显示这一行。
+
+`Manager.ListRemoteDir` 照 `SampleResources` 的形状写：`operationTarget` → `validateTarget` → `runner.Run` → `targetIsCurrent` → 解析 → 缓存 + `notify()`。**它不建任务、不写通道日志、不进历史**——否则展开十个文件夹就把日志页和历史库刷满（`TestListRemoteDirCreatesNoTask` 钉住）。上传/下载反过来必须走 `BeginADBTask`：可取消、日志页可见、超时与脱敏免费。
+
+### 13.3 状态放哪
+
+| 状态 | 位置 | 生命周期 |
+|---|---|---|
+| 目录内容（`DirListing`） | `Manager.dirListings`，键 `dirKey{device, path}` | `Disconnect` 时清空（`forgetDirListingsLocked`）。界面是状态的函数，渲染线程不持有数据 |
+| 树展开、选中路径、右侧目录、表格列宽 | `ViewModel.files[device].fileState` | 随窗口存活；切设备不串味 |
+| 正在读 / 读取失败 | `ViewModel.fileLoads` / `fileErrs`，键 `"device|path"`，由 `fileMu` 保护 | 由命令 goroutine 写，写完 `Invalidate()` |
+
+`beginFileLoad` 保证**同一路径只有一次读取在飞**：连点两下文件夹不会发两条命令（`TestFileTreeReadsEachFolderOnce`）。
+
+### 13.4 交互与弹窗
+
+- 点树节点：右侧列该目录 + 展开该节点。
+- 点表格里的**目录**行：进入（`showDir`：右侧切换、树上选中并展开）。
+- 点**文件**行：打开 `FileDetailView` —— 属性四行（文件名 / 文件大小 / 最后修改时间 / 文件权限 `%A (八进制)`）+ 主按钮「下载到本地…」+ 次按钮「上传到此文件夹…」。目录行改成「下载此文件夹…」。
+- 弹窗按 §3.6 的固定骨架：右上角一个 `IconButton` 关闭，`if !open` 是唯一收口；**不要在**对话框里用 `components.Tabs`。
+- 错误呈现分两类：读目录失败是**页面状态**（行内「读取失败：…」+「重试」），不弹提示条；发起下载/上传失败才是事件（`vm.Fail`）。
+
+### 13.5 测试手法
+
+`internal/app/files_test.go` 用 `newRunnerViewModel` 注入一个按目录返回 `stat` 输出的假 runner，然后：
+
+| 目的 | 手法 |
+|---|---|
+| 列表渲染 | `waitForText(t, tt, "照片.jpg")` —— 目录读取在 goroutine 里，必须「反复 `Frame()` 直到出现」，不能只 `Frame()` 一次 |
+| 没有创建时间 | `tt.HasText("创建时间")` 为假（`HasText` 是子串匹配） |
+| 树懒加载 | 点整条路径的根（页面别处不会出现 `/system` 这个文本）→ 再点 `bin` → 断言树里出现「没有子文件夹」 |
+| 只读一次 | 点同一个节点三次，统计 runner 收到的 `cd '/system'` 命令数 = 1 |
+| 上传/下载 | 替换包级变量 `openLocalPaths` / `saveLocalPath`（`files.go` 里的 `mygo.Dialog.Open/Save`），断言 `Manager.Tasks()` 出现对应任务 |
+
+**不要**在测试里直接改 `mygo.Dialog`：它是包级变量，改了会影响同进程其它测试；用自己的两个包装变量并在 `t.Cleanup` 还原。
