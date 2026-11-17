@@ -161,6 +161,25 @@ func (s *stubAppMeta) Status(_, pkg string) (core.AppMetaStatus, bool) {
 
 func (s *stubAppMeta) Forget(string) {}
 
+func containsString(list []string, want string) bool {
+	for _, item := range list {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+// setStatus publishes what the store would answer for one package.
+func (s *stubAppMeta) setStatus(pkg string, status core.AppMetaStatus) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.statuses == nil {
+		s.statuses = map[string]core.AppMetaStatus{}
+	}
+	s.statuses[pkg] = status
+}
+
 func (s *stubAppMeta) refreshedPackages() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -475,29 +494,69 @@ func TestProcessTableHidesResolveButtonOnceNamed(t *testing.T) {
 	}
 }
 
-func TestProcessTableShowsASpinnerWhileResolving(t *testing.T) {
-	vm, _ := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
-	count := func(tt *ui.Tester) int {
-		n := 0
-		for _, text := range tt.Texts() {
-			if text == "解析应用信息" {
-				n++
-			}
-		}
-		return n
-	}
+func TestRowShowsSpinnerWhileTheReadIsPending(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	meta.setStatus("com.foo", core.AppMetaStatus{State: core.AppMetaPending})
 
 	tt := ui.NewTester(vm.ContentView, 900, 900)
-	before := count(tt)
-	if before == 0 {
-		t.Fatalf("no row offers to resolve itself; texts = %v", tt.Texts())
+	if _, ok := tt.Find("正在读取应用信息"); !ok {
+		t.Fatalf("a pending read shows no spinner; texts = %v", tt.Texts())
 	}
-	if err := tt.Click("解析应用信息"); err != nil {
-		t.Fatalf("clicking the row button: %v", err)
+}
+
+func TestResolvingSpinnerEndsWhenTheReadFails(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	meta.setStatus("com.foo", core.AppMetaStatus{State: core.AppMetaPending})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if _, ok := tt.Find("正在读取应用信息"); !ok {
+		t.Fatalf("no spinner to start with; texts = %v", tt.Texts())
 	}
 
+	// The device has no APK for this process, so the read ends without a name.
+	// The row must say so instead of waiting out a two-minute timer.
+	meta.setStatus("com.foo", core.AppMetaStatus{
+		State:  core.AppMetaFailed,
+		Reason: core.ReasonNoAppPackage,
+		Final:  true,
+	})
 	tt = ui.NewTester(vm.ContentView, 900, 900)
-	if after := count(tt); after != before-1 {
-		t.Fatalf("resolve buttons %d → %d; the clicked row should show a spinner instead", before, after)
+
+	if _, ok := tt.Find("正在读取应用信息"); ok {
+		t.Fatalf("the row still spins after the read failed; texts = %v", tt.Texts())
+	}
+	if !tt.HasText(core.LabelNoAppPackage) {
+		t.Fatalf("the failed row does not say why; texts = %v", tt.Texts())
+	}
+	if tt.HasText("重试读取应用信息") {
+		t.Fatal("a settled \"no APK\" answer still offers a retry that cannot work")
+	}
+}
+
+func TestRowOffersRetryAfterATransientFailure(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	meta.setStatus("com.foo", core.AppMetaStatus{State: core.AppMetaFailed, Reason: core.ReasonAPKUnreadable})
+
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if !tt.HasText(core.LabelReadFailed) {
+		t.Fatalf("a failed read says nothing; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("重试读取应用信息"); err != nil {
+		t.Fatalf("no retry button on a transient failure; texts = %v", tt.Texts())
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !containsString(meta.refreshedPackages(), "com.foo") && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !containsString(meta.refreshedPackages(), "com.foo") {
+		t.Fatalf("the retry button queued %v", meta.refreshedPackages())
+	}
+}
+
+func TestRowStillOffersResolveWhenNothingIsKnown(t *testing.T) {
+	vm, _ := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if !tt.HasText("解析应用信息") {
+		t.Fatalf("a row nobody asked about lost its button; texts = %v", tt.Texts())
 	}
 }

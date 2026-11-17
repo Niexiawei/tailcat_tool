@@ -19,9 +19,6 @@ type resourceState struct {
 	table    components.TableState
 	expanded map[string]bool
 	scroll   ui.ScrollState
-	// resolving remembers which applications the user asked to read, so the
-	// row can show a spinner until the name arrives.
-	resolving map[string]time.Time
 	// refreshing is set while a manual refresh runs, so the button cannot be
 	// pressed twice and the user sees why nothing changed yet.
 	refreshing bool
@@ -38,7 +35,7 @@ func (vm *ViewModel) resourceStateFor(device uuid.UUID) *resourceState {
 	}
 	state, ok := vm.resources[device]
 	if !ok {
-		state = &resourceState{expanded: map[string]bool{}, resolving: map[string]time.Time{}}
+		state = &resourceState{expanded: map[string]bool{}}
 		vm.resources[device] = state
 	}
 	return state
@@ -344,24 +341,8 @@ func (vm *ViewModel) appCell(c *ui.Context, col int, state *resourceState, devic
 			if app.MetaStale {
 				components.Text(c, "7 天前更新").FontSize(10).TextColor(theme.TextMuted)
 			}
-			// Names and icons cost an APK pull per application, which is slow
-			// over a tailcat channel, so each row offers to read itself, and
-			// says so while it works.
 			if app.Label == "" {
-				if state.resolving[app.Package] != (time.Time{}) {
-					if time.Since(state.resolving[app.Package]) < resolveTimeout {
-						components.Spinner(c, components.SpinnerRing).Width(14).Height(14)
-						return
-					}
-					delete(state.resolving, app.Package)
-				}
-				if components.IconButton(c, lucide.PackageSearch(), "解析应用信息", components.IconButtonCompact).Clicked() {
-					state.resolving[app.Package] = time.Now()
-					go func(pkg string) {
-						vm.Fail(vm.Manager.ResolveAppMeta(context.Background(), device, []string{pkg}))
-					}(app.Package)
-					c.Invalidate()
-				}
+				vm.appMetaAction(c, device, app.Package)
 			}
 		})
 	case 1:
@@ -400,9 +381,43 @@ func appLabel(app core.AppUsage) string {
 	return app.Package
 }
 
-// resolveTimeout stops a spinner that will never end: a read whose result never
-// arrives must not leave the row busy forever.
-const resolveTimeout = 2 * time.Minute
+// appMetaAction is the end of an unnamed row: a spinner while the store says a
+// read is running, the reason it failed, or the button that asks for one. The
+// state comes from the store, never from a timer here: a blind two-minute wait
+// is why a row whose package does not exist looked busy forever.
+func (vm *ViewModel) appMetaAction(c *ui.Context, device uuid.UUID, pkg string) {
+	theme := c.Theme()
+	status, known := vm.Manager.AppMetaStatus(device, pkg)
+	switch {
+	case known && status.State == core.AppMetaPending:
+		components.Spinner(c, components.SpinnerRing).Width(14).Height(14).Label("正在读取应用信息")
+	case known && status.State == core.AppMetaFailed:
+		label := core.LabelReadFailed
+		if status.Final {
+			label = core.LabelNoAppPackage
+		}
+		components.Tooltip(c, components.Text(c, label).FontSize(10).TextColor(theme.TextMuted), status.Reason)
+		if status.Final {
+			// Asking again cannot produce an APK the device does not have.
+			return
+		}
+		if components.IconButton(c, lucide.RefreshCw(), "重试读取应用信息", components.IconButtonCompact).Clicked() {
+			vm.askAppMeta(c, device, pkg)
+		}
+	default:
+		if components.IconButton(c, lucide.PackageSearch(), "解析应用信息", components.IconButtonCompact).Clicked() {
+			vm.askAppMeta(c, device, pkg)
+		}
+	}
+}
+
+// askAppMeta queues one row's read. The call only queues work, so it runs on the
+// render goroutine and the row shows its spinner on the very next frame instead
+// of after the next two-second sampling tick.
+func (vm *ViewModel) askAppMeta(c *ui.Context, device uuid.UUID, pkg string) {
+	vm.Fail(vm.Manager.ResolveAppMeta(context.Background(), device, []string{pkg}))
+	c.Invalidate()
+}
 
 // gpuCellText never prints 0% for a device without GPU counters.
 func gpuCellText(available bool, percent float64) string {
