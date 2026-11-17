@@ -344,6 +344,7 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | `ButtonBase` 默认居中 | 行内容居中，不像列表项 | `.Justify(ui.Start)` |
 | 行内 `Text` 不 `SingleLine()` | 长设备名把行撑高 | `.SingleLine()` |
 | 持锁调用 `Recorder` | 磁盘一慢，界面冻住 | 入队，由独立协程写 |
+| 视图每一帧都给失败的 I/O 发起重试 | 失败原因被自己抹掉，页面永远停在「正在读取」，同时不停发命令（`/cache` 就是这么卡住的） | 失败要粘住：`loadDir` 见到已有失败记录就返回，只有用户点「重试」才清掉 |
 | `ButtonGhost` 用在页面级动作上 | 按钮读成正文（无底色无边框），用户找不到入口 | 页面级动作用 `ButtonOutline`/`Secondary`/`Primary`；ghost 只留给文字里的链接与对话框里的「取消」 |
 | 单行文本被截断却不给全文 | `.SingleLine()` 只画省略号，用户拿不到完整名称/探测详情（如「没有有效连接凭据，请编辑设…」） | 每个可能被截断的 `SingleLine` 都要 `components.Tooltip(c, anchor, 全文)`：在 anchor 之后、同一帧内调用，忽略它的返回值（隐藏时无效）；悬停延迟由 MyGo 管（约 1 秒） |
 | 对话框一打开就自动跑批量作业（如「全部设备连通测试」） | 用户没同意就花掉每台 8 秒的探测，设备多时打开即卡；而且结果没人等 | 打开只展示、由「开始测试」发起；关闭对话框时 `Checker.Cancel()` 中止在跑的批次——看不见的结果不值得继续探测 |
@@ -410,12 +411,18 @@ vm.Notify("已复制…")   // 成功级：3 秒
 ### 13.1 布局
 
 ```go
-components.Split(c, &state.treeWidth,
-	func() { vm.folderTree(c, profile, state) },   // 左：components.Tree + TreeItemWithLeading
-	func() { vm.fileTable(c, profile, state) },    // 右：路径行 + components.Table
-	components.SplitOptions{FirstMin: 180, SecondMin: 260, Default: 260},
-).Fill()
+// 整个浏览区套一层边框，和终端面板同一个写法。
+ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(1).
+	Radius(theme.Radius).Border(1, theme.Border).Clip().Children(func() {
+	components.Split(c, &state.treeWidth,
+		func() { vm.folderTree(c, profile, state) },   // 左：components.Tree + TreeItemWithLeading
+		func() { vm.fileTable(c, profile, state) },    // 右：面包屑 + components.Table
+		components.SplitOptions{FirstMin: 180, SecondMin: 260, Default: 260},
+	).Fill()
+})
 ```
+
+**外观是一整块带边框的面板**，不是两列裸内容：`Padding(1)` 让里面的内容不吃掉边框（和终端面板一致），`Clip()` 让圆角真的裁掉内容。
 
 三条必须遵守的约定：
 
@@ -436,8 +443,8 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 
 - **名称放在格式串最后**，Go 侧 `SplitN(…, 6)`：文件名里有 `|` 也不会错位。
 - 路径里的 `'` 转义成 `'\''`；含换行/NUL/非绝对路径时**不发命令**，直接返回中文错误。
+- 脚本第一行是 `cd '<目录>' 2>&1 || exit 9`：`2>&1` 把 shell 自己对 `cd` 的抱怨带进输出，页面才能说「没有权限查看该文件夹：/cache」而不是笼统的「不可读」。退出码 `9` 是脚本自己的「`cd` 失败」。
 - 单目录 **2000 条**上限，超出时脚本末尾打印 `@@TRUNCATED`，页面写「只显示前 2000 项」。这是为了防止 runner 的 1 MiB 输出上限把一个巨型目录**静默**截断成"看起来完整"的列表。
-- 退出码 `9` 是脚本自己的「`cd` 失败」，页面显示「目录不存在或不可读：<路径>」。
 - **不显示创建时间**：`%W`（birth time）在 Android 的 ext4/f2fs 上几乎总是 0，用户已裁决不显示这一行。
 
 `Manager.ListRemoteDir` 照 `SampleResources` 的形状写：`operationTarget` → `validateTarget` → `runner.Run` → `targetIsCurrent` → 解析 → 缓存 + `notify()`。**它不建任务、不写通道日志、不进历史**——否则展开十个文件夹就把日志页和历史库刷满（`TestListRemoteDirCreatesNoTask` 钉住）。上传/下载反过来必须走 `BeginADBTask`：可取消、日志页可见、超时与脱敏免费。
@@ -452,13 +459,30 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 
 `beginFileLoad` 保证**同一路径只有一次读取在飞**：连点两下文件夹不会发两条命令（`TestFileTreeReadsEachFolderOnce`）。
 
+### 13.3.1 失败之后等用户，不要每帧重试
+
+`loadDir` 的 `!force` 分支有三个提前返回：已缓存、**已有失败记录**、已有读取在飞。
+
+第三条是踩出来的：早先只判断「已缓存」，于是一个读不了的目录（`/cache`）会在**每一帧**重新发起读取，而每次发起都先 `clearFileFailure` ——刚记下的失败原因被自己抹掉，页面永远停在「正在读取…」，看起来就是卡死。现在失败是粘住的，只有用户点「重试」才清掉（`TestFilePageWaitsForTheUserAfterAFailedRead`：20 帧后同一目录只读过 1 次）。
+
+### 13.3.2 提前读下一级
+
+一次目录读取成功之后，同一个 goroutine 会**顺序**把它的子目录各读一遍（`prefetchDirs`），于是点进任何一个子文件夹都是立刻就绪。三条边界：
+
+- 顺序执行，不在同一台设备上并发发命令；
+- 跳过 `/proc`、`/sys`、`/dev`、`/acct` 这类伪文件系统：它们的列表又长又没用，读一次纯属浪费；
+- 失败同样记进 `fileErrs`，用户点进去直接看到原因（这反而是提前拿到的好消息）。
+
 ### 13.4 交互与弹窗
 
 - 点树节点：右侧列该目录 + 展开该节点。
 - 点表格里的**目录**行：进入（`showDir`：右侧切换、树上选中并展开）。
+- 右侧上方的路径是 `components.Breadcrumbs` 面包屑：祖先可点，一路点回上层；`state.crumb` 是它的绑定，`showDir` 会把它重置为 -1。
+- 文件列表区域的「正在读取」和「读取失败」都是**居中**的一整块（`AlignItems(Center).Justify(Center)`），不是贴在左上角的一行字——它们是这一栏的全部内容，不是它的一行。
 - 点**文件**行：打开 `FileDetailView` —— 属性四行（文件名 / 文件大小 / 最后修改时间 / 文件权限 `%A (八进制)`）+ 主按钮「下载到本地…」+ 次按钮「上传到此文件夹…」。目录行改成「下载此文件夹…」。
 - 弹窗按 §3.6 的固定骨架：右上角一个 `IconButton` 关闭，`if !open` 是唯一收口；**不要在**对话框里用 `components.Tabs`。
-- 错误呈现分两类：读目录失败是**页面状态**（行内「读取失败：…」+「重试」），不弹提示条；发起下载/上传失败才是事件（`vm.Fail`）。
+- 错误呈现分两类：读目录失败是**页面状态**（「读取失败：…」+「重试」），不弹提示条；发起下载/上传失败才是事件（`vm.Fail`）。
+- 树里描述节点的行（「正在读取…」「没有子文件夹」「读取失败：…」）都要用 `treeNoteRow(c, depth, …)`：它按层级缩进到**子节点标签**的位置。直接用一层 `Text` 会贴到树的最左边，读起来像整棵树的第一行。
 
 ### 13.5 测试手法
 
@@ -470,6 +494,11 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 | 没有创建时间 | `tt.HasText("创建时间")` 为假（`HasText` 是子串匹配） |
 | 树懒加载 | 点整条路径的根（页面别处不会出现 `/system` 这个文本）→ 再点 `bin` → 断言树里出现「没有子文件夹」 |
 | 只读一次 | 点同一个节点三次，统计 runner 收到的 `cd '/system'` 命令数 = 1 |
+| 提前读下一级 | 只等 `/sdcard` 一次读取，然后断言命令里已经出现 `cd '/sdcard/Download'` 与 `cd '/sdcard/DCIM'`（没点过任何节点） |
+| 失败后不刷命令 | 让读取返回退出码 9，断言出现「读取失败：…」后再 `Frame()` 二十次，同一目录的命令数仍是 1 |
+| 展开箭头也会读 | 直接把 `*state.openAt("/system")` 置真（等价于点箭头），断言发出了 `/system` 的命令 |
+| 面包屑能回退 | 进入 `Download` 后点面屑里的 `sdcard`，断言回到了 `/sdcard` 的内容 |
+| 提示行有缩进 | 展开到空目录后 `Find("没有子文件夹")`，断言它的 `X` 大于根节点的 `X`（即不是贴左边） |
 | 上传/下载 | 替换包级变量 `openLocalPaths` / `saveLocalPath`（`files.go` 里的 `mygo.Dialog.Open/Save`），断言 `Manager.Tasks()` 出现对应任务 |
 
 **不要**在测试里直接改 `mygo.Dialog`：它是包级变量，改了会影响同进程其它测试；用自己的两个包装变量并在 `t.Cleanup` 还原。
