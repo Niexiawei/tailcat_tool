@@ -82,7 +82,7 @@ ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
 })
 ```
 
-**没有固定的任务面板。** 设备任务并进该设备的「日志」标签页（按时间与通道日志合并），运行中的任务在日志页顶部一键取消。历史上那个 `Shrink(0)` 贴底面板会压住内联对话框，已删除。
+**没有固定的任务面板。** 设备任务并进「日志」：设备页的日志标签与侧栏的日志页共用一份实现（`logView`，见 §14），数据来自 SQLite 时间线；运行中的任务在设备日志标签顶部一键取消。历史上那个 `Shrink(0)` 贴底面板会压住内联对话框，已删除。
 
 **行式元素一律 `FillWidth()`。** `Fill()` 让行去抢高度，是最常见的布局事故（见 §9.2）。
 
@@ -94,6 +94,7 @@ ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
 |---|---|---|
 | `/devices` | 设备列表页 | 卡片式列表（状态点 / 名称 / 连接方式与地址 / 状态），空态给出"添加设备"；页面标题在窗口标题栏里，正文不再重复 |
 | `/devices/{id}` | 设备页 | 面包屑 + 标题行（编辑 / 连接 / 断开）+ 页签（概览 / 资源 / 终端 / 文件 / 日志） |
+| `/logs` | 日志页 | 应用错误 / 通道日志 / 任务的统一时间线，四个筛选项（见 §14）；面包屑「我的设备 › 日志」；入口在侧栏设备列表之下 |
 | 其他 | 列表页 | 兜底 |
 | `/devices/{无效 id}` | "设备不存在"页 | 附带"返回我的设备" |
 
@@ -350,7 +351,11 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 单行文本被截断却不给全文 | `.SingleLine()` 只画省略号，用户拿不到完整名称/探测详情（如「没有有效连接凭据，请编辑设…」） | 每个可能被截断的 `SingleLine` 都要 `components.Tooltip(c, anchor, 全文)`：在 anchor 之后、同一帧内调用，忽略它的返回值（隐藏时无效）；悬停延迟由 MyGo 管（约 1 秒） |
 | 对话框一打开就自动跑批量作业（如「全部设备连通测试」） | 用户没同意就花掉每台 8 秒的探测，设备多时打开即卡；而且结果没人等 | 打开只展示、由「开始测试」发起；关闭对话框时 `Checker.Cancel()` 中止在跑的批次——看不见的结果不值得继续探测 |
 | 用内嵌横幅报一次性结果 | 同一句提示出现在两个槽位、不会消失，用户看不见也关不掉 | 事件走 `vm.Notify` / `vm.Fail`，页面只留状态 |
-| 每帧 `ui.TextBuffer.Set` | 选区与 caret 被重置，正在复制的日志跳走 | 只在渲染文本变化时写（`logState.text` 比对） |
+| 每帧 `ui.TextBuffer.Set` | 选区与 caret 被重置，正在复制的日志跳走 | 只在渲染文本变化时写（`internal/app/logs.go` 不再有缓冲，日志表格用 `TableVirtualized`） |
+| 在渲染函数里直接查日志库 | 库大时每帧一次读，界面跟着磁盘抖 | 筛选变化时起 goroutine 读，落地后再 `Invalidate` 一帧（`ensureLogQuery`） |
+| `TableVirtualized` 的 `List.Selected` 从 0 开始 | 点第一行时"没变化"，`OnChange` 不触发，任务行打不开输出 | 初始值给 -1（`logFilter.selected`） |
+| 倒序时间线上"跟随最新"当成滚到底 | 新行前插把内容往下顶，读者被推离最新一行 | 跟随＝`ScrollTo(0)`；"尾部"在倒序列表里是顶部 |
+| 页面切走后跟随协程还在跑 | 看不见的视图每 2 秒查一次库 | `markLogVisible` 在切换视图时把上一个的 `following` 关掉 |
 | 在 `components.Dialog` 的内容里放 `components.Tabs(..., TabsSegmented, ...)` | 关闭对话框时崩 `ui: element from pass N used in pass M`：分段控件的 `Draw` 回调闭包住了"选中的那个 tab"元素，而 MyGo 的 overlay 关闭动画会在**不重建**的情况下继续绘制旧面板 | 对话框内用 `segmentedChoice`（`internal/app/editor.go`：`ui.SegmentedBase` + 组件库的凹槽/浮起取色）或 `components.Radio`；`components.Tabs` 只用在常驻页面上（如设备页的三个页签） |
 | 直接用 `ui.Segmented` 代替上面的分段控件 | 它只画一层 `theme.Surface` 底，浅色窗口里轨道与选中块几乎看不见（用户会以为坏掉了） | 用 `segmentedChoice`，它复刻组件库分段页签的外观（轨道 `Text@6%`、选中块 `Surface` + 阴影、选中文案 600 字重） |
 | `TrackScroll` 挂在不是滚动容器的元素上 | `MaxY` 一直是 0，跟随尾部失效 | `TrackScroll` 只接管 `Scroll`/`List` 这类容器；`TextAreaBuffer` 自带 `flagScrollY`，实测可用，但换控件时要重新确认 |
@@ -394,7 +399,7 @@ TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v
 
 - **不设环境变量就 SKIP**，`go test ./...` 不写文件、不耗时（CI 不受影响）。
 - **没有断言、没有基准图**：像素级比对在不同字体/平台上必然不稳，本仓库也就不会因为「差一个像素」红。它的用途是人（或代理）看一眼。
-- 用例表 `shotCases()` 覆盖：设备列表、侧栏、概览、资源、文件（列表 / 读失败 / 读取中 / 属性弹窗）、日志、设备编辑器、临时设备、工具设置、连通测试、干预弹窗。**加了页面或对话框状态就加一条**。
+- 用例表 `shotCases()` 覆盖：设备列表、侧栏、概览、资源、文件（列表 / 读失败 / 读取中 / 属性弹窗）、日志页（有数据 / 空态）、任务输出对话框、设备日志标签、设备编辑器、临时设备、工具设置、连通测试、干预弹窗。**加了页面或对话框状态就加一条**。
 - 每帧循环里都有一次真实 `time.Sleep`：`ui.Tester` 的时钟是虚拟的，目录读取、任务启动跑在 goroutine 上，不睡就永远等不到数据。
 - `view` 字段可以只截某个 shell 槽位（侧栏就是这么截的）。
 - **终端页不在此列**：真实终端要运行期加载 libghostty-vt，`go test` 不应下载它（见 §10 最后一行），终端外观用 `go run ./cmd/tailcat-manager --demo` 目视。
@@ -408,13 +413,15 @@ TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v
 | 窗口与槽位 | `internal/app/shell.go` |
 | 侧栏、分组、底栏、提示队列、标题栏面包屑 | `internal/app/state.go` |
 | 路由、页面、概览、页签 | `internal/app/detail.go` |
-| 日志页（时间线、只读缓冲、取消） | `internal/app/logs.go` |
+| 日志页与设备日志标签（共享 `logView`、筛选、跟随、输出、清空） | `internal/app/logs.go` |
 | 内嵌终端、`lineConsole` | `internal/app/terminal.go` |
 | 表单（连接方式单选、中继分段与历史） | `internal/app/editor.go` |
 | 上传/下载表单 | `internal/app/transfer.go` |
 | 连通测试表（`components.Table`、状态图标） | `internal/app/reachability.go` |
 | 错误回流（连接、探测、终端） | `internal/app/detail.go`、`internal/app/actions.go`、`internal/app/app.go` |
-| 日志入队与写库 | `internal/core/manager.go`（`writeLogs`）、`internal/history/sqlite.go` |
+| 日志时间线查询、迁移、清理、清空 | `internal/history/sqlite.go` |
+| 应用级日志入队（`RecordAppLog`） | `internal/core/manager.go` |
+| 管理页入口骨架（侧栏 `manageEntries`、面包屑 `managePageTitle`） | `internal/app/manage.go` |
 | 设备信息读取与清空 | `internal/core/manager_tasks.go`、`internal/core/manager.go` |
 | 中继历史（`relayHistory`）与预设 | `internal/core/manager_devices.go`、`internal/core/config.go` |
 | 设备文件的读取与缓存 | `internal/core/remotefs.go`（纯解析）、`internal/core/manager_files.go`（静默读 + 缓存） |
@@ -537,3 +544,30 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 | 上传/下载 | 替换包级变量 `openLocalPaths` / `saveLocalPath`（`files.go` 里的 `mygo.Dialog.Open/Save`），断言 `Manager.Tasks()` 出现对应任务 |
 
 **不要**在测试里直接改 `mygo.Dialog`：它是包级变量，改了会影响同进程其它测试；用自己的两个包装变量并在 `t.Cleanup` 还原。
+
+## 14. 日志页与设备日志标签
+
+日志界面**只有一份实现**：`internal/app/logs.go` 的 `logView(c, f, opts)`，两个入口只传不同的过滤状态与选项。
+
+| 入口 | 路由 | 设备筛选 | 跟随最新 | 设备选择器 | 清空 |
+|---|---|---|---|---|---|
+| 侧栏「日志」 | `/logs` | 全部，可切成「只看应用」或某台设备 | 默认关 | 显示 | 有 |
+| 设备页「日志」页签 | `/devices/{id}` | 钉死为本设备（`DeviceID = 本设备`，**不是 nil**） | 默认开 | 隐藏 | 有 |
+
+设备标签之所以钉死设备而不是留空，是"这台设备的日志"要名副其实：应用级日志只进日志页的「只看应用」，不混进任何设备页。
+
+**数据来源**：`core.HistoryReader`（`Timeline` / `TaskOutput` / `ClearLogs`），`cmd/tailcat-manager/main.go` 注入 `history.Store`。页面不读 `Session.Logs`，也不持有内存缓冲——重启后仍能查就是靠这一点。
+
+**一条时间线**：SQL 用 `UNION ALL` 合并 `logs`（应用 / 通道）与 `tasks`，按时间倒序，`LIMIT` 在 `WHERE` 之后（默认 500 行，超出时页面底部提示"只显示最近 500 条"）。任务行的文本是「标题 · 中文状态」；任务的 `output` 只参与 `WHERE` 搜索，不进结果集。
+
+**四个筛选项**：设备（全部设备与应用 / 只看应用 / 每台设备）、级别（全部 / 错误 / 警告 / 信息）、时间段（今日 / 7 天 / 30 天 / 全部）、关键词（空格分隔，全部命中才算匹配，`LIKE` 转义 `% _ \`）。关键词与级别只影响**显示**，不参与清空的删除范围。
+
+**跟随最新**：打开时每 2 秒用 `Since = 最新一行的时间` 只查增量，结果前插（时间线是倒序），并把列表滚回第 0 行——倒序列表里"尾部"就是顶部。关掉跟随，页面保持静止，新行不会把读者顶走。
+
+**查询不在渲染路径上**：`ensureLogQuery` 只在"筛选与上次查询不一致"时起一个 goroutine，落地后 `Invalidate` 一帧；同一时间只允许一次在飞（`loading`）。`logMu` 保护查询协程写的那部分（`entries` / `query` / `loading` / `follow` / `lastAt`），`table`（`components.TableVirtualizedState`）与 `selected` 只由渲染线程碰。
+
+**任务行可点**：点任务行 → `TaskOutput(id)`（goroutine）→ 对话框里滚动显示输出。清空只删 `logs`：任务记录保留，对话框里写明"任务记录不会被删除"；删除范围＝当前时间段 + 设备，级别与关键词不算。
+
+**空态**：`这段时间没有日志`；还没读完时显示 `正在读取日志…`。
+
+**`--demo`**：`demoHistory`（`internal/app/demo.go`）是内存版 `Recorder` + `HistoryReader`，预置一条错误、一条警告、每台一条通道日志与一条失败任务，所以 `--demo` 的日志页与截图不会是空的。

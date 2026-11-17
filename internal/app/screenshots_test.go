@@ -184,8 +184,10 @@ func shotCases() []shotCase {
 			settle: 12,
 		},
 		{
+			// The device tab and the page share one view; this is the tab's
+			// own frame: no device picker, following by default.
 			name:   "09-device-logs",
-			build:  func(t *testing.T) *ViewModel { return shotDevice(t, readFixture, detailLog) },
+			build:  shotDeviceLogTab,
 			settle: 6,
 		},
 		{
@@ -226,6 +228,23 @@ func shotCases() []shotCase {
 			settle: 12,
 		},
 		{
+			name:  "15-logs-page",
+			build: shotLogsPage,
+		},
+		{
+			name: "16-logs-page-empty",
+			build: func(t *testing.T) *ViewModel {
+				vm := shotLogsPage(t)
+				vm.pageLogFilter().Search = "这段时间没有的关键词"
+				return vm
+			},
+		},
+		{
+			name:   "17-task-output",
+			build:  shotTaskOutput,
+			settle: 6,
+		},
+		{
 			name: "14-attention",
 			build: func(t *testing.T) *ViewModel {
 				vm := shotConnected(t, readFixture)
@@ -252,5 +271,55 @@ func shotDevice(t *testing.T, read func(dir string) (core.Result, error), tab in
 	vm := shotConnected(t, read)
 	vm.DetailTab = tab
 	vm.OpenDevice(vm.Selection)
+	return vm
+}
+
+// shotLogsPage is the demo app on the log page: the page reads the demo's own
+// in-memory history, so the picture has rows without a real device.
+func shotLogsPage(t *testing.T) *ViewModel {
+	t.Helper()
+	return newDemoViewModel(t, func(vm *ViewModel) { vm.OpenLogs() })
+}
+
+// shotDeviceLogTab is the same history seen through one device's tab.
+func shotDeviceLogTab(t *testing.T) *ViewModel {
+	t.Helper()
+	return newDemoViewModel(t, func(vm *ViewModel) {
+		vm.DetailTab = detailLog
+		vm.OpenDevice(vm.Manager.Profiles()[0].ID)
+	})
+}
+
+// shotTaskOutput opens the dialog a failed task row opens.
+func shotTaskOutput(t *testing.T) *ViewModel {
+	t.Helper()
+	vm := newDemoViewModel(t, func(vm *ViewModel) { vm.OpenLogs() })
+	if vm.History == nil {
+		t.Fatal("the demo has no history")
+	}
+	entries, err := vm.History.Timeline(core.LogQuery{})
+	if err != nil {
+		t.Fatalf("Timeline() error: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Source == core.LogTask {
+			vm.openLogOutput(entry)
+			return vm
+		}
+	}
+	t.Fatal("the demo history has no task row")
+	return nil
+}
+
+// newDemoViewModel builds a view model over the simulated environment, so a
+// screenshot never needs a real device, a real database or a network.
+func newDemoViewModel(t *testing.T, position func(*ViewModel)) *ViewModel {
+	t.Helper()
+	env := NewDemoEnvironment()
+	vm := NewViewModel(env.Manager, env.Locate)
+	vm.Demo = true
+	vm.History = env.History
+	vm.RecordAppLog = env.RecordAppLog
+	position(vm)
 	return vm
 }
