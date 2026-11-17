@@ -735,9 +735,69 @@ git commit -m "docs: describe the device file page and its trade-offs"
 | 计划 | 实际 | 原因 |
 |---|---|---|
 | `ParseStatOutput` 返回 `(DirListing, bool)` | 只返回 `DirListing` | 那个 bool 没有任何调用方会用：命令成功而没有条目就是空目录，页面文案一样 |
-| 树的根用 `core.RemoteBase(path)` 作标签 | 根用整条路径（`/storage/emulated/0` 而不是 `0`） | `RemoteBase` 对多级路径给出的是最后一段，作根节点标签没有意义 |
+| 把 `/sdcard`、`/system` 等五个路径当树的根 | 最终只有一个根 `/`（见下文第三轮） | 捷径根与 `/` 重叠，同一目录被显示两次 |
 | 取本地文件的包装变量叫 `openLocalFiles` / `saveLocalFile` | `openLocalPaths` / `saveLocalPath` | 它们也用于目录选择（`Directory: true`），名字不该带 File |
-| 两张表各自渲染「读取失败 + 重试」 | 树节点与右侧表格各有一份 | 失败可能发生在树里展开的节点上，右侧此时还是好的 |
+| 树里插「正在读取…」「没有子文件夹」提示行 | 状态挂在节点行上（转圈 / 红色「读取失败」+ Tooltip） | 提示行要手算缩进，还会让树的行数与目录数对不上（见第二轮） |
 | — | `fileMu` 单独一把锁 | `fileLoads`/`fileErrs` 由命令 goroutine 写，不应该和提示条队列共用一把锁 |
 
 新增文件：`internal/core/remotefs.go`（+测试）、`internal/core/manager_files.go`（+测试）、`internal/app/files.go`（+测试）。
+
+---
+
+## 计划完成后的修复（真机反馈四轮）
+
+任务 1–6 跑完、代码合入后，用户在真机上用了四轮，每轮都暴露出计划没覆盖的东西。下面是**症状 → 根因 → 修法 → 守护测试**，顺序即发生顺序。计划里没有预见这些，说明「审查重点」挑的失败模式偏向了"数据对不对"，漏了"界面会不会自己走进死循环"和"组件契约的隐含前提"。
+
+### 第一轮：`/cache` 卡死、外观与等待
+
+| 症状 | 根因 | 修法 | 守护测试 |
+|---|---|---|---|
+| 打开无权限的目录（`/cache`、`/data`）后永远停在「正在读取…」，后台还在不停发命令 | `filesPage` 每帧都调 `ensureDirs`；`loadDir` 在重试前先 `clearFileFailure`，把刚记下的失败原因自己抹掉，于是永远"没有失败也没有结果" | 失败粘住：`loadDir` 见到已有失败记录就返回，只有用户点「重试」才清 | `TestFilePageWaitsForTheUserAfterAFailedRead`（20 帧后同一目录只读过 1 次） |
+| 错误只说「目录不存在或不可读」，`Permission denied` 被吞掉 | 脚本的 `cd` 没把 stderr 带回输出 | 脚本首行改成 `cd '<目录>' 2>&1 \|\| exit 9`；`Permission denied` → 「没有权限查看该文件夹：…」，`No such file` → 「目录不存在：…」 | `TestListRemoteDirExplainsAMissingPermission` |
+| 浏览区与页面其他内容糊在一起 | 没画边框 | `Padding(1).Radius.Border(1).Clip()` 包住整个 Split，与终端面板同一写法 | 截图核对 |
+| 展开文件夹后点进去仍要等 | 只有打开才读 | 读成功后 `prefetchDirs` 顺序预取子目录（跳过 `/proc`、`/sys`、`/dev`、`/acct`） | `TestFilePagePrefetchesTheNextLevel` |
+| 树里的提示文字贴在最左边，像整棵树的第一行 | 提示行没有缩进 | 当时加了 `treeNoteRow(c, depth, …)` 手算缩进（第二轮被整体删除） | `TestFileTreeNotesLineUpWithTheirFolder`（第二轮删除） |
+| 右侧路径只是纯文本，无法回退 | 用 `components.Text` 画路径 | 换 `components.Breadcrumbs`，祖先可点；`showDir` 同时展开整条祖先链 | `TestFileBreadcrumbsGoBack`、`TestFileTreeOpensTheFolderTheTableNavigatedTo` |
+| 读取中提示在左上角 | 只是一行文字 | 居中 `Spinner` + 「正在读取…」；失败也是居中的原因 + 「重试」 | 截图核对 |
+| 点展开箭头（不是行名）打开的节点不读取 | 只有 `row.Clicked()` 才 `ensureDirs` | `folderChildren` 里补 `ensureDirs` | `TestFolderTreeReadsWhenTheArrowExpandsIt` |
+
+### 第二轮：箭头消失、同名目录共享状态
+
+| 症状 | 根因 | 修法 | 守护测试 |
+|---|---|---|---|
+| 可展开的文件夹（`/storage`）展开后再收缩，右侧箭头不见了 | 只在 `*open` 时才传 `children`，而 `components.TreeItemWithLeading` 的判据是 `branch = open != nil && children != nil` —— 折叠节点被当成叶子，根本不画箭头 | 换 `components.TreeVirtualized`（箭头由 `children(path) != nil` 决定）+ 纯函数 `treeChildren` 表达各状态 | `TestTreeChildrenKeepsTheArrowForFoldersThatCanStillExpand` |
+| 控制台刷 `two elements under one parent have the key "DCIM"` | 树的所有行都是同一个 Column 的直接子元素，而 `components.Tree` 用**标签**当键：`/sdcard/DCIM` 与 `/storage/emulated/0/DCIM` 同标签 → 共享一个状态 | 键改成设备路径（`TreeVirtualized` 允许自定义键），顺带获得虚拟滚动 | `TestFileTreeStaysConsistentWhenTwoFoldersShareAName`（抓 `log.SetOutput` 断言没有 `have the key`） |
+| 树的缩进要自己算 | 上面那套 `treeNoteRow` | 删除提示行，状态挂到节点行（转圈 / 红色「读取失败」+ 原因 Tooltip）；缩进由组件按 `depth` 决定 | — |
+
+### 第三轮：单根树、箭头收尾
+
+| 症状 | 根因 | 修法 | 守护测试 |
+|---|---|---|---|
+| 没有下级目录的文件夹仍显示向下的箭头（`LynkCam_Test`、`DCIM`） | `treeChildren` 给「已展开的空目录」返回空切片（保留箭头，想让用户能收回去） | 空目录一律 `nil`，**包括已展开的**；收不回去的代价是点别处 | `TestTreeChildrenKeepsTheArrowForFoldersThatCanStillExpand` |
+| `/sdcard`、`/storage`、`/data`、`/system` 与 `/` 同级 | 捷径根与 `/` 并列，`/` 展开后同一目录又出现一次（`storage → emulated → /storage/emulated/0`） | 单根 `/`，默认展开 `/` 与 `/sdcard` | `TestFileTreeMirrorsTheDeviceFilesystemFromOneRoot` |
+| 控制台继续刷 `have the key "/storage/emulated/0/..."` | 第二轮只把「标签键」换成「路径键」，但重叠的根让**同一路径真的出现了两次** | 单根之后路径在树里天然唯一 | 同上（同时断言无重复行） |
+| 单根之后 `/sdcard` 整个消失 | 真机上 `/sdcard` 是 `symbolic link`（`adb shell stat -c %F /sdcard` 实测），只认 `directory` 就看不见它 | 新增 `RemoteEntry.Folder() = Dir \|\| Link`；树、行点击、大小列、排序都用它 | `TestSortRemoteEntriesGroupsLinksWithFolders`、上面的树测试 |
+
+### 第四轮：把「看图」变成常规手段
+
+| 需求 | 做法 |
+|---|---|
+| 用 `ui.NewTester` + `png.Encode(tt.Image())` 复核页面，并长期保留 | `internal/app/screenshots_test.go` 的 `TestScreenshots` + 用例表 `shotCases()`（14 个页面/对话框状态，含侧栏单独槽位），开关是环境变量 `TAILCAT_SHOT_DIR`，不设就 SKIP |
+| 不做像素断言 | 与 AGENTS.md「视图测试不要依赖像素」一致：跨字体/平台的基准图必然不稳；这个工具是给人看的，不是断言 |
+| 用法要写进文档 | `docs/ui-and-console.md` §11.1、`AGENTS.md` 测试基础设施各一条 |
+
+### 最终形态
+
+```
+文件页 = 带边框的面板
+  ├ 左：components.TreeVirtualized，唯一根 /，键 = 设备路径
+  │    默认展开 / 与 /sdcard；箭头只在「可能有子目录」时出现；
+  │    行上带读取中转圈或红色「读取失败」（原因在 Tooltip）
+  └ 右：components.Breadcrumbs（祖先可点）+ components.Table
+       名称 / 大小 / 修改时间 / 权限；居中显示读取中或失败+重试；
+       点文件行开属性弹窗（下载到本地 / 上传到此文件夹）
+读目录：Manager.ListRemoteDir，静默执行、按「设备+路径」缓存、Disconnect 清空、
+        单目录 2000 条上限 + 截断标注、退出码 9 → 中文原因、成功后预取下一级
+```
+
+**这四轮里最值得记住的一条**：视图每帧都会重新跑一遍构建函数，所以任何"在构建里顺手发起的操作"都必须幂等且有终止条件。两个卡死/刷错误日志的 bug（每帧重试、重叠根导致同键）都属于这一类。
