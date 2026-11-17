@@ -46,7 +46,9 @@ type fileState struct {
 	selected string
 	// open is per tree node expansion. TreeItemWithLeading wants a *bool, and
 	// a map's elements are not addressable, so each node keeps its own pointer.
-	open  map[string]*bool
+	open map[string]*bool
+	// crumb is what the breadcrumbs wrote when an ancestor was activated.
+	crumb int
 	table components.TableState
 }
 
@@ -70,7 +72,10 @@ func (vm *ViewModel) fileStateFor(device uuid.UUID) *fileState {
 	}
 	state, ok := vm.files[device]
 	if !ok {
-		state = &fileState{treeWidth: 240, path: "/sdcard", selected: "/sdcard"}
+		state = &fileState{treeWidth: 240, path: "/sdcard", selected: "/sdcard", crumb: -1}
+		// The default folder is also the default open node: five closed roots
+		// say nothing about what is on the device.
+		*state.openAt("/sdcard") = true
 		vm.files[device] = state
 	}
 	return state
@@ -144,32 +149,74 @@ func (vm *ViewModel) loadDir(profile core.Profile, path string, force bool) {
 	if path == "" || !strings.HasPrefix(path, "/") {
 		return
 	}
+	key := fileKey(profile.ID, path)
 	if !force {
 		if _, ok := vm.Manager.DirListing(profile.ID, path); ok {
 			return
 		}
+		// A folder that failed stays failed until the user asks again. Retrying
+		// on every frame would clear the reason, start another read and leave
+		// the page on 「正在读取…」 forever, which is what made an unreadable
+		// folder look like a hang.
+		if vm.fileFailure(key) != "" {
+			return
+		}
 	}
-	key := fileKey(profile.ID, path)
 	if !vm.beginFileLoad(key) {
 		return
 	}
 	vm.clearFileFailure(key)
 	go func() {
-		_, err := vm.Manager.ListRemoteDir(context.Background(), profile.ID, path)
+		listing, err := vm.Manager.ListRemoteDir(context.Background(), profile.ID, path)
 		// A cancelled read means the device went away mid-listing, which the
 		// page already says with its own state; it is not a failure to report.
 		if errors.Is(err, core.ErrCancelled) {
 			err = nil
 		}
 		vm.endFileLoad(key, err)
+		if err == nil {
+			// Read the next level while the user is still looking at this one,
+			// so opening a folder he is about to click costs no wait.
+			vm.prefetchDirs(profile, listing)
+		}
 	}()
 }
 
-// showDir points the right pane at a directory; the tree follows it.
+// prefetchSkip are the pseudo filesystems a file manager has no use for: their
+// listings are huge, change constantly and cannot be opened as files.
+var prefetchSkip = map[string]bool{"/proc": true, "/sys": true, "/dev": true, "/acct": true}
+
+// prefetchDirs reads the subdirectories of a listing that just arrived, one at
+// a time, so expanding the next level shows folders instead of 「正在读取…」.
+func (vm *ViewModel) prefetchDirs(profile core.Profile, listing core.DirListing) {
+	for _, entry := range listing.Entries {
+		if !entry.Dir || prefetchSkip[entry.Path] {
+			continue
+		}
+		key := fileKey(profile.ID, entry.Path)
+		if _, ok := vm.Manager.DirListing(profile.ID, entry.Path); ok {
+			continue
+		}
+		if vm.fileFailure(key) != "" || !vm.beginFileLoad(key) {
+			continue
+		}
+		_, err := vm.Manager.ListRemoteDir(context.Background(), profile.ID, entry.Path)
+		if errors.Is(err, core.ErrCancelled) {
+			err = nil
+		}
+		vm.endFileLoad(key, err)
+	}
+}
+
+// showDir points the right pane at a directory, and opens the tree down to it:
+// a selection the tree cannot show is a selection the user cannot find again.
 func (vm *ViewModel) showDir(profile core.Profile, state *fileState, dir string) {
 	state.path = dir
 	state.selected = dir
-	*state.openAt(dir) = true
+	state.crumb = -1
+	for path := dir; path != "" && path != "/"; path = core.RemoteParent(path) {
+		*state.openAt(path) = true
+	}
 	vm.ensureDirs(profile, dir)
 }
 
@@ -182,7 +229,12 @@ func (vm *ViewModel) filesPage(c *ui.Context, profile core.Profile, session core
 	}
 	state := vm.fileStateFor(profile.ID)
 	vm.ensureDirs(profile, state.path)
-	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
+	theme := c.Theme()
+	// The whole browser sits in one frame, the way the console does: a file
+	// manager without an edge bleeds into the page and the two panes look like
+	// two unrelated columns. The 1 DIP padding keeps the panes off the border.
+	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(1).
+		Radius(theme.Radius).Border(1, theme.Border).Clip().Children(func() {
 		components.Split(c, &state.treeWidth,
 			func() { vm.folderTree(c, profile, state) },
 			func() { vm.fileTable(c, profile, state) },
@@ -205,13 +257,14 @@ func (vm *ViewModel) filesOffline(c *ui.Context, session core.Session) {
 
 // folderTree is the left pane: one root per entry point, expanded on demand.
 func (vm *ViewModel) folderTree(c *ui.Context, profile core.Profile, state *fileState) {
-	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(0, 4).Children(func() {
-		ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
+	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(6, 4).Children(func() {
+		components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).MinHeight(0).
+			Label("文件夹树").Children(func() {
 			components.Tree(c, func() {
 				for _, root := range fileRoots {
 					// A root is named by its whole path: its last element is
 					// often just "0" or "/".
-					vm.folderNode(c, profile, state, root, root)
+					vm.folderNode(c, profile, state, root, root, 0)
 				}
 			})
 		})
@@ -219,12 +272,13 @@ func (vm *ViewModel) folderTree(c *ui.Context, profile core.Profile, state *file
 }
 
 // folderNode draws one directory in the tree. children is nil while the node is
-// collapsed, which is what makes the tree lazy.
-func (vm *ViewModel) folderNode(c *ui.Context, profile core.Profile, state *fileState, path, label string) {
+// collapsed, which is what makes the tree lazy; depth is only used to indent the
+// lines that describe a node (loading, empty, failed).
+func (vm *ViewModel) folderNode(c *ui.Context, profile core.Profile, state *fileState, path, label string, depth int) {
 	open := state.openAt(path)
 	var children func()
 	if *open {
-		children = func() { vm.folderChildren(c, profile, state, path) }
+		children = func() { vm.folderChildren(c, profile, state, path, depth) }
 	}
 	row := components.TreeItemWithLeading(c, label, open, state.selected == path,
 		func(c *ui.Context, size float32) { components.Icon(c, lucide.Folder()).Size(size, size) },
@@ -235,14 +289,17 @@ func (vm *ViewModel) folderNode(c *ui.Context, profile core.Profile, state *file
 }
 
 // folderChildren lists the subdirectories of an expanded node.
-func (vm *ViewModel) folderChildren(c *ui.Context, profile core.Profile, state *fileState, path string) {
+func (vm *ViewModel) folderChildren(c *ui.Context, profile core.Profile, state *fileState, path string, depth int) {
 	theme := c.Theme()
 	key := fileKey(profile.ID, path)
+	// Expanding the arrow, not the row, is what opens a node; without this the
+	// children would sit on 「正在读取…」 because nothing started the read.
+	vm.ensureDirs(profile, path)
 	listing, ok := vm.Manager.DirListing(profile.ID, path)
 	if !ok {
 		if reason := vm.fileFailure(key); reason != "" {
-			ui.Column(c).Gap(4).Padding(0, 0, 0, 6).Children(func() {
-				components.Text(c, "读取失败："+reason).FontSize(11).TextColor(theme.Danger).SingleLine()
+			treeNoteRow(c, depth+1, func() {
+				treeNoteText(c, "读取失败："+reason, theme.Danger)
 				if components.Button(c, "重试", components.ButtonGhost).Clicked() {
 					vm.clearFileFailure(key)
 					vm.loadDir(profile, path, true)
@@ -250,7 +307,7 @@ func (vm *ViewModel) folderChildren(c *ui.Context, profile core.Profile, state *
 			})
 			return
 		}
-		components.Text(c, "正在读取…").FontSize(11).TextColor(theme.TextMuted)
+		treeNoteRow(c, depth+1, func() { treeNoteText(c, "正在读取…", theme.TextMuted) })
 		return
 	}
 	folders := 0
@@ -259,21 +316,48 @@ func (vm *ViewModel) folderChildren(c *ui.Context, profile core.Profile, state *
 			continue
 		}
 		folders++
-		vm.folderNode(c, profile, state, entry.Path, entry.Name)
+		vm.folderNode(c, profile, state, entry.Path, entry.Name, depth+1)
 	}
 	if folders == 0 {
-		components.Text(c, "没有子文件夹").FontSize(11).TextColor(theme.TextMuted)
+		treeNoteRow(c, depth+1, func() { treeNoteText(c, "没有子文件夹", theme.TextMuted) })
 	}
+}
+
+// treeNoteRow is a line that describes a node rather than being one. Its
+// content starts where the labels of the node's children start, so
+// 「正在读取…」reads as belonging to the folder above it instead of as the first
+// row of the whole tree.
+func treeNoteRow(c *ui.Context, depth int, children func()) ui.Element {
+	t := c.Theme()
+	// A row is padded by Space(1+4*depth); its label then sits after the
+	// disclosure arrow and the folder mark, about 10 units further in.
+	return ui.Row(c).FillWidth().Shrink(0).AlignItems(ui.Center).Gap(t.Space(1)).Children(func() {
+		ui.Box(c).Width(t.Space(11 + 4*float32(depth))).Shrink(0)
+		children()
+	})
+}
+
+// treeNoteText is the plain sentence a treeNoteRow carries. It is clipped by
+// the narrow pane, so it carries its own full text as a tooltip.
+func treeNoteText(c *ui.Context, text string, color ui.Color) {
+	note := components.Text(c, text).FontSize(11).SingleLine().TextColor(color)
+	components.Tooltip(c, note, text)
 }
 
 // fileTable is the right pane: the entries of the selected directory.
 func (vm *ViewModel) fileTable(c *ui.Context, profile core.Profile, state *fileState) {
 	theme := c.Theme()
 	key := fileKey(profile.ID, state.path)
-	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(6).Padding(4, 0, 4, 4).Children(func() {
+	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(6).Padding(6, 4, 6, 6).Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			pathText := components.Text(c, state.path).FontSize(11).SingleLine().Grow(1).MinWidth(0)
-			components.Tooltip(c, pathText, state.path)
+			// The path is a breadcrumb: every ancestor is a way back, which is
+			// what a deep tree needs instead of scrolling up to find the parent.
+			ui.Box(c).Grow(1).MinWidth(0).Children(func() {
+				trail := remoteTrail(state.path)
+				if components.Breadcrumbs(c, trail, &state.crumb).Changed() {
+					vm.showDir(profile, state, remoteTrailPath(trail, state.crumb))
+				}
+			})
 			if actionButton(c, lucide.RefreshCw, "刷新", components.ButtonGhost).Clicked() {
 				vm.reloadDir(profile, state.path)
 			}
@@ -285,16 +369,23 @@ func (vm *ViewModel) fileTable(c *ui.Context, profile core.Profile, state *fileS
 		listing, ok := vm.Manager.DirListing(profile.ID, state.path)
 		if !ok {
 			if reason := vm.fileFailure(key); reason != "" {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				// Centered for the same reason the spinner is: this is the whole
+				// content of the pane, not a line of it.
+				ui.Column(c).FillWidth().Grow(1).MinHeight(0).AlignItems(ui.Center).
+					Justify(ui.Center).Gap(8).Children(func() {
 					components.Text(c, "读取失败："+reason).FontSize(11).TextColor(theme.Danger).SingleLine()
-					if components.Button(c, "重试", components.ButtonGhost).Clicked() {
+					if components.Button(c, "重试", components.ButtonSecondary).Clicked() {
 						vm.clearFileFailure(key)
 						vm.loadDir(profile, state.path, true)
 					}
 				})
 				return
 			}
-			components.Text(c, "正在读取…").FontSize(11).TextColor(theme.TextMuted)
+			ui.Column(c).FillWidth().Grow(1).MinHeight(0).AlignItems(ui.Center).
+				Justify(ui.Center).Gap(8).Children(func() {
+				components.Spinner(c, components.SpinnerRing).Width(18).Height(18).Label("正在读取文件夹")
+				components.Text(c, "正在读取…").FontSize(11).TextColor(theme.TextMuted)
+			})
 			return
 		}
 		if listing.Truncated {
@@ -319,6 +410,23 @@ func (vm *ViewModel) fileTable(c *ui.Context, profile core.Profile, state *fileS
 			})
 		})
 	})
+}
+
+// remoteTrail splits a device path into breadcrumb items, root first.
+func remoteTrail(path string) []string {
+	trimmed := strings.Trim(path, "/")
+	if trimmed == "" {
+		return []string{"/"}
+	}
+	return append([]string{"/"}, strings.Split(trimmed, "/")...)
+}
+
+// remoteTrailPath is the directory an activated breadcrumb item points at.
+func remoteTrailPath(trail []string, index int) string {
+	if index <= 0 || index >= len(trail) {
+		return "/"
+	}
+	return "/" + strings.Join(trail[1:index+1], "/")
 }
 
 // fileColumns are the file table's columns, in display order.

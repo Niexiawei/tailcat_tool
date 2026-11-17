@@ -29,7 +29,10 @@ func dirOfScript(script string) (string, bool) {
 		return "", false
 	}
 	rest := script[len(prefix):]
-	end := strings.Index(rest, "' || exit 9")
+	end := strings.Index(rest, "' 2>&1 || exit 9")
+	if end < 0 {
+		end = strings.Index(rest, "' || exit 9")
+	}
 	if end < 0 {
 		return "", false
 	}
@@ -303,4 +306,137 @@ func hasTask(vm *ViewModel, title string) bool {
 		}
 	}
 	return false
+}
+
+// waitForCommand frames until the recorded commands contain want.
+func waitForCommand(t *testing.T, commands func() []string, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		for _, command := range commands() {
+			if strings.Contains(command, want) {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("never ran %q; commands = %v", want, commands())
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// TestFilePagePrefetchesTheNextLevel is the whole point of reading ahead: the
+// folder the user is about to click is already loaded when they click it.
+func TestFilePagePrefetchesTheNextLevel(t *testing.T) {
+	vm, commands := newFilesViewModel(t, readFixture)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "照片.jpg")
+
+	waitForCommand(t, commands, "cd '/sdcard/Download'")
+	waitForCommand(t, commands, "cd '/sdcard/DCIM'")
+}
+
+// TestFilePageWaitsForTheUserAfterAFailedRead pins the hang that made an
+// unreadable folder (/cache) sit on 「正在读取…」 forever: the page asked for a
+// retry on every frame, and each retry cleared the reason it had just recorded.
+func TestFilePageWaitsForTheUserAfterAFailedRead(t *testing.T) {
+	vm, commands := newFilesViewModel(t, func(string) (core.Result, error) {
+		return core.Result{ExitCode: 9, Output: "/system/bin/sh: cd: /sdcard: Permission denied\n"}, nil
+	})
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "读取失败：没有权限查看该文件夹：/sdcard")
+
+	for i := 0; i < 20; i++ {
+		tt.Frame()
+	}
+	reads := 0
+	for _, command := range commands() {
+		if strings.Contains(command, "cd '/sdcard'") {
+			reads++
+		}
+	}
+	if reads != 1 {
+		t.Fatalf("/sdcard was read %d times without the user asking again, want 1", reads)
+	}
+}
+
+// TestFolderTreeReadsWhenTheArrowExpandsIt covers the other way a node opens:
+// the disclosure arrow, which does not activate the row.
+func TestFolderTreeReadsWhenTheArrowExpandsIt(t *testing.T) {
+	vm, commands := newFilesViewModel(t, readFixture)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "照片.jpg")
+
+	state := vm.fileStateFor(vm.Selection)
+	*state.openAt("/system") = true
+	tt.Frame()
+
+	waitForCommand(t, commands, "cd '/system'")
+}
+
+// TestFileBreadcrumbsGoBack checks that the path above the table is a way back
+// up the tree, not just a label.
+func TestFileBreadcrumbsGoBack(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "照片.jpg")
+
+	if err := tt.Click("Download"); err != nil {
+		t.Fatalf("Click(Download) error: %v", err)
+	}
+	waitForText(t, tt, "update.zip")
+	if !tt.HasText("sdcard") {
+		t.Fatalf("the breadcrumb lost its ancestor; texts = %v", tt.Texts())
+	}
+
+	if err := tt.Click("sdcard"); err != nil {
+		t.Fatalf("Click(sdcard) error: %v", err)
+	}
+	waitForText(t, tt, "照片.jpg")
+}
+
+// TestFileTreeNotesLineUpWithTheirFolder keeps the loading and empty lines from
+// reading as the first row of the whole tree.
+func TestFileTreeNotesLineUpWithTheirFolder(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "照片.jpg")
+
+	if err := tt.Click("/system"); err != nil {
+		t.Fatalf("Click(/system) error: %v", err)
+	}
+	waitForText(t, tt, "build.prop")
+	if err := tt.Click("bin"); err != nil {
+		t.Fatalf("Click(bin) error: %v", err)
+	}
+	waitForText(t, tt, "没有子文件夹")
+
+	note, ok := tt.Find("没有子文件夹")
+	if !ok {
+		t.Fatalf("no note to measure; texts = %v", tt.Texts())
+	}
+	root, ok := tt.Find("/system")
+	if !ok {
+		t.Fatalf("no root to compare with; texts = %v", tt.Texts())
+	}
+	if note.X <= root.X+10 {
+		t.Fatalf("the note is flush with the tree's edge: note.X = %v, root.X = %v", note.X, root.X)
+	}
+}
+
+// TestFileTreeOpensTheFolderTheTableNavigatedTo keeps the two panes agreeing: a
+// folder the table opened must be visible in the tree, or the user cannot find
+// their way back to it.
+func TestFileTreeOpensTheFolderTheTableNavigatedTo(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "照片.jpg")
+
+	if err := tt.Click("Download"); err != nil {
+		t.Fatalf("Click(Download) error: %v", err)
+	}
+	waitForText(t, tt, "update.zip")
+	// /sdcard/Download holds no folders, so this sentence can only come from
+	// the tree — and only if the node is open.
+	waitForText(t, tt, "没有子文件夹")
 }

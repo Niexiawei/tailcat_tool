@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -420,8 +421,10 @@ func TestMissingDevicePage(t *testing.T) {
 	}
 }
 
-// recordingRunner answers adb through fn and remembers every command line.
+// recordingRunner answers adb through fn and remembers every command line. It
+// is written from command goroutines, so the log has a lock of its own.
 type recordingRunner struct {
+	mu    sync.Mutex
 	fn    func(core.Command) (core.Result, error)
 	calls []string
 }
@@ -431,8 +434,17 @@ func (r *recordingRunner) Start(context.Context, core.Command, func(string)) (*c
 }
 
 func (r *recordingRunner) Run(_ context.Context, c core.Command, _ func(string)) (core.Result, error) {
+	r.mu.Lock()
 	r.calls = append(r.calls, strings.Join(c.Args, " "))
+	r.mu.Unlock()
 	return r.fn(c)
+}
+
+// commandLog returns the commands seen so far.
+func (r *recordingRunner) commandLog() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.calls...)
 }
 
 // newRunnerViewModel builds a view model whose manager answers adb with fn.
@@ -460,7 +472,7 @@ func newRunnerViewModel(t *testing.T, fn func(core.Command) (core.Result, error)
 	}
 	m := core.NewManager(mo)
 	vm := NewViewModel(m, func(string) (string, bool) { return "", false })
-	return vm, func() []string { return runner.calls }
+	return vm, runner.commandLog
 }
 
 func TestTaskPanelIsGone(t *testing.T) {
