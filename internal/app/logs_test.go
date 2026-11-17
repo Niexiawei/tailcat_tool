@@ -629,3 +629,41 @@ func TestDeviceLogTabKeepsFollowTheTail(t *testing.T) {
 		t.Fatalf("the followed tab starts at row %d, want the newest row", first)
 	}
 }
+
+func TestLogsPageDoesNotRequeryOnEveryFrame(t *testing.T) {
+	vm, reader, base := logsPageFixture(t)
+	reader.add(core.TimelineEntry{At: base.Add(-time.Minute), Level: core.LogInfo, Source: core.LogApp, Text: "一行"})
+	vm.pageLogFilter().Range = logRangeWeek
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	for i := 0; i < 5; i++ {
+		tt.Frame()
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := len(reader.recorded()); got != 1 {
+		t.Fatalf("the page made %d queries while nothing changed, want 1", got)
+	}
+}
+
+func TestLogFollowStopsWhenAnotherViewDraws(t *testing.T) {
+	vm := newTestViewModel(t)
+	device := vm.Manager.Profiles()[0].ID
+	tab := vm.logFilterFor(device)
+	tab.Follow = true
+	vm.markLogVisible(tab)
+	vm.ensureLogFollow(tab)
+	vm.markLogVisible(vm.pageLogFilter())
+	if vm.logFollowWanted(tab) {
+		t.Fatal("the device tab is still wanted after the page took over")
+	}
+
+	// The harder case: no log view draws at all (the user went to the index
+	// page). The next frame clears the active view, and the tab must stop.
+	other := vm.logFilterFor(uuid.New())
+	vm.markLogVisible(other)
+	vm.clearActiveLog()
+	if vm.logFollowWanted(other) {
+		t.Fatal("a log view that is no longer drawn still wants to follow")
+	}
+}

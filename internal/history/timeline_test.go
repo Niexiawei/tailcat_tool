@@ -480,3 +480,35 @@ func TestClearLogsDeletesLogsButNotTasks(t *testing.T) {
 		}
 	}
 }
+
+func TestTimelineSearchTreatsWildcardsLiterally(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now()
+	for _, text := range []string{"下载进度 100% 完成", "另一条日志"} {
+		if err := store.RecordAppLog(core.AppLogRecord{At: now, Level: core.LogInfo, Text: text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// A user typing % means a percent sign, not "anything".
+	entries, err := store.Timeline(core.LogQuery{Search: "100%"})
+	if err != nil {
+		t.Fatalf("Timeline() error: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Text != "下载进度 100% 完成" {
+		t.Fatalf("search 100%% = %+v, want the literal match", entries)
+	}
+	underscore, err := store.Timeline(core.LogQuery{Search: "另一_日志"})
+	if err != nil {
+		t.Fatalf("Timeline() error: %v", err)
+	}
+	if len(underscore) != 0 {
+		t.Fatalf("search 另一_日志 = %+v; _ must not match any character", underscore)
+	}
+}

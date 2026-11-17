@@ -32,6 +32,9 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 
 // routedPage builds the page the router shows.
 func (vm *ViewModel) routedPage(c *ui.Context) {
+	// Nothing is following until a log view says so this frame; that is how a
+	// page left behind stops polling.
+	vm.clearActiveLog()
 	if vm.Router == nil {
 		if profile, ok := vm.SelectedProfile(); ok {
 			vm.devicePage(c, profile)
@@ -205,7 +208,7 @@ func (vm *ViewModel) devicePage(c *ui.Context, profile core.Profile) {
 			vm.filesPage(c, profile, session)
 		case detailLog:
 			vm.Manager.StopResourceSampling(profile.ID)
-			vm.logPage(c, profile, session)
+			vm.logPage(c, profile)
 		default:
 			vm.Manager.StopResourceSampling(profile.ID)
 			vm.overview(c, profile, session)

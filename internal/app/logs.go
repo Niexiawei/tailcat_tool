@@ -34,7 +34,7 @@ func deviceTasks(tasks []core.Task, id uuid.UUID) []core.Task {
 // logPage is the device page's 日志 tab. It is a thin wrapper around the one
 // log UI: the device is fixed to this device, the picker is hidden, and the
 // tab keeps following the newest line the way the old text view did.
-func (vm *ViewModel) logPage(c *ui.Context, profile core.Profile, session core.Session) {
+func (vm *ViewModel) logPage(c *ui.Context, profile core.Profile) {
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(6).Children(func() {
 		ui.Row(c).FillWidth().Shrink(0).Gap(8).AlignItems(ui.Center).Children(func() {
 			components.Text(c, "通道日志与任务").FontSize(13).Bold()
@@ -120,16 +120,22 @@ type logViewOptions struct {
 	AllowClear       bool
 }
 
-// since turns the chosen range into a lower bound for the query.
+// since turns the chosen range into a lower bound for the query. The bound is
+// truncated to a day on purpose: a moving "now − 7 days" would differ on every
+// frame, the page would never recognise its own query, and it would re-read the
+// whole range sixty times a second.
 func (f *logFilter) since() time.Time {
 	now := time.Now()
+	day := func(t time.Time) time.Time {
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+	}
 	switch f.Range {
 	case logRangeToday:
-		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		return day(now)
 	case logRangeWeek:
-		return now.Add(-7 * 24 * time.Hour)
+		return day(now.AddDate(0, 0, -7))
 	case logRangeMonth:
-		return now.Add(-30 * 24 * time.Hour)
+		return day(now.AddDate(0, 0, -30))
 	default:
 		return time.Time{}
 	}
@@ -518,18 +524,32 @@ func (vm *ViewModel) ensureLogFollow(f *logFilter) {
 	go func() {
 		for {
 			time.Sleep(logFollowInterval)
-			vm.logMu.Lock()
-			running := f.following && f.Follow
-			if !running {
+			if !vm.logFollowWanted(f) {
+				vm.logMu.Lock()
 				f.following = false
-			}
-			vm.logMu.Unlock()
-			if !running {
+				vm.logMu.Unlock()
 				return
 			}
 			vm.followLogs(f)
 		}
 	}()
+}
+
+// logFollowWanted reports whether a wake-up is still useful: the switch is on
+// and this view is the one being drawn. A hidden view must not keep reading the
+// database and asking for frames nobody sees.
+func (vm *ViewModel) logFollowWanted(f *logFilter) bool {
+	vm.logMu.Lock()
+	defer vm.logMu.Unlock()
+	return f.following && f.Follow && vm.activeLog == f
+}
+
+// clearActiveLog forgets which log view drew last. It runs once per frame
+// before the pages; a log view that is actually drawn sets it again.
+func (vm *ViewModel) clearActiveLog() {
+	vm.logMu.Lock()
+	vm.activeLog = nil
+	vm.logMu.Unlock()
 }
 
 // markLogVisible remembers which view is drawing and stops the previous one
