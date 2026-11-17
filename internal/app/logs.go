@@ -20,17 +20,6 @@ func runningTasks(tasks []core.Task, id uuid.UUID) []core.Task {
 	return running
 }
 
-// deviceTasks keeps the tasks that belong to one device.
-func deviceTasks(tasks []core.Task, id uuid.UUID) []core.Task {
-	kept := make([]core.Task, 0, len(tasks))
-	for _, task := range tasks {
-		if task.DeviceID == id {
-			kept = append(kept, task)
-		}
-	}
-	return kept
-}
-
 // logPage is the device page's 日志 tab. It is a thin wrapper around the one
 // log UI: the device is fixed to this device, the picker is hidden, and the
 // tab keeps following the newest line the way the old text view did.

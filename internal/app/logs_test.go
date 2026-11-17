@@ -13,18 +13,6 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestDeviceTasksFiltersByDevice(t *testing.T) {
-	mine, other := uuid.New(), uuid.New()
-	tasks := []core.Task{
-		{ID: uuid.New(), DeviceID: mine, Title: "上传"},
-		{ID: uuid.New(), DeviceID: other, Title: "别的设备的任务"},
-	}
-	kept := deviceTasks(tasks, mine)
-	if len(kept) != 1 || kept[0].Title != "上传" {
-		t.Fatalf("deviceTasks() = %+v, want only this device's task", kept)
-	}
-}
-
 func TestLogPageHasAnEmptyState(t *testing.T) {
 	vm, reader, _ := deviceLogFixture(t)
 	tt := ui.NewTester(vm.ContentView, 1100, 760)
