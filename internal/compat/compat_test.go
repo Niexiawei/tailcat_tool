@@ -115,6 +115,7 @@ var (
 	_                                                                      = (*components.NativeSelectParts).Changed
 	_                                                                      = components.TextBoxBuffer
 	_                                                                      = components.TextBoxOptions{}.ReadOnly
+	_                                                                      = components.TextBoxOptions{}.LeadingIcon
 	_ func() *ui.SVG                                                       = lucide.Search
 	_ string                                                               = sidebar.ShellOptions{}.Title
 	_ func(*ui.Context)                                                    = sidebar.ShellOptions{}.Content
