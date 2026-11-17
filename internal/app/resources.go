@@ -19,13 +19,11 @@ type resourceState struct {
 	table    components.TableState
 	expanded map[string]bool
 	scroll   ui.ScrollState
-	// refreshing is set while a manual refresh runs, so the button cannot be
-	// pressed twice and the user sees why nothing changed yet.
-	refreshing bool
-	// refreshAt and refreshSeen are what tells the page a refresh finished:
-	// a newer reading, or a different number of named applications.
-	refreshAt   time.Time
-	refreshSeen int
+	// batch is what a manual refresh is reading, and batchAt is when it
+	// started: a package counts as done once its status changed after that, so
+	// the toolbar can say how far along it is instead of guessing from a timer.
+	batch   []string
+	batchAt time.Time
 }
 
 // resourceStateFor returns one device's page state, creating it on first use.
@@ -235,7 +233,7 @@ func memoryText(memory core.MemorySample) string {
 
 // processSection is the toolbar plus the grouped process table.
 func (vm *ViewModel) processSection(c *ui.Context, state *resourceState, profile core.Profile, session core.Session, snapshot core.ResourceSnapshot) {
-	vm.settleRefresh(state, snapshot)
+	vm.settleRefresh(state, profile.ID)
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(6).Children(func() {
 		vm.tableToolbar(c, state, profile, session, snapshot)
 		vm.processTable(c, state, profile.ID, snapshot)
@@ -255,42 +253,61 @@ func (vm *ViewModel) tableToolbar(c *ui.Context, state *resourceState, profile c
 		components.Text(c, itoa(len(snapshot.Apps))+" 个应用 · "+itoa(processes)+" 个进程").
 			FontSize(11).TextColor(theme.TextMuted)
 		ui.Box(c).Grow(1)
-		if state.refreshing {
-			components.Text(c, "正在刷新应用信息…").FontSize(11).TextColor(theme.TextMuted)
+		if done, total := vm.batchProgress(state, profile.ID); total > 0 {
+			components.Text(c, "正在读取应用信息 "+itoa(done)+"/"+itoa(total)).
+				FontSize(11).TextColor(theme.TextMuted)
 		}
 		button := components.IconButton(c, lucide.RefreshCw(), "刷新应用信息", components.IconButtonCompact).
-			Disabled(state.refreshing || session.State != core.StateOnline)
+			Disabled(len(state.batch) > 0 || session.State != core.StateOnline)
 		if !button.Clicked() {
 			return
 		}
-		state.refreshing = true
-		state.refreshAt = snapshot.At
-		state.refreshSeen = namedApps(snapshot)
+		state.batch = appPackages(snapshot)
+		state.batchAt = time.Now()
 		go func() { vm.Fail(vm.Manager.RefreshAppMeta(context.Background(), profile.ID)) }()
 		c.Invalidate()
 	})
 }
 
-// settleRefresh ends the "refreshing" state once a newer reading arrived or the
-// number of named applications changed. Waiting for every application would
-// never end: system binaries have no APK to read.
-func (vm *ViewModel) settleRefresh(state *resourceState, snapshot core.ResourceSnapshot) {
-	if !state.refreshing {
+// settleRefresh ends the refresh once every package it asked about has settled.
+// The 90-second guard is the only timer left on this page, and it exists for the
+// one case the statuses cannot cover: a read that never reports back at all.
+func (vm *ViewModel) settleRefresh(state *resourceState, device uuid.UUID) {
+	if len(state.batch) == 0 {
 		return
 	}
-	if namedApps(snapshot) != state.refreshSeen || snapshot.At.After(state.refreshAt) || time.Since(state.refreshAt) > 30*time.Second {
-		state.refreshing = false
+	if done, total := vm.batchProgress(state, device); done >= total || time.Since(state.batchAt) > batchGiveUpAfter {
+		state.batch = nil
 	}
 }
 
-func namedApps(snapshot core.ResourceSnapshot) int {
-	named := 0
-	for _, app := range snapshot.Apps {
-		if app.Label != "" {
-			named++
+// batchProgress counts the packages of a running refresh that reached a
+// terminal state after it started.
+func (vm *ViewModel) batchProgress(state *resourceState, device uuid.UUID) (done, total int) {
+	for _, pkg := range state.batch {
+		total++
+		status, known := vm.Manager.AppMetaStatus(device, pkg)
+		if !known || status.State == core.AppMetaPending || status.State == core.AppMetaUnknown {
+			continue
 		}
+		if status.At.Before(state.batchAt) {
+			continue
+		}
+		done++
 	}
-	return named
+	return done, total
+}
+
+// batchGiveUpAfter is how long a refresh may keep the toolbar busy without
+// progress. It never hides a row's own state; it only re-enables one button.
+const batchGiveUpAfter = 90 * time.Second
+
+func appPackages(snapshot core.ResourceSnapshot) []string {
+	pkgs := make([]string, 0, len(snapshot.Apps))
+	for _, app := range snapshot.Apps {
+		pkgs = append(pkgs, app.Package)
+	}
+	return pkgs
 }
 
 // processTable lists one row per application and, when the user expands it, its

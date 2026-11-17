@@ -278,8 +278,79 @@ func TestResourceToolbarRefreshAsksManagerToRefresh(t *testing.T) {
 		t.Fatal("the refresh button queued nothing")
 	}
 	profile := vm.Manager.Profiles()[0]
-	if !vm.resourceStateFor(profile.ID).refreshing {
+	if len(vm.resourceStateFor(profile.ID).batch) == 0 {
 		t.Fatal("the page does not show that a refresh is running")
+	}
+}
+
+// settledStatus is a terminal status reached after a batch started, which is
+// what tells the toolbar that this package is done.
+func settledStatus() core.AppMetaStatus {
+	return core.AppMetaStatus{State: core.AppMetaReady, At: time.Now().Add(time.Minute)}
+}
+
+func TestRefreshSaysHowManyAreDone(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if err := tt.Click("刷新应用信息"); err != nil {
+		t.Fatalf("clicking the refresh button: %v", err)
+	}
+
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if !tt.HasText("正在读取应用信息 0/2") {
+		t.Fatalf("the toolbar does not say how far the refresh got; texts = %v", tt.Texts())
+	}
+
+	meta.setStatus("com.foo", settledStatus())
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if !tt.HasText("正在读取应用信息 1/2") {
+		t.Fatalf("one settled application did not move the count; texts = %v", tt.Texts())
+	}
+}
+
+func TestRefreshProgressEndsWhenEveryRowIsSettled(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if err := tt.Click("刷新应用信息"); err != nil {
+		t.Fatalf("clicking the refresh button: %v", err)
+	}
+
+	meta.setStatus("com.foo", settledStatus())
+	meta.setStatus("system_server", core.AppMetaStatus{
+		State:  core.AppMetaFailed,
+		Reason: core.ReasonNoAppPackage,
+		Final:  true,
+		At:     time.Now().Add(time.Minute),
+	})
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+
+	if tt.HasText("正在读取应用信息 1/2") || tt.HasText("正在读取应用信息 2/2") {
+		t.Fatalf("a finished refresh still reports progress; texts = %v", tt.Texts())
+	}
+}
+
+func TestRefreshDoesNotAskAboutProcessesWithNoAppPackage(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	meta.setStatus("system_server", core.AppMetaStatus{
+		State:  core.AppMetaFailed,
+		Reason: core.ReasonNoAppPackage,
+		Final:  true,
+	})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if err := tt.Click("刷新应用信息"); err != nil {
+		t.Fatalf("clicking the refresh button: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(meta.refreshedPackages()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	refreshed := meta.refreshedPackages()
+	if containsString(refreshed, "system_server") {
+		t.Fatalf("refreshed = %v; a process with no APK was asked again", refreshed)
+	}
+	if !containsString(refreshed, "com.foo") {
+		t.Fatalf("refreshed = %v; the real application was skipped too", refreshed)
 	}
 }
 
