@@ -431,6 +431,8 @@ ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(1).
 |---|---|
 | `Split` 的两个面板都要 `MinWidth(0)`（内部 `ui.Scroll` / `ScrollView` 都要带） | 不加的话长文件名会把左右两栏一起撑过窗口宽度，右侧被裁 |
 | 树用 `components.TreeVirtualized`，**键是设备路径**（`fileState.tree`） | 树的所有行都是同一个 Column 的直接子元素。`components.Tree` 用**标签**当键，于是 `/sdcard/DCIM` 和 `/system/DCIM` 会拿到同一个 key，控制台报 `two elements under one parent have the key "DCIM"`，两行共享一个状态（展开一个另一个也变）。键换成路径后同名目录各走各的，顺便拿到虚拟滚动 |
+| 树**只有一个根**：`/` | 曾经把 `/sdcard`、`/storage/emulated/0`、`/data/local/tmp`、`/system` 当捷径与 `/` 并列，结果 `/` 展开后同一个目录又出现一次（`... → storage → emulated → /storage/emulated/0`），两行同键、各子目录全部报 `have the key`。目录只能有一个真相：从 `/` 往下走 |
+| 符号链接算文件夹（`RemoteEntry.Folder()`） | 真机上 `/sdcard` 是指向内部存储的软链，`stat` 报 `symbolic link`。只认 `directory` 的话，单根树里最重要的那个目录会直接消失。代价：指向普通文件的软链也会被当成文件夹，点进去会显示「无法进入」，这是可接受的一头错 |
 | 行式元素 `FillWidth()`，滚动容器 `Grow(1).MinHeight(0)` | `Fill()` 会同时抢高度（见 §10） |
 
 **展开箭头是「里面还有东西」的唯一提示**（`treeChildren`，纯函数，测试直接断言）：
@@ -439,12 +441,11 @@ ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(1).
 |---|---|---|---|
 | 没读过 | — | 显示箭头 | 还不知道里面有什么，先给箭头；点开才去读 |
 | 读过 | 有 | 显示箭头 | 正常可展开 |
-| 读过 | 没有 | **不显示箭头** | 点开也只会是空的，不要给出一个假承诺 |
-| 读过、而且已经展开 | 没有 | 显示箭头 | 否则用户没法把它收回去 |
+| 读过 | 没有 | **不显示箭头** | 点开也只会是空的，不要给出一个假承诺。**包括已经展开的**：早先为了"能收回去"保留箭头，用户看到的就是一个转向下、里面却什么都没有的箭头 |
 
 组件按 `children(path)` 是否为 `nil` 决定画不画箭头，所以「键为空切片」和「键为 `nil`」是两种意思，别写反。
 
-树的根是固定的五个路径（`/sdcard`、`/storage/emulated/0`、`/data/local/tmp`、`/system`、`/`），**用整条路径当标签**（`RemoteBase("/storage/emulated/0")` 只是 `0`）。根默认全部折叠，右侧默认列出 `/sdcard`。
+树只有一个根 `/`，默认展开到 `/sdcard`（`state.tree.Open.Add("/")` + `Add("/sdcard")`），右侧默认列出 `/sdcard`。所以启动时会预取 `/` 下十几个目录——这是「点进去不用等」的价格，跳过 `/proc`、`/sys`、`/dev`、`/acct`。
 
 ### 13.2 取数：一次 `stat` 往返，静默执行
 
@@ -502,6 +503,7 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 
 | 目的 | 手法 |
 |---|---|
+| 树的形状 | `treeRows(vm)` 取整个树的路径序列，断言等于 `["/", "/sdcard", "/sdcard/DCIM", …]`：一个根、软链目录在里面、没有重复行 |
 | 列表渲染 | `waitForText(t, tt, "照片.jpg")` —— 目录读取在 goroutine 里，必须「反复 `Frame()` 直到出现」，不能只 `Frame()` 一次 |
 | 没有创建时间 | `tt.HasText("创建时间")` 为假（`HasText` 是子串匹配） |
 | 树懒加载 | 点整条路径的根（页面别处不会出现 `/system` 这个文本）→ 再点 `bin` → 断言树里出现「没有子文件夹」 |
