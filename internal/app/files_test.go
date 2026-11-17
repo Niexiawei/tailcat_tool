@@ -1,7 +1,10 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -164,19 +167,28 @@ func TestFolderTreeExpandsOnlyWhenClicked(t *testing.T) {
 	tt := ui.NewTester(vm.ContentView, 1000, 760)
 	waitForText(t, tt, "照片.jpg")
 
-	// The roots are named by their whole path, which nothing else on the
-	// page is, so this click can only land on the tree.
+	// /sdcard starts open, so its folders are already rows; /system's are not
+	// until the user opens it.
+	for _, row := range treeRows(vm) {
+		if row == "/system/bin" {
+			t.Fatalf("/system was open without being asked; rows = %v", treeRows(vm))
+		}
+	}
 	if err := tt.Click("/system"); err != nil {
 		t.Fatalf("Click(/system) error: %v", err)
 	}
-	waitForText(t, tt, "build.prop")
+	waitForRow(t, vm, tt, "/system/bin")
 
+	// /system/bin holds no folders, so opening it adds nothing.
 	if err := tt.Click("bin"); err != nil {
 		t.Fatalf("Click(bin) error: %v", err)
 	}
-	// /system/bin lists nothing, so the expanded node says so. That sentence
-	// only exists inside the tree.
-	waitForText(t, tt, "没有子文件夹")
+	tt.Frame()
+	for _, row := range treeRows(vm) {
+		if strings.HasPrefix(row, "/system/bin/") {
+			t.Fatalf("the empty folder expanded into %q; rows = %v", row, treeRows(vm))
+		}
+	}
 }
 
 func TestFileTreeReadsEachFolderOnce(t *testing.T) {
@@ -368,7 +380,7 @@ func TestFolderTreeReadsWhenTheArrowExpandsIt(t *testing.T) {
 	waitForText(t, tt, "照片.jpg")
 
 	state := vm.fileStateFor(vm.Selection)
-	*state.openAt("/system") = true
+	state.tree.Open.Add("/system")
 	tt.Frame()
 
 	waitForCommand(t, commands, "cd '/system'")
@@ -395,32 +407,94 @@ func TestFileBreadcrumbsGoBack(t *testing.T) {
 	waitForText(t, tt, "照片.jpg")
 }
 
-// TestFileTreeNotesLineUpWithTheirFolder keeps the loading and empty lines from
-// reading as the first row of the whole tree.
-func TestFileTreeNotesLineUpWithTheirFolder(t *testing.T) {
-	vm, _ := newFilesViewModel(t, readFixture)
+// treeRows reports the paths the tree shows, top to bottom.
+func treeRows(vm *ViewModel) []string {
+	state := vm.fileStateFor(vm.Selection)
+	rows := make([]string, 0, state.tree.Rows())
+	for i := 0; i < state.tree.Rows(); i++ {
+		rows = append(rows, state.tree.Item(i))
+	}
+	return rows
+}
+
+// waitForRow frames until the tree shows this path as a row.
+func waitForRow(t *testing.T, vm *ViewModel, tt *ui.Tester, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		tt.Frame()
+		for _, row := range treeRows(vm) {
+			if row == want {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the tree never showed %q; rows = %v", want, treeRows(vm))
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// TestTreeChildrenKeepsTheArrowForFoldersThatCanStillExpand is the rule behind
+// the disclosure arrow: unknown keeps it, known-empty drops it, and an empty
+// folder that is already open keeps it so it can be closed again.
+func TestTreeChildrenKeepsTheArrowForFoldersThatCanStillExpand(t *testing.T) {
+	if kids := treeChildren(nil, false, false); kids == nil {
+		t.Fatal("a folder nobody has read yet must keep its arrow")
+	}
+	if kids := treeChildren(nil, false, true); kids == nil {
+		t.Fatal("a folder being read must keep its arrow")
+	}
+	if kids := treeChildren([]string{"/sdcard/DCIM"}, true, false); len(kids) != 1 {
+		t.Fatalf("kids = %v", kids)
+	}
+	if kids := treeChildren(nil, true, false); kids != nil {
+		t.Fatalf("a folder known to hold nothing must show no arrow, got %v", kids)
+	}
+	if kids := treeChildren(nil, true, true); kids == nil {
+		t.Fatal("an empty folder that is open must keep its arrow so it can close")
+	}
+}
+
+// TestFileTreeStaysConsistentWhenTwoFoldersShareAName is the console error the
+// user saw: every tree row is a child of one column, and a tree keyed by label
+// gives /sdcard/Download and /system/Download one shared state.
+func TestFileTreeStaysConsistentWhenTwoFoldersShareAName(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	read := func(dir string) (core.Result, error) {
+		shared := `directory|4096|770|drwxrwx---|1700000000|./Download
+regular file|12|660|-rw-rw----|1700000000|./note.txt
+`
+		switch dir {
+		case "/sdcard", "/system":
+			return core.Result{Output: shared}, nil
+		}
+		return core.Result{}, nil
+	}
+	vm, _ := newFilesViewModel(t, read)
 	tt := ui.NewTester(vm.ContentView, 1000, 760)
-	waitForText(t, tt, "照片.jpg")
+	waitForText(t, tt, "note.txt")
 
 	if err := tt.Click("/system"); err != nil {
 		t.Fatalf("Click(/system) error: %v", err)
 	}
-	waitForText(t, tt, "build.prop")
-	if err := tt.Click("bin"); err != nil {
-		t.Fatalf("Click(bin) error: %v", err)
+	waitForRow(t, vm, tt, "/system/Download")
+	for i := 0; i < 3; i++ {
+		tt.Frame()
 	}
-	waitForText(t, tt, "没有子文件夹")
 
-	note, ok := tt.Find("没有子文件夹")
-	if !ok {
-		t.Fatalf("no note to measure; texts = %v", tt.Texts())
+	if strings.Contains(logged.String(), "have the key") {
+		t.Fatalf("two rows share a key: %s", logged.String())
 	}
-	root, ok := tt.Find("/system")
-	if !ok {
-		t.Fatalf("no root to compare with; texts = %v", tt.Texts())
-	}
-	if note.X <= root.X+10 {
-		t.Fatalf("the note is flush with the tree's edge: note.X = %v, root.X = %v", note.X, root.X)
+	seen := map[string]bool{}
+	for _, row := range treeRows(vm) {
+		if seen[row] {
+			t.Fatalf("the tree shows %q twice; rows = %v", row, treeRows(vm))
+		}
+		seen[row] = true
 	}
 }
 
@@ -436,7 +510,28 @@ func TestFileTreeOpensTheFolderTheTableNavigatedTo(t *testing.T) {
 		t.Fatalf("Click(Download) error: %v", err)
 	}
 	waitForText(t, tt, "update.zip")
-	// /sdcard/Download holds no folders, so this sentence can only come from
-	// the tree — and only if the node is open.
-	waitForText(t, tt, "没有子文件夹")
+	// A folder the table opened must be a row the tree shows, or the user
+	// cannot find their way back to it.
+	waitForRow(t, vm, tt, "/sdcard/Download")
+	if !vm.fileStateFor(vm.Selection).tree.Open.Has("/sdcard/Download") {
+		t.Fatalf("the tree did not open the folder the table navigated to; rows = %v", treeRows(vm))
+	}
+}
+
+// TestActivatingAFolderRowOpensIt pins the branch the two panes share: a folder
+// navigates, a file opens the attribute dialog.
+func TestActivatingAFolderRowOpensIt(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	profile := vm.Manager.Profiles()[0]
+	state := vm.fileStateFor(profile.ID)
+
+	vm.activateEntry(profile, state, core.RemoteEntry{Name: "Download", Path: "/sdcard/Download", Dir: true})
+	if state.path != "/sdcard/Download" || vm.FileDetail != nil {
+		t.Fatalf("path = %q, dialog = %v", state.path, vm.FileDetail)
+	}
+
+	vm.activateEntry(profile, state, core.RemoteEntry{Name: "log.txt", Path: "/sdcard/log.txt"})
+	if vm.FileDetail == nil || vm.FileDetail.Entry.Name != "log.txt" {
+		t.Fatalf("a file row must open its attributes, dialog = %v", vm.FileDetail)
+	}
 }

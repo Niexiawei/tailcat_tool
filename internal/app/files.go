@@ -42,27 +42,15 @@ type fileState struct {
 	treeWidth float32
 	// path is the directory the right pane lists.
 	path string
-	// selected is the row highlighted in both panes.
+	// selected is the row highlighted in the table.
 	selected string
-	// open is per tree node expansion. TreeItemWithLeading wants a *bool, and
-	// a map's elements are not addressable, so each node keeps its own pointer.
-	open map[string]*bool
 	// crumb is what the breadcrumbs wrote when an ancestor was activated.
 	crumb int
+	// tree owns expansion, the cursor and the scroll offset. Keys are device
+	// paths, which are unique; labels are not, and two folders called DCIM
+	// would otherwise share one row's state.
+	tree  components.TreeVirtualizedState[string]
 	table components.TableState
-}
-
-// openAt returns the node's expansion pointer, creating it on first use.
-func (s *fileState) openAt(path string) *bool {
-	if s.open == nil {
-		s.open = map[string]*bool{}
-	}
-	value, ok := s.open[path]
-	if !ok {
-		value = new(bool)
-		s.open[path] = value
-	}
-	return value
 }
 
 // fileStateFor returns one device's page state, creating it on first use.
@@ -75,7 +63,7 @@ func (vm *ViewModel) fileStateFor(device uuid.UUID) *fileState {
 		state = &fileState{treeWidth: 240, path: "/sdcard", selected: "/sdcard", crumb: -1}
 		// The default folder is also the default open node: five closed roots
 		// say nothing about what is on the device.
-		*state.openAt("/sdcard") = true
+		state.tree.Open.Add("/sdcard")
 		vm.files[device] = state
 	}
 	return state
@@ -124,6 +112,13 @@ func (vm *ViewModel) fileFailure(key string) string {
 	vm.fileMu.Lock()
 	defer vm.fileMu.Unlock()
 	return vm.fileErrs[key]
+}
+
+// fileLoading reports whether one directory is being read right now.
+func (vm *ViewModel) fileLoading(key string) bool {
+	vm.fileMu.Lock()
+	defer vm.fileMu.Unlock()
+	return vm.fileLoads[key]
 }
 
 func (vm *ViewModel) clearFileFailure(key string) {
@@ -215,7 +210,7 @@ func (vm *ViewModel) showDir(profile core.Profile, state *fileState, dir string)
 	state.selected = dir
 	state.crumb = -1
 	for path := dir; path != "" && path != "/"; path = core.RemoteParent(path) {
-		*state.openAt(path) = true
+		state.tree.Open.Add(path)
 	}
 	vm.ensureDirs(profile, dir)
 }
@@ -256,92 +251,100 @@ func (vm *ViewModel) filesOffline(c *ui.Context, session core.Session) {
 }
 
 // folderTree is the left pane: one root per entry point, expanded on demand.
+//
+// The tree is virtualized and keyed by path: every row is a direct child of the
+// tree's column, so a label-keyed tree cannot tell /sdcard/DCIM from
+// /system/DCIM and would give the two rows one shared state.
 func (vm *ViewModel) folderTree(c *ui.Context, profile core.Profile, state *fileState) {
+	children := func(path string) []string {
+		folders, known := vm.subfolders(profile, path)
+		open := state.tree.Open.Has(path)
+		if !known && open {
+			// Nothing read yet and the user wants in: read it now.
+			vm.ensureDirs(profile, path)
+		}
+		return treeChildren(folders, known, open)
+	}
+	state.tree.List.OnChange = func() { vm.followTreeCursor(profile, state) }
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(6, 4).Children(func() {
-		components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).MinHeight(0).
-			Label("文件夹树").Children(func() {
-			components.Tree(c, func() {
-				for _, root := range fileRoots {
-					// A root is named by its whole path: its last element is
-					// often just "0" or "/".
-					vm.folderNode(c, profile, state, root, root, 0)
-				}
-			})
-		})
+		components.TreeVirtualized(c, &state.tree, fileRoots, children, func(path string) {
+			vm.folderRow(c, profile, state, path)
+		}).FillWidth().Grow(1).MinHeight(0)
 	})
 }
 
-// folderNode draws one directory in the tree. children is nil while the node is
-// collapsed, which is what makes the tree lazy; depth is only used to indent the
-// lines that describe a node (loading, empty, failed).
-func (vm *ViewModel) folderNode(c *ui.Context, profile core.Profile, state *fileState, path, label string, depth int) {
-	open := state.openAt(path)
-	var children func()
-	if *open {
-		children = func() { vm.folderChildren(c, profile, state, path, depth) }
-	}
-	row := components.TreeItemWithLeading(c, label, open, state.selected == path,
-		func(c *ui.Context, size float32) { components.Icon(c, lucide.Folder()).Size(size, size) },
-		children)
-	if row.Clicked() {
-		vm.showDir(profile, state, path)
+// treeChildren answers what a tree row can expand into. The component shows a
+// disclosure arrow exactly when the result is non-nil, so this is also the rule
+// for "is there anything inside": unknown keeps the arrow (the folder may well
+// have something in it), known-empty drops it, and an empty folder that is
+// already open keeps the arrow so it can be closed again.
+func treeChildren(folders []string, known, open bool) []string {
+	switch {
+	case !known:
+		return []string{}
+	case len(folders) > 0:
+		return folders
+	case open:
+		return []string{}
+	default:
+		return nil
 	}
 }
 
-// folderChildren lists the subdirectories of an expanded node.
-func (vm *ViewModel) folderChildren(c *ui.Context, profile core.Profile, state *fileState, path string, depth int) {
-	theme := c.Theme()
-	key := fileKey(profile.ID, path)
-	// Expanding the arrow, not the row, is what opens a node; without this the
-	// children would sit on 「正在读取…」 because nothing started the read.
-	vm.ensureDirs(profile, path)
+// subfolders lists the subdirectories of one directory, and whether it has been
+// read at all.
+func (vm *ViewModel) subfolders(profile core.Profile, path string) ([]string, bool) {
 	listing, ok := vm.Manager.DirListing(profile.ID, path)
 	if !ok {
-		if reason := vm.fileFailure(key); reason != "" {
-			treeNoteRow(c, depth+1, func() {
-				treeNoteText(c, "读取失败："+reason, theme.Danger)
-				if components.Button(c, "重试", components.ButtonGhost).Clicked() {
-					vm.clearFileFailure(key)
-					vm.loadDir(profile, path, true)
-				}
-			})
-			return
+		return nil, false
+	}
+	folders := make([]string, 0, len(listing.Entries))
+	for _, entry := range listing.Entries {
+		if entry.Dir {
+			folders = append(folders, entry.Path)
 		}
-		treeNoteRow(c, depth+1, func() { treeNoteText(c, "正在读取…", theme.TextMuted) })
+	}
+	return folders, true
+}
+
+// followTreeCursor points the right pane at the row the user just picked.
+func (vm *ViewModel) followTreeCursor(profile core.Profile, state *fileState) {
+	if state.tree.List.Selected == nil {
 		return
 	}
-	folders := 0
-	for _, entry := range listing.Entries {
-		if !entry.Dir {
-			continue
+	row := *state.tree.List.Selected
+	if row < 0 || row >= state.tree.Rows() {
+		return
+	}
+	vm.showDir(profile, state, state.tree.Item(row))
+}
+
+// folderRow is one tree row's content, after the component's own arrow: a
+// folder mark, the name, and — when there is one — why it is not open yet.
+// Indentation belongs to the component, so nothing here measures depth.
+func (vm *ViewModel) folderRow(c *ui.Context, profile core.Profile, state *fileState, path string) {
+	theme := c.Theme()
+	label := core.RemoteBase(path)
+	for _, root := range fileRoots {
+		if path == root {
+			// A root is named by its whole path: its last element is often
+			// just "0" or "/".
+			label = root
+			break
 		}
-		folders++
-		vm.folderNode(c, profile, state, entry.Path, entry.Name, depth+1)
 	}
-	if folders == 0 {
-		treeNoteRow(c, depth+1, func() { treeNoteText(c, "没有子文件夹", theme.TextMuted) })
+	components.Icon(c, lucide.Folder()).Size(14, 14)
+	name := components.Text(c, label).FontSize(12).SingleLine()
+	components.Tooltip(c, name, path)
+	key := fileKey(profile.ID, path)
+	if reason := vm.fileFailure(key); reason != "" {
+		badge := components.Text(c, "读取失败").FontSize(10).TextColor(theme.Danger).SingleLine()
+		components.Tooltip(c, badge, reason)
+		return
 	}
-}
-
-// treeNoteRow is a line that describes a node rather than being one. Its
-// content starts where the labels of the node's children start, so
-// 「正在读取…」reads as belonging to the folder above it instead of as the first
-// row of the whole tree.
-func treeNoteRow(c *ui.Context, depth int, children func()) ui.Element {
-	t := c.Theme()
-	// A row is padded by Space(1+4*depth); its label then sits after the
-	// disclosure arrow and the folder mark, about 10 units further in.
-	return ui.Row(c).FillWidth().Shrink(0).AlignItems(ui.Center).Gap(t.Space(1)).Children(func() {
-		ui.Box(c).Width(t.Space(11 + 4*float32(depth))).Shrink(0)
-		children()
-	})
-}
-
-// treeNoteText is the plain sentence a treeNoteRow carries. It is clipped by
-// the narrow pane, so it carries its own full text as a tooltip.
-func treeNoteText(c *ui.Context, text string, color ui.Color) {
-	note := components.Text(c, text).FontSize(11).SingleLine().TextColor(color)
-	components.Tooltip(c, note, text)
+	if vm.fileLoading(key) {
+		components.Spinner(c, components.SpinnerRing).Width(12).Height(12).Label("正在读取文件夹")
+	}
 }
 
 // fileTable is the right pane: the entries of the selected directory.
