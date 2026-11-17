@@ -148,13 +148,13 @@
 
 ### 任务 1：core 的解析状态与透出
 
-- [ ] 写测试 `internal/core/resources_refresh_test.go`：
+- [x] 写测试 `internal/core/resources_refresh_test.go`：
   - `TestAppMetaStatusIsUnknownUntilAsked`：stub 源没被问过 → `Manager.AppMetaStatus` 返回 `ok=false`。
   - `TestAppMetaStatusIsReportedThroughTheManager`：stub 返回 `Pending`/`Failed{Reason,Final:true}` → 原样透出（`deviceKey` 断言：用设备 uuid 而不是序列号）。
   - `TestDisconnectForgetsAppMetaStatus`：`Disconnect` 后 stub 的 `forget` 被调用一次，且 deviceKey 与 `Lookup` 用的一致。
   - `TestRefreshAppMetaSkipsPackagesWithNoAppPackage`：快照里 3 个包，其中 1 个 `Final` → 只有 2 个进 `Refresh`。
-- [ ] 跑一次确认 RED。
-- [ ] `internal/core/appmeta.go`：
+- [x] 跑一次确认 RED。
+- [x] `internal/core/appmeta.go`：
 
 ```go
 type AppMetaState int
@@ -185,7 +185,7 @@ type AppMetaSource interface {
 }
 ```
 
-- [ ] `internal/core/sample.go` 加 `Manager.AppMetaStatus(id, pkg)`；`RefreshAppMeta` 过滤 `Final`：
+- [x] `internal/core/sample.go` 加 `Manager.AppMetaStatus(id, pkg)`；`RefreshAppMeta` 过滤 `Final`：
 
 ```go
 for _, app := range snapshot.Apps {
@@ -196,12 +196,12 @@ for _, app := range snapshot.Apps {
 }
 ```
 
-- [ ] `internal/core/manager.go` 的 `Disconnect` 与 `Shutdown` 在放开 `m.mu` 之后调 `Forget`（注意：**不要在锁里调**）。
-- [ ] 验收：`go test ./internal/core/` 绿。
+- [x] `internal/core/manager.go` 的 `Disconnect` 与 `Shutdown` 在放开 `m.mu` 之后调 `Forget`（注意：**不要在锁里调**）。
+- [x] 验收：`go test ./internal/core/` 绿。
 
 ### 任务 2：`appmeta` 走 `exec-out` + 真实状态
 
-- [ ] 写测试 `internal/appmeta/store_test.go`：
+- [x] 写测试 `internal/appmeta/store_test.go`：
   - `TestStoreReadsEntriesThroughExecOut`：假 runner 只对 `Args[0:2] == {"exec-out", "unzip"}` 返回条目内容 → `ok=true`；**同时断言命令里没有 `shell`**（这是钉住根因 A 的那条）。
   - `TestStoreReportsNoAppPackageAsFinalFailure`：`pm path` 输出为空 → `Status` = `Failed{Final:true, Reason: core.ReasonNoAppPackage}`。
   - `TestStoreReportsPendingWhileReading`：runner 阻塞在第一个命令上时 `Status == Pending`。
@@ -210,8 +210,8 @@ for _, app := range snapshot.Apps {
   - `TestStoreGivesUpOnAPKsTooLargeToPull`：`stat` 报 80 MB、条目读不出 → `Failed{Reason: core.ReasonApkTooLarge}`，且**没有** `exec-out cat` 调用。
   - `TestStoreServesRowRequestsBeforeTheBatch`：批量塞 5 个包（runner 阻塞），再发 1 个 urgent，断言 urgent 先完成。
   - `TestStoreMarksAFailedStateWhenTheWorkerPanics`：让 `fetch` 里（测试钩子）panic，`Status` 仍落到 `Failed`。
-- [ ] 跑一次确认 RED。
-- [ ] `extractEntry` 改：
+- [x] 跑一次确认 RED。
+- [x] `extractEntry` 改：
 
 ```go
 Args: []string{"-s", queued.serial, "exec-out", "unzip", "-p", apk, entry},
@@ -219,77 +219,77 @@ Args: []string{"-s", queued.serial, "exec-out", "unzip", "-p", apk, entry},
 
   注释里写清为什么：*`adb shell` 分配 PTY，会把条目里的每个 LF 翻成 CRLF（实测 724620 字节的清单变成 739233），
   `apkparser` 因此永远解析失败；`exec-out` 不经过 PTY。*
-- [ ] `Store` 字段：`status map[string]core.AppMetaStatus` 取代 `pending`/`failed`；`forced` 保留；新增 `urgent chan job`。
+- [x] `Store` 字段：`status map[string]core.AppMetaStatus` 取代 `pending`/`failed`；`forced` 保留；新增 `urgent chan job`。
   - `enqueue(..., force bool)`：`Ready` 且新鲜 → 跳过；`Failed{Final:true}` 且非 force → 跳过；`Failed` 且在 `failedRetryAfter` 内且非 force → 跳过；`Pending` → 跳过（force 时置 `forced[key]` 让在跑的那个重读）。
   - `work()`：先取 urgent，再取批量；开始时写 `Pending`，结束时写 `Ready` 或 `Failed{Reason}`；`defer` 里 `recover()` 兜底写 `Failed`。
-- [ ] `fetch` 拆出失败原因：`apkPath` 失败 → `ReasonNoAppPackage, Final:true`；`pm path` 命令本身报错（adb 掉了）→ `ReasonAppPackageUnreadable, Final:false`；`size > maxWholeAPKPull(64<<20)` 且条目读不出 → `ReasonApkTooLarge`。
-- [ ] `Status`/`Forget` 实现；`Forget` 只清 `status`/`forced`，**不动磁盘缓存**。
-- [ ] 验收：`go test ./internal/appmeta/` 绿；真机复测（只读）：`LIVE_ADB=<serial>` 临时用例量一次 `com.google.android.gms`，应当 ≤ 2 s（基线 14.65 s），量完删掉临时文件。
+- [x] `fetch` 拆出失败原因：`apkPath` 失败 → `ReasonNoAppPackage, Final:true`；`pm path` 命令本身报错（adb 掉了）→ `ReasonAppPackageUnreadable, Final:false`；`size > maxWholeAPKPull(64<<20)` 且条目读不出 → `ReasonApkTooLarge`。
+- [x] `Status`/`Forget` 实现；`Forget` 只清 `status`/`forced`，**不动磁盘缓存**。
+- [x] 验收：`go test ./internal/appmeta/` 绿；真机复测（只读）：`LIVE_ADB=<serial>` 临时用例量一次 `com.google.android.gms`，应当 ≤ 2 s（基线 14.65 s），量完删掉临时文件。
 
 ### 任务 3：视图只读状态，Spinner 有确定终点
 
-- [ ] 写测试 `internal/app/resources_test.go`：
+- [x] 写测试 `internal/app/resources_test.go`：
   - `TestRowShowsSpinnerWhileTheReadIsPending`：stub `Status` = `Pending` → 该行有 Spinner、没有按钮。
   - `TestResolvingSpinnerEndsWhenTheReadFails`：同一行先 `Pending` 再 `Failed{Final:true}`，重建 tester 后 Spinner 消失、出现「无应用包」，且**没有**按钮（钉住「不再盲等 2 分钟」）。
   - `TestRowOffersRetryAfterATransientFailure`：`Failed{Final:false}` → 有「重试」图标按钮，点击进 `Refresh`。
   - `TestRowStillOffersResolveWhenNothingIsKnown`：`Status` 未知 → 按钮照旧。
   - 删除/改写 `TestProcessTableShowsASpinnerWhileResolving`（原来靠本地时间戳，现在靠 stub 状态）。
-- [ ] 实现：`appCell` 改成 `switch`；删 `resolving`、`resolveTimeout`；失败文案用 `core.ReasonNoAppPackage` 的短标签（`无应用包`）与 Tooltip 全文。
-- [ ] 验收：`go test ./internal/app/ -run 'TestRow|TestResolving'` 绿。
+- [x] 实现：`appCell` 改成 `switch`；删 `resolving`、`resolveTimeout`；失败文案用 `core.ReasonNoAppPackage` 的短标签（`无应用包`）与 Tooltip 全文。
+- [x] 验收：`go test ./internal/app/ -run 'TestRow|TestResolving'` 绿。
 
 ### 任务 4：批量刷新按终态收敛 + 优先队列可见效果
 
-- [ ] 写测试：
+- [x] 写测试：
   - `TestRefreshProgressEndsWhenEveryRowIsSettled`：stub 先全部 `Pending`，逐个转成 `Ready`，最后一个转完时「正在刷新应用信息…」消失（不再依赖 30 s 或命名数量）。
   - `TestRefreshSaysHowManyAreDone`：`正在读取应用信息 2/5`。
   - `TestRefreshDoesNotAskAboutProcessesWithNoAppPackage`：`manager.RefreshAppMeta` 只把非 Final 的包交给源。
-- [ ] 实现：`resourceState` 删 `refreshAt`/`refreshSeen`/`settleRefresh`，改 `batchPkgs []string`；工具栏文案改成带进度的；结束时清空。
-- [ ] 验收：`go test ./internal/app/ -run TestRefresh` 绿。
+- [x] 实现：`resourceState` 删 `refreshAt`/`refreshSeen`/`settleRefresh`，改 `batchPkgs []string`；工具栏文案改成带进度的；结束时清空。
+- [x] 验收：`go test ./internal/app/ -run TestRefresh` 绿。
 
 ### 任务 5：「应用 / 进程」分段器
 
-- [ ] 写测试：
+- [x] 写测试：
   - `TestResourceViewSwitchesBetweenAppsAndProcesses`：点「进程」后表格里出现进程行、进程数等于样本里的进程总数（`138`），再点「应用」复原。
   - `TestProcessViewListsEveryProcessOnce`：不重不漏（用名字集合断言）。
   - `TestProcessViewKeepsItsOwnColumnsAndScroll`：进程视图列头是「进程 / 应用 / CPU / GPU / 内存」，切回应用视图列头复原。
-- [ ] 实现：
+- [x] 实现：
   - `state.go`：`const (resourceViewApps = iota; resourceViewProcesses)`；`resourceState` 增 `view int`、`tableApps`、`tableProcesses`、`scrollApps`、`scrollProcesses`。
   - `resources.go`：工具栏第一行用 `components.Tabs(c, &state.view, components.TabsSegmented, "应用", "进程")`；
     进程视图平铺 `snapshot.Apps` 展开后的 `ProcessUsage`，按 CPU 降序，行内「进程」格显示名字 + 灰色 `PID <n>`。
   - 进程视图不提供展开；应用视图保持现状。
-- [ ] 验收：`go test ./internal/app/ -run 'TestResourceView|TestProcessView'` 绿。
+- [x] 验收：`go test ./internal/app/ -run 'TestResourceView|TestProcessView'` 绿。
 
 ### 任务 6：模糊筛选
 
-- [ ] 写测试 `internal/app/filter_test.go`（表驱动，纯函数）：
+- [x] 写测试 `internal/app/filter_test.go`（表驱动，纯函数）：
   - `TestMatchQuery`：`{"微", "微信"}`→true；`{"wx", "通话"}`→false；`{"com.ex", "com.example.app"}`→true；
     `{"mp", "com.google.android.apps.maps"}`→true（子序列）；`{"Car Launcher", "car launcher"}`→true（大小写）；
     `{"car maps", "Car Launcher"}`→false（多词 AND）；`{"", 任意}`→true。
   - `TestFilterAppsKeepsGroupsMatchedByAProcess`：查询只命中子进程名 → 该组保留，且只列出命中的进程。
   - `TestFilterIgnoresExpandedStateWhileTheQueryIsActive`：没展开的组在查询下也列出命中的进程。
   - `TestFilterWithNoMatchSaysSo`：`没有匹配的应用`。
-- [ ] 实现：`filter.go` 的 `matchQuery(query string, fields ...string) bool`（空格分词、全部命中、逐字符子序列、`strings.ToLower`）；
+- [x] 实现：`filter.go` 的 `matchQuery(query string, fields ...string) bool`（空格分词、全部命中、逐字符子序列、`strings.ToLower`）；
   `filterApps(apps, query)` / `filterProcesses(apps, query)` 返回视图直接可渲染的结构。
-- [ ] 视图：工具栏 `components.TextBox(c, &state.filter, components.TextBoxOptions{LeadingIcon: lucide.Search()})`
+- [x] 视图：工具栏 `components.TextBox(c, &state.filter, components.TextBoxOptions{LeadingIcon: lucide.Search()})`
   加 `Placeholder("筛选应用或进程")`、`Label("筛选应用或进程")`；计数文案随筛选变化；两个视图共用同一个输入。
-- [ ] 验收：`go test ./internal/app/ -run TestMatchQuery -v`、`go test ./internal/app/ -run TestFilter` 绿。
+- [x] 验收：`go test ./internal/app/ -run TestMatchQuery -v`、`go test ./internal/app/ -run TestFilter` 绿。
 
 ### 任务 7：demo、compat、文档、CHANGELOG
 
-- [ ] `demo.go`：`demoAppMeta` 实现 `Status`/`Forget`（`com.demo.camera` → `Ready`，`system_server` → `Failed{Final:true}`）；
+- [x] `demo.go`：`demoAppMeta` 实现 `Status`/`Forget`（`com.demo.camera` → `Ready`，`system_server` → `Failed{Final:true}`）；
   demo 采样输出里保留系统进程，`--demo` 下就能看到「无应用包」与两栏表格。
-- [ ] `internal/compat/compat_test.go`：`components.Tabs`/`TabsSegmented`/`TextBoxOptions.LeadingIcon` 已有使用则不重复加；新用到的组件必须加编译期断言。
-- [ ] `docs/device-detail-page.md`：
+- [x] `internal/compat/compat_test.go`：`components.Tabs`/`TabsSegmented`/`TextBoxOptions.LeadingIcon` 已有使用则不重复加；新用到的组件必须加编译期断言。
+- [x] `docs/device-detail-page.md`：
   - §3.2 更正：**二进制条目必须走 `exec-out`**；附 §0 的 739233 / 724620 / 14613 三组数字；
   - 新增一节「应用元数据的三种终态」与「分段器、筛选」；
   - §2.2 的「`unzip -p` 0.13 s」补一句：那只量了传输，没量解析。
-- [ ] `docs/CHANGELOG.md`（同一次提交）：
+- [x] `docs/CHANGELOG.md`（同一次提交）：
   - **修复**：`解析应用信息不再一直转圈：读取失败（如系统进程没有应用包、应用包过大）会在该行直接说明原因`
   - **修复**：`应用名称与图标改为只读 APK 里的清单与资源表，不再整包下载，单个应用从十几秒降到一秒以内`
   - **新增**：`资源页新增「应用 / 进程」切换，进程视图一行一个进程，含 PID、所属应用与占用`
   - **新增**：`资源页新增筛选框，可按应用名、包名或进程名模糊筛选，空格分隔多个关键词`
   - **变更**：`「刷新应用信息」跳过设备上并不存在的应用包，并显示已读进度`
-- [ ] 验收：`gofmt -l .` 无输出、`go vet ./...`、`go test ./...`、`go test -race ./internal/core ./internal/app ./internal/appmeta`。
+- [x] 验收：`gofmt -l .` 无输出、`go vet ./...`、`go test ./...`、`go test -race ./internal/core ./internal/app ./internal/appmeta`。
 
 ---
 
@@ -316,12 +316,12 @@ go run ./cmd/tailcat-manager --demo # 应能看到「无应用包」行、应用
 
 ## 7. 自检
 
-- [ ] 每条「审查重点」都能指出一条测试名。
-- [ ] 没有测试依赖真设备或网络：所有新用例用 stub / 假 runner；真机只用只读命令手工复测。
-- [ ] `extractEntry` 的注释里写清 PTY/CRLF 结论，避免下一个人又改回 `shell`。
-- [ ] 视图里不再有 `time.Since(*time.Time)` 之类的兜底计时（批量进度的 90 s 兜底除外，且必须是**唯一**一处）。
-- [ ] `resourceState` 里没有跨设备的共享状态；切换设备后视图状态各自独立。
-- [ ] `grep -rn "unzip -p" internal/` 只出现在 `exec-out` 的调用点上。
+- [x] 每条「审查重点」都能指出一条测试名。
+- [x] 没有测试依赖真设备或网络：所有新用例用 stub / 假 runner；真机只用只读命令手工复测。
+- [x] `extractEntry` 的注释里写清 PTY/CRLF 结论，避免下一个人又改回 `shell`。
+- [x] 视图里不再有 `time.Since(*time.Time)` 之类的兜底计时（批量进度的 90 s 兜底除外，且必须是**唯一**一处）。
+- [x] `resourceState` 里没有跨设备的共享状态；切换设备后视图状态各自独立。
+- [x] `grep -rn "unzip -p" internal/` 只出现在 `exec-out` 的调用点上。
 
 ---
 
