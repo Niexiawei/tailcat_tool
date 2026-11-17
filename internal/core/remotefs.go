@@ -35,6 +35,13 @@ type RemoteEntry struct {
 	Modified time.Time // zero when the device did not report a usable time
 }
 
+// Folder reports whether a tree should offer to descend into the entry. A
+// symbolic link counts: on Android /sdcard is a link to the internal storage,
+// and a tree that hid links would hide the folder people actually use. The
+// cost is that a link to a regular file is offered as a folder; opening it says
+// why it cannot be entered.
+func (e RemoteEntry) Folder() bool { return e.Dir || e.Link }
+
 // DirListing is one directory as the device reported it.
 type DirListing struct {
 	Path      string
@@ -131,13 +138,14 @@ func ParseStatOutput(out, dir string) DirListing {
 	return listing
 }
 
-// SortRemoteEntries puts directories first, then sorts case-insensitively by
-// name, so a folder listing reads the way a file manager does.
+// SortRemoteEntries puts folders (directories and links to them) first, then
+// sorts case-insensitively by name, so a listing reads the way a file manager
+// does: /sdcard belongs beside /storage, not after the last log file.
 func SortRemoteEntries(entries []RemoteEntry) {
 	sort.SliceStable(entries, func(i, j int) bool {
 		a, b := entries[i], entries[j]
-		if a.Dir != b.Dir {
-			return a.Dir
+		if a.Folder() != b.Folder() {
+			return a.Folder()
 		}
 		al, bl := strings.ToLower(a.Name), strings.ToLower(b.Name)
 		if al != bl {

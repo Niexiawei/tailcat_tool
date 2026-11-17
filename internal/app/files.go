@@ -14,10 +14,11 @@ import (
 	"github.com/oneo-me/onevra/source/icons/lucide"
 )
 
-// fileRoots are the entry points the folder tree always offers. They are the
-// five directories every Android install has; anything else is reached by
-// descending from one of them.
-var fileRoots = []string{"/sdcard", "/storage/emulated/0", "/data/local/tmp", "/system", "/"}
+// fileRoots is the tree's single root: the device's own filesystem. Shortcuts
+// to /sdcard, /system and friends used to sit beside it, which put the same
+// directory on screen twice — once as a pinned row, once inside / — so the two
+// rows shared a key and a state, and the tree claimed they were siblings.
+var fileRoots = []string{"/"}
 
 // FileDetail is the entry whose attribute dialog is open; nil closes it.
 type FileDetail struct {
@@ -61,8 +62,9 @@ func (vm *ViewModel) fileStateFor(device uuid.UUID) *fileState {
 	state, ok := vm.files[device]
 	if !ok {
 		state = &fileState{treeWidth: 240, path: "/sdcard", selected: "/sdcard", crumb: -1}
-		// The default folder is also the default open node: five closed roots
-		// say nothing about what is on the device.
+		// Open the way down to the folder the page starts on, so the tree shows
+		// where that folder lives instead of a single closed row.
+		state.tree.Open.Add("/")
 		state.tree.Open.Add("/sdcard")
 		vm.files[device] = state
 	}
@@ -258,12 +260,11 @@ func (vm *ViewModel) filesOffline(c *ui.Context, session core.Session) {
 func (vm *ViewModel) folderTree(c *ui.Context, profile core.Profile, state *fileState) {
 	children := func(path string) []string {
 		folders, known := vm.subfolders(profile, path)
-		open := state.tree.Open.Has(path)
-		if !known && open {
+		if !known && state.tree.Open.Has(path) {
 			// Nothing read yet and the user wants in: read it now.
 			vm.ensureDirs(profile, path)
 		}
-		return treeChildren(folders, known, open)
+		return treeChildren(folders, known)
 	}
 	state.tree.List.OnChange = func() { vm.followTreeCursor(profile, state) }
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(6, 4).Children(func() {
@@ -275,17 +276,16 @@ func (vm *ViewModel) folderTree(c *ui.Context, profile core.Profile, state *file
 
 // treeChildren answers what a tree row can expand into. The component shows a
 // disclosure arrow exactly when the result is non-nil, so this is also the rule
-// for "is there anything inside": unknown keeps the arrow (the folder may well
-// have something in it), known-empty drops it, and an empty folder that is
-// already open keeps the arrow so it can be closed again.
-func treeChildren(folders []string, known, open bool) []string {
+// for "is there anything inside": a folder nobody has read yet keeps the arrow
+// (it may well have something in it), and a folder known to hold nothing gets
+// no arrow at all — an arrow that opens onto nothing is a promise the folder
+// cannot keep.
+func treeChildren(folders []string, known bool) []string {
 	switch {
 	case !known:
 		return []string{}
 	case len(folders) > 0:
 		return folders
-	case open:
-		return []string{}
 	default:
 		return nil
 	}
@@ -300,7 +300,7 @@ func (vm *ViewModel) subfolders(profile core.Profile, path string) ([]string, bo
 	}
 	folders := make([]string, 0, len(listing.Entries))
 	for _, entry := range listing.Entries {
-		if entry.Dir {
+		if entry.Folder() {
 			folders = append(folders, entry.Path)
 		}
 	}
@@ -325,14 +325,6 @@ func (vm *ViewModel) followTreeCursor(profile core.Profile, state *fileState) {
 func (vm *ViewModel) folderRow(c *ui.Context, profile core.Profile, state *fileState, path string) {
 	theme := c.Theme()
 	label := core.RemoteBase(path)
-	for _, root := range fileRoots {
-		if path == root {
-			// A root is named by its whole path: its last element is often
-			// just "0" or "/".
-			label = root
-			break
-		}
-	}
 	components.Icon(c, lucide.Folder()).Size(14, 14)
 	name := components.Text(c, label).FontSize(12).SingleLine()
 	components.Tooltip(c, name, path)
@@ -471,7 +463,7 @@ func (vm *ViewModel) fileCell(c *ui.Context, col int, entry core.RemoteEntry) {
 // attributes and the two transfers.
 func (vm *ViewModel) activateEntry(profile core.Profile, state *fileState, entry core.RemoteEntry) {
 	state.selected = entry.Path
-	if entry.Dir {
+	if entry.Folder() {
 		vm.showDir(profile, state, entry.Path)
 		return
 	}
@@ -481,7 +473,9 @@ func (vm *ViewModel) activateEntry(profile core.Profile, state *fileState, entry
 // fileSizeLabel reports a size the way a file manager does: a folder's own
 // bookkeeping is not a size the user asked for.
 func fileSizeLabel(entry core.RemoteEntry) string {
-	if entry.Dir || entry.Size < 0 {
+	// A folder's number is filesystem bookkeeping and a link's is the length of
+	// its target path; neither is a size the user asked for.
+	if entry.Folder() || entry.Size < 0 {
 		return "—"
 	}
 	return core.FormatBytes(uint64(entry.Size))

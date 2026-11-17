@@ -137,3 +137,23 @@ func TestRemoteListScriptRefusesUnsafePaths(t *testing.T) {
 		}
 	}
 }
+
+// TestSortRemoteEntriesGroupsLinksWithFolders keeps /sdcard beside /storage: on
+// Android the important folders are links, and sorting them after the last log
+// file buries them.
+func TestSortRemoteEntriesGroupsLinksWithFolders(t *testing.T) {
+	entries := []RemoteEntry{
+		{Name: "a.log"},
+		{Name: "storage", Dir: true},
+		{Name: "sdcard", Link: true},
+	}
+	SortRemoteEntries(entries)
+	got := []string{entries[0].Name, entries[1].Name, entries[2].Name}
+	want := []string{"sdcard", "storage", "a.log"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
+	if !entries[0].Folder() || entries[2].Folder() {
+		t.Fatalf("Folder() is wrong: %+v", entries)
+	}
+}

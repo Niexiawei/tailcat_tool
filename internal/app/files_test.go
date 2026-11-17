@@ -42,9 +42,15 @@ func dirOfScript(script string) (string, bool) {
 	return strings.ReplaceAll(rest[:end], `'\''`, "'"), true
 }
 
-// readFixture answers every directory the default fixtures describe.
+// readFixture answers every directory the default fixtures describe. / holds a
+// symlinked sdcard, like a real device, so the tree has to follow links.
 func readFixture(dir string) (core.Result, error) {
 	switch dir {
+	case "/":
+		return core.Result{Output: `symbolic link|4|777|lrwxrwxrwx|1700000000|./sdcard
+directory|4096|755|drwxr-xr-x|1700000000|./system
+directory|4096|755|drwxr-xr-x|1700000000|./storage
+`}, nil
 	case "/sdcard":
 		return core.Result{Output: sdcardListing}, nil
 	case "/system":
@@ -174,8 +180,8 @@ func TestFolderTreeExpandsOnlyWhenClicked(t *testing.T) {
 			t.Fatalf("/system was open without being asked; rows = %v", treeRows(vm))
 		}
 	}
-	if err := tt.Click("/system"); err != nil {
-		t.Fatalf("Click(/system) error: %v", err)
+	if err := tt.Click("system"); err != nil {
+		t.Fatalf("Click(system) error: %v", err)
 	}
 	waitForRow(t, vm, tt, "/system/bin")
 
@@ -197,8 +203,8 @@ func TestFileTreeReadsEachFolderOnce(t *testing.T) {
 	waitForText(t, tt, "照片.jpg")
 
 	for i := 0; i < 3; i++ {
-		if err := tt.Click("/system"); err != nil {
-			t.Fatalf("Click(/system) error: %v", err)
+		if err := tt.Click("system"); err != nil {
+			t.Fatalf("Click(system) error: %v", err)
 		}
 		tt.Frame()
 	}
@@ -439,20 +445,14 @@ func waitForRow(t *testing.T, vm *ViewModel, tt *ui.Tester, want string) {
 // the disclosure arrow: unknown keeps it, known-empty drops it, and an empty
 // folder that is already open keeps it so it can be closed again.
 func TestTreeChildrenKeepsTheArrowForFoldersThatCanStillExpand(t *testing.T) {
-	if kids := treeChildren(nil, false, false); kids == nil {
+	if kids := treeChildren(nil, false); kids == nil {
 		t.Fatal("a folder nobody has read yet must keep its arrow")
 	}
-	if kids := treeChildren(nil, false, true); kids == nil {
-		t.Fatal("a folder being read must keep its arrow")
-	}
-	if kids := treeChildren([]string{"/sdcard/DCIM"}, true, false); len(kids) != 1 {
+	if kids := treeChildren([]string{"/sdcard/DCIM"}, true); len(kids) != 1 {
 		t.Fatalf("kids = %v", kids)
 	}
-	if kids := treeChildren(nil, true, false); kids != nil {
+	if kids := treeChildren(nil, true); kids != nil {
 		t.Fatalf("a folder known to hold nothing must show no arrow, got %v", kids)
-	}
-	if kids := treeChildren(nil, true, true); kids == nil {
-		t.Fatal("an empty folder that is open must keep its arrow so it can close")
 	}
 }
 
@@ -469,6 +469,10 @@ func TestFileTreeStaysConsistentWhenTwoFoldersShareAName(t *testing.T) {
 regular file|12|660|-rw-rw----|1700000000|./note.txt
 `
 		switch dir {
+		case "/":
+			return core.Result{Output: `symbolic link|4|777|lrwxrwxrwx|1700000000|./sdcard
+directory|4096|755|drwxr-xr-x|1700000000|./system
+`}, nil
 		case "/sdcard", "/system":
 			return core.Result{Output: shared}, nil
 		}
@@ -478,8 +482,8 @@ regular file|12|660|-rw-rw----|1700000000|./note.txt
 	tt := ui.NewTester(vm.ContentView, 1000, 760)
 	waitForText(t, tt, "note.txt")
 
-	if err := tt.Click("/system"); err != nil {
-		t.Fatalf("Click(/system) error: %v", err)
+	if err := tt.Click("system"); err != nil {
+		t.Fatalf("Click(system) error: %v", err)
 	}
 	waitForRow(t, vm, tt, "/system/Download")
 	for i := 0; i < 3; i++ {
@@ -533,5 +537,33 @@ func TestActivatingAFolderRowOpensIt(t *testing.T) {
 	vm.activateEntry(profile, state, core.RemoteEntry{Name: "log.txt", Path: "/sdcard/log.txt"})
 	if vm.FileDetail == nil || vm.FileDetail.Entry.Name != "log.txt" {
 		t.Fatalf("a file row must open its attributes, dialog = %v", vm.FileDetail)
+	}
+}
+
+// TestFileTreeMirrorsTheDeviceFilesystemFromOneRoot pins the shape the user
+// asked for: /sdcard, /storage and /system live *inside* /, not beside it as
+// pinned shortcuts that showed the same directory twice.
+func TestFileTreeMirrorsTheDeviceFilesystemFromOneRoot(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "照片.jpg")
+	waitForRow(t, vm, tt, "/sdcard/DCIM")
+
+	rows := treeRows(vm)
+	if len(rows) == 0 || rows[0] != "/" {
+		t.Fatalf("the tree must start at /; rows = %v", rows)
+	}
+	// /sdcard is a symbolic link on a real device; the tree must follow it,
+	// and it must sort beside the directories rather than after the files.
+	want := []string{"/", "/sdcard", "/sdcard/DCIM", "/sdcard/Download", "/storage", "/system"}
+	if strings.Join(rows, ",") != strings.Join(want, ",") {
+		t.Fatalf("rows = %v, want %v", rows, want)
+	}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		if seen[row] {
+			t.Fatalf("the tree shows %q twice; rows = %v", row, rows)
+		}
+		seen[row] = true
 	}
 }
