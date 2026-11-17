@@ -169,6 +169,34 @@ func TestDeviceRowShowsState(t *testing.T) {
 	}
 }
 
+func TestSidebarShowsDisconnectedBeforeTheFirstConnection(t *testing.T) {
+	vm := newTestViewModel(t)
+
+	tt := ui.NewTester(vm.SidebarView, 280, 720)
+	joined := strings.Join(tt.Texts(), " | ")
+	if !strings.Contains(joined, "未连接") {
+		t.Fatalf("a device that was never connected has no state line: %s", joined)
+	}
+}
+
+func TestSidebarShowsTheDirectAddressWhileDisconnected(t *testing.T) {
+	profile := core.Profile{ID: uuid.New(), Name: "本地模拟器", DirectADB: true, DirectTarget: "127.0.0.1:5555"}
+	m := core.NewManager(core.ManagerOptions{
+		Configuration: core.Configuration{Profiles: []core.Profile{profile}, Tools: core.ToolSettings{ADB: os.Args[0]}},
+		Credentials:   core.NewMemoryCredentialStore(),
+		Identities:    core.NewIdentityStore(t.TempDir()),
+		Runner:        stubRunner{},
+		Locate:        func(string) (string, bool) { return "", false },
+	})
+	vm := NewViewModel(m, func(string) (string, bool) { return "", false })
+
+	tt := ui.NewTester(vm.SidebarView, 280, 720)
+	joined := strings.Join(tt.Texts(), " | ")
+	if !strings.Contains(joined, "未连接 · 127.0.0.1:5555") {
+		t.Fatalf("a direct device that was never connected does not say so with its address: %s", joined)
+	}
+}
+
 func TestSidebarRowsKeepFixedHeight(t *testing.T) {
 	vm := newTestViewModel(t)
 	for _, name := range []string{"AAA", "BBB", "CCC"} {

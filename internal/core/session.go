@@ -31,6 +31,10 @@ type SessionLog struct {
 // used before any device information arrives.
 func NewSession() Session {
 	return Session{
+		// A device that was never connected is disconnected, not stateless: the
+		// sidebar, the detail header and the console hint all read this before
+		// the first connect.
+		State:        StateDisconnected,
 		Model:        PlaceholderUnknown,
 		Product:      PlaceholderUnknown,
 		Android:      PlaceholderUnknown,

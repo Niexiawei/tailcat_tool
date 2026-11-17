@@ -42,6 +42,23 @@ func TestStateBusy(t *testing.T) {
 	}
 }
 
+func TestZeroConnectionStateReadsAsDisconnected(t *testing.T) {
+	// A session nobody touched yet carries the zero value, and a blank label in
+	// the sidebar reads as "this device has no state" instead of "not connected".
+	var zero ConnectionState
+	if got := zero.Label(); got != "未连接" {
+		t.Fatalf("zero ConnectionState.Label() = %q, want 未连接", got)
+	}
+}
+
+func TestNewSessionStartsDisconnected(t *testing.T) {
+	// Every place that reads a session before the first connect (the sidebar,
+	// the detail header, the console hint) must see a real state, not "".
+	if got := NewSession().State; got != StateDisconnected {
+		t.Fatalf("NewSession().State = %q, want %q", string(got), string(StateDisconnected))
+	}
+}
+
 func TestTaskStateLabels(t *testing.T) {
 	cases := []struct {
 		state TaskState
