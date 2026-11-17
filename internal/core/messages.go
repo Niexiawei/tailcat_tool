@@ -25,3 +25,7 @@ const (
 	LabelNoAppPackage = "无应用包"
 	LabelReadFailed   = "读取失败"
 )
+
+// MsgTaskOutputMissing is what the output dialog says when a task's record is
+// gone (cleared history, or a row from another machine).
+const MsgTaskOutputMissing = "任务输出不存在，可能已被清理"
