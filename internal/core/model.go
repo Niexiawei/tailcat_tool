@@ -23,7 +23,9 @@ const (
 // Label returns the Chinese label shown in the UI.
 func (s ConnectionState) Label() string {
 	switch s {
-	case StateDisconnected:
+	case StateDisconnected, ConnectionState(""):
+		// The zero value is what a session that nobody touched yet carries; a
+		// blank label reads as "no state", which is worse than "not connected".
 		return "未连接"
 	case StateConnecting:
 		return "正在连接"
