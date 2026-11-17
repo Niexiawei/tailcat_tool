@@ -5,6 +5,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
@@ -28,6 +29,9 @@ type resourceState struct {
 	// the toolbar can say how far along it is instead of guessing from a timer.
 	batch   []string
 	batchAt time.Time
+	// filter narrows both tables: one box serves the application view and the
+	// process view, so switching views does not lose the question.
+	filter string
 }
 
 // resourceStateFor returns one device's page state, creating it on first use.
@@ -252,13 +256,14 @@ func (vm *ViewModel) processSection(c *ui.Context, state *resourceState, profile
 // user can force the names and icons to be read again.
 func (vm *ViewModel) tableToolbar(c *ui.Context, state *resourceState, profile core.Profile, session core.Session, snapshot core.ResourceSnapshot) {
 	theme := c.Theme()
-	processes := 0
-	for _, app := range snapshot.Apps {
-		processes += len(app.Processes)
-	}
+	apps, processes := viewCounts(state, snapshot)
 	ui.Column(c).FillWidth().Gap(4).Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			components.Tabs(c, &state.view, components.TabsSegmented, "应用", "进程")
+			components.TextBox(c, &state.filter, components.TextBoxOptions{LeadingIcon: lucide.Search()}).
+				Placeholder("筛选应用或进程").
+				Label("筛选应用或进程").
+				Width(200)
 			ui.Box(c).Grow(1)
 			if done, total := vm.batchProgress(state, profile.ID); total > 0 {
 				components.Text(c, "正在读取应用信息 "+itoa(done)+"/"+itoa(total)).
@@ -275,9 +280,9 @@ func (vm *ViewModel) tableToolbar(c *ui.Context, state *resourceState, profile c
 			c.Invalidate()
 		})
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			title, counts := "按应用分组", itoa(len(snapshot.Apps))+" 个应用 · "+itoa(processes)+" 个进程"
+			title, counts := "按应用分组", itoa(apps)+" 个应用 · "+itoa(processes)+" 个进程"
 			if state.view == resourceViewProcesses {
-				title, counts = "按进程列出", itoa(processes)+" 个进程 · "+itoa(len(snapshot.Apps))+" 个应用"
+				title, counts = "按进程列出", itoa(processes)+" 个进程 · "+itoa(apps)+" 个应用"
 			}
 			components.Text(c, title).FontSize(13).Bold()
 			components.Text(c, counts).FontSize(11).TextColor(theme.TextMuted)
@@ -327,22 +332,35 @@ func appPackages(snapshot core.ResourceSnapshot) []string {
 }
 
 // processTable lists one row per application and, when the user expands it, its
-// processes underneath.
+// processes underneath. While a query is active the groups are open: what the
+// user is looking for is a process inside one of them.
 func (vm *ViewModel) processTable(c *ui.Context, state *resourceState, device uuid.UUID, snapshot core.ResourceSnapshot) {
+	filtering := filtering(state)
+	kept := filterApps(snapshot.Apps, state.filter)
 	components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).MinHeight(0).Label("按应用分组的进程表").Children(func() {
+		if filtering && len(kept) == 0 {
+			vm.noFilterMatch(c, "没有匹配的应用")
+			return
+		}
 		components.Table(c, &state.tableApps, processColumns(), func() {
-			for _, app := range snapshot.Apps {
+			for _, item := range kept {
+				app := item.app
 				label := appLabel(app)
-				row := components.TableRow(c, app.Package, label, state.expanded[app.Package], func(col int) {
+				expanded := state.expanded[app.Package] || (filtering && len(item.processes) > 0)
+				row := components.TableRow(c, app.Package, label, expanded, func(col int) {
 					vm.appCell(c, col, state, device, app, label)
 				})
 				if row.Clicked() {
 					state.expanded[app.Package] = !state.expanded[app.Package]
 				}
-				if !state.expanded[app.Package] {
+				if !expanded {
 					continue
 				}
-				for _, process := range app.Processes {
+				processes := item.app.Processes
+				if filtering && !item.full {
+					processes = item.processes
+				}
+				for _, process := range processes {
 					components.TableRow(c, app.Package+"#"+itoa(process.PID), "  "+process.Name, false, func(col int) {
 						vm.processCell(c, col, process)
 					})
@@ -350,6 +368,41 @@ func (vm *ViewModel) processTable(c *ui.Context, state *resourceState, device uu
 			}
 		})
 	})
+}
+
+// filtering reports whether the box holds a question, as opposed to blanks the
+// user left behind.
+func filtering(state *resourceState) bool {
+	return strings.TrimSpace(state.filter) != ""
+}
+
+// noFilterMatch explains an empty table instead of leaving the area blank.
+func (vm *ViewModel) noFilterMatch(c *ui.Context, what string) {
+	theme := c.Theme()
+	components.Text(c, what).FontSize(12).TextColor(theme.TextMuted)
+	components.Text(c, "清空筛选即可看到全部").FontSize(11).TextColor(theme.TextMuted)
+}
+
+// viewCounts is what the toolbar says the table holds, after the filter.
+func viewCounts(state *resourceState, snapshot core.ResourceSnapshot) (apps, processes int) {
+	active := filtering(state)
+	if state.view == resourceViewProcesses {
+		seen := map[string]bool{}
+		for _, row := range filterProcessRows(processRows(snapshot), state.filter) {
+			processes++
+			seen[row.pkg] = true
+		}
+		return len(seen), processes
+	}
+	for _, item := range filterApps(snapshot.Apps, state.filter) {
+		apps++
+		if !active || item.full {
+			processes += len(item.app.Processes)
+			continue
+		}
+		processes += len(item.processes)
+	}
+	return apps, processes
 }
 
 // processColumns are the table's columns. The order is fixed: the page sorts by
@@ -499,9 +552,14 @@ func (vm *ViewModel) appIcon(device uuid.UUID, pkg string) ui.ImageSource {
 // processList lists one process per row: the same numbers as the grouped view,
 // without folding them under the application.
 func (vm *ViewModel) processList(c *ui.Context, state *resourceState, snapshot core.ResourceSnapshot) {
+	rows := filterProcessRows(processRows(snapshot), state.filter)
 	components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).MinHeight(0).Label("按进程列出的进程表").Children(func() {
+		if filtering(state) && len(rows) == 0 {
+			vm.noFilterMatch(c, "没有匹配的进程")
+			return
+		}
 		components.Table(c, &state.tableProcesses, processViewColumns(), func() {
-			for _, row := range processRows(snapshot) {
+			for _, row := range rows {
 				components.TableRow(c, row.id, row.process.Name, false, func(col int) {
 					vm.processRowCell(c, col, row)
 				})
@@ -528,6 +586,7 @@ type processRow struct {
 	id      string
 	process core.ProcessUsage
 	app     string
+	pkg     string
 }
 
 // processRows flattens the grouped reading into one row per process, ordered by
@@ -540,6 +599,7 @@ func processRows(snapshot core.ResourceSnapshot) []processRow {
 				id:      app.Package + "#" + itoa(process.PID),
 				process: process,
 				app:     appLabel(app),
+				pkg:     app.Package,
 			})
 		}
 	}
