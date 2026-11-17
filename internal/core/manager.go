@@ -68,6 +68,9 @@ type Manager struct {
 	sampleCounters   map[uuid.UUID]*resourceCounters
 	hardware         map[uuid.UUID]*hardwareInfo
 	samplers         map[uuid.UUID]context.CancelFunc
+	// dirListings caches what each device folder held when it was read; the
+	// file page draws from it, and Disconnect drops it with the channel.
+	dirListings map[dirKey]DirListing
 
 	notice              string
 	nextTemporaryNumber int
@@ -153,6 +156,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		resources:           map[uuid.UUID]ResourceSnapshot{},
 		sampleCounters:      map[uuid.UUID]*resourceCounters{},
 		hardware:            map[uuid.UUID]*hardwareInfo{},
+		dirListings:         map[dirKey]DirListing{},
 		samplers:            map[uuid.UUID]context.CancelFunc{},
 		nextTemporaryNumber: 1,
 		monitorInterval:     interval,
@@ -594,6 +598,7 @@ func (m *Manager) Disconnect(ctx context.Context, id uuid.UUID) {
 	delete(m.resources, id)
 	delete(m.sampleCounters, id)
 	delete(m.hardware, id)
+	m.forgetDirListingsLocked(id)
 	m.setStateLocked(id, func(s *Session) {
 		s.State = StateDisconnecting
 	})

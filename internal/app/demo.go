@@ -29,6 +29,8 @@ func (demoRunner) Run(_ context.Context, c core.Command, onOutput func(string)) 
 		return core.Result{Output: demoResourceOutput}, nil
 	case strings.Contains(joined, "pm path"):
 		return core.Result{Output: "package:/data/app/com.demo.camera/base.apk\n"}, nil
+	case strings.Contains(joined, "cd '"):
+		return core.Result{Output: demoDirListing(joined)}, nil
 	case strings.Contains(joined, "stat -c"):
 		return core.Result{Output: "4096 1700000000\n"}, nil
 	}
@@ -37,6 +39,24 @@ func (demoRunner) Run(_ context.Context, c core.Command, onOutput func(string)) 
 		onOutput("示例任务完成，未执行真实设备命令。\n")
 	}
 	return core.Result{Output: "示例任务完成，未执行真实设备命令。\n"}, nil
+}
+
+// demoDirListing is what the simulated device prints for one directory read.
+// The timestamps are fixed so the page reads the same on every run.
+func demoDirListing(script string) string {
+	switch {
+	case strings.Contains(script, "/sdcard/Download"):
+		return "directory|4096|770|drwxrwx---|1700000000|./旧文件\n" +
+			"regular file|52428800|660|-rw-rw----|1700000000|./update.zip\n"
+	case strings.Contains(script, "/sdcard"):
+		return "directory|4096|770|drwxrwx---|1700000000|./DCIM\n" +
+			"directory|4096|770|drwxrwx---|1700000000|./Download\n" +
+			"regular file|2048|660|-rw-rw----|1700000000|./log.txt\n" +
+			"regular file|2411724|660|-rw-rw----|1700000000|./照片.jpg\n"
+	case strings.Contains(script, "/data/local/tmp"):
+		return "regular file|1024|600|-rw-------|1700000000|./helper.sh\n"
+	}
+	return ""
 }
 
 // demoOpener hands out a fake channel without touching the network.

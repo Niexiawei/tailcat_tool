@@ -19,6 +19,7 @@ const (
 	detailOverview = iota
 	detailResources
 	detailTerminal
+	detailFiles
 	detailLog
 )
 
@@ -74,6 +75,9 @@ type ViewModel struct {
 	ReachabilityOpen bool
 	AttentionOpen    bool
 
+	// FileDetail is the entry whose attribute dialog is open; nil closes it.
+	FileDetail *FileDetail
+
 	// Sidebar section expansion; both start open.
 	SavedOpen     bool
 	TemporaryOpen bool
@@ -95,6 +99,14 @@ type ViewModel struct {
 	// appIcons caches decoded application icons, keyed by device and package,
 	// together with the reading they were decoded from.
 	appIcons map[string]iconAsset
+
+	// files holds the file page's state per device; fileLoads and fileErrs are
+	// keyed by "device|path" and filled from command goroutines, so they have
+	// a lock of their own rather than riding the manager's.
+	files     map[uuid.UUID]*fileState
+	fileMu    sync.Mutex
+	fileLoads map[string]bool
+	fileErrs  map[string]string
 }
 
 // Fail reports an error as an error-level toast.

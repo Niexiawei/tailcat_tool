@@ -17,6 +17,7 @@
 10. [陷阱清单](#10-陷阱清单)
 11. [测试手法](#11-测试手法)
 12. [文件索引](#12-文件索引)
+13. [设备文件页](#13-设备文件页「文件」页签)
 
 ---
 
@@ -77,7 +78,7 @@ sidebar.NewShell(sidebar.ShellOptions{
 
 ```go
 ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
-	vm.routedPage(c)   // 页面占满，含设备页的「概览 / 终端 / 日志」
+	vm.routedPage(c)   // 页面占满，含设备页的「概览 / 资源 / 终端 / 文件 / 日志」
 })
 ```
 
@@ -92,7 +93,7 @@ ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
 | 路由 | 页面 | 说明 |
 |---|---|---|
 | `/devices` | 设备列表页 | 卡片式列表（状态点 / 名称 / 连接方式与地址 / 状态），空态给出"添加设备"；页面标题在窗口标题栏里，正文不再重复 |
-| `/devices/{id}` | 设备页 | 面包屑 + 标题行（编辑 / 连接 / 断开）+ 页签（概览 / 终端 / 日志） |
+| `/devices/{id}` | 设备页 | 面包屑 + 标题行（编辑 / 连接 / 断开）+ 页签（概览 / 资源 / 终端 / 文件 / 日志） |
 | 其他 | 列表页 | 兜底 |
 | `/devices/{无效 id}` | "设备不存在"页 | 附带"返回我的设备" |
 
@@ -343,6 +344,8 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | `ButtonBase` 默认居中 | 行内容居中，不像列表项 | `.Justify(ui.Start)` |
 | 行内 `Text` 不 `SingleLine()` | 长设备名把行撑高 | `.SingleLine()` |
 | 持锁调用 `Recorder` | 磁盘一慢，界面冻住 | 入队，由独立协程写 |
+| 用标签当键的树里出现同名项目 | 控制台刷 `two elements under one parent have the key "Download"`，同名目录共享一个状态 | 树键必须唯一：`components.TreeVirtualized` 用设备路径作键，不要用文件名 |
+| 视图每一帧都给失败的 I/O 发起重试 | 失败原因被自己抹掉，页面永远停在「正在读取」，同时不停发命令（`/cache` 就是这么卡住的） | 失败要粘住：`loadDir` 见到已有失败记录就返回，只有用户点「重试」才清掉 |
 | `ButtonGhost` 用在页面级动作上 | 按钮读成正文（无底色无边框），用户找不到入口 | 页面级动作用 `ButtonOutline`/`Secondary`/`Primary`；ghost 只留给文字里的链接与对话框里的「取消」 |
 | 单行文本被截断却不给全文 | `.SingleLine()` 只画省略号，用户拿不到完整名称/探测详情（如「没有有效连接凭据，请编辑设…」） | 每个可能被截断的 `SingleLine` 都要 `components.Tooltip(c, anchor, 全文)`：在 anchor 之后、同一帧内调用，忽略它的返回值（隐藏时无效）；悬停延迟由 MyGo 管（约 1 秒） |
 | 对话框一打开就自动跑批量作业（如「全部设备连通测试」） | 用户没同意就花掉每台 8 秒的探测，设备多时打开即卡；而且结果没人等 | 打开只展示、由「开始测试」发起；关闭对话框时 `Checker.Cancel()` 中止在跑的批次——看不见的结果不值得继续探测 |
@@ -378,6 +381,24 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 关闭对话框会中止批次 | 注入永久阻塞的 `Prober`（`blockingProber`），断言 `Running()` 后才点右上角「关闭」，再断言 `Wait()` 后没有行停在「正在测试」 |
 | 是提示条还是内嵌横幅 | 点完动作后断言文案出现、**没有**「关闭」按钮，且 `Advance(5s)` 后消失 |
 
+### 11.1 截图核对（人工，不是断言）
+
+改完界面「文字都在」不等于「看起来是对的」：边框有没有画、缩进对不对、控件有没有被压成 0 高、对话框是不是盖在页面上——这些只有看图能判断。`internal/app/screenshots_test.go` 把每个页面状态渲染成 PNG：
+
+```sh
+# Windows（正斜杠也可以）
+TAILCAT_SHOT_DIR=D:/tmp/shots go test ./internal/app -run TestScreenshots -v
+# macOS / Linux
+TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v
+```
+
+- **不设环境变量就 SKIP**，`go test ./...` 不写文件、不耗时（CI 不受影响）。
+- **没有断言、没有基准图**：像素级比对在不同字体/平台上必然不稳，本仓库也就不会因为「差一个像素」红。它的用途是人（或代理）看一眼。
+- 用例表 `shotCases()` 覆盖：设备列表、侧栏、概览、资源、文件（列表 / 读失败 / 读取中 / 属性弹窗）、日志、设备编辑器、临时设备、工具设置、连通测试、干预弹窗。**加了页面或对话框状态就加一条**。
+- 每帧循环里都有一次真实 `time.Sleep`：`ui.Tester` 的时钟是虚拟的，目录读取、任务启动跑在 goroutine 上，不睡就永远等不到数据。
+- `view` 字段可以只截某个 shell 槽位（侧栏就是这么截的）。
+- **终端页不在此列**：真实终端要运行期加载 libghostty-vt，`go test` 不应下载它（见 §10 最后一行），终端外观用 `go run ./cmd/tailcat-manager --demo` 目视。
+
 **注意**：`ui.Tester` 的时钟是虚拟的，`Tester.Advance` 才推进。用"帧是否还在排队"判断卡死会误判——提示条动画本身会持续请求帧。判断"界面是否被锁住"要用真实的时间断言（如上面的锁测试）。
 
 ## 12. 文件索引
@@ -396,6 +417,123 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 日志入队与写库 | `internal/core/manager.go`（`writeLogs`）、`internal/history/sqlite.go` |
 | 设备信息读取与清空 | `internal/core/manager_tasks.go`、`internal/core/manager.go` |
 | 中继历史（`relayHistory`）与预设 | `internal/core/manager_devices.go`、`internal/core/config.go` |
+| 设备文件的读取与缓存 | `internal/core/remotefs.go`（纯解析）、`internal/core/manager_files.go`（静默读 + 缓存） |
+| 文件页视图与属性弹窗 | `internal/app/files.go` |
 | 对话框关闭动画回归 | `internal/app/dialog_test.go` |
-| 视图测试 | `internal/app/app_test.go`、`internal/app/forms_test.go`、`internal/app/terminal_test.go` |
+| 视图测试 | `internal/app/app_test.go`、`internal/app/forms_test.go`、`internal/app/terminal_test.go`、`internal/app/files_test.go` |
+| 页面截图（人工核对） | `internal/app/screenshots_test.go`（`TAILCAT_SHOT_DIR` 打开） |
 | 锁不阻塞测试 | `internal/core/manager_test.go`（`TestSlowRecorderNeverBlocksTheManager`） |
+
+## 13. 设备文件页（「文件」页签）
+
+设备页第四个页签（概览 / 资源 / 终端 / 文件 / 日志）是文件浏览与传输：左边是可展开的文件夹树，右边是所选文件夹的条目表格（名称 / 大小 / 修改时间 / 权限）。点文件行弹出属性弹窗，可以下载到本地；目录行可以进入，弹窗里也能把本地文件上传到那个文件夹。
+
+### 13.1 布局
+
+```go
+// 整个浏览区套一层边框，和终端面板同一个写法。
+ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(1).
+	Radius(theme.Radius).Border(1, theme.Border).Clip().Children(func() {
+	components.Split(c, &state.treeWidth,
+		func() { vm.folderTree(c, profile, state) },   // 左：components.TreeVirtualized
+		func() { vm.fileTable(c, profile, state) },    // 右：面包屑 + components.Table
+		components.SplitOptions{FirstMin: 180, SecondMin: 260, Default: 260},
+	).Fill()
+})
+```
+
+**外观是一整块带边框的面板**，不是两列裸内容：`Padding(1)` 让里面的内容不吃掉边框（和终端面板一致），`Clip()` 让圆角真的裁掉内容。
+
+三条必须遵守的约定：
+
+| 约定 | 原因 |
+|---|---|
+| `Split` 的两个面板都要 `MinWidth(0)`（内部 `ui.Scroll` / `ScrollView` 都要带） | 不加的话长文件名会把左右两栏一起撑过窗口宽度，右侧被裁 |
+| 树用 `components.TreeVirtualized`，**键是设备路径**（`fileState.tree`） | 树的所有行都是同一个 Column 的直接子元素。`components.Tree` 用**标签**当键，于是 `/sdcard/DCIM` 和 `/system/DCIM` 会拿到同一个 key，控制台报 `two elements under one parent have the key "DCIM"`，两行共享一个状态（展开一个另一个也变）。键换成路径后同名目录各走各的，顺便拿到虚拟滚动 |
+| 树**只有一个根**：`/` | 曾经把 `/sdcard`、`/storage/emulated/0`、`/data/local/tmp`、`/system` 当捷径与 `/` 并列，结果 `/` 展开后同一个目录又出现一次（`... → storage → emulated → /storage/emulated/0`），两行同键、各子目录全部报 `have the key`。目录只能有一个真相：从 `/` 往下走 |
+| 符号链接算文件夹（`RemoteEntry.Folder()`） | 真机上 `/sdcard` 是指向内部存储的软链，`stat` 报 `symbolic link`。只认 `directory` 的话，单根树里最重要的那个目录会直接消失。代价：指向普通文件的软链也会被当成文件夹，点进去会显示「无法进入」，这是可接受的一头错 |
+| 行式元素 `FillWidth()`，滚动容器 `Grow(1).MinHeight(0)` | `Fill()` 会同时抢高度（见 §10） |
+
+**展开箭头是「里面还有东西」的唯一提示**（`treeChildren`，纯函数，测试直接断言）：
+
+| 该目录读过了吗 | 有子目录吗 | 结果 | 原因 |
+|---|---|---|---|
+| 没读过 | — | 显示箭头 | 还不知道里面有什么，先给箭头；点开才去读 |
+| 读过 | 有 | 显示箭头 | 正常可展开 |
+| 读过 | 没有 | **不显示箭头** | 点开也只会是空的，不要给出一个假承诺。**包括已经展开的**：早先为了"能收回去"保留箭头，用户看到的就是一个转向下、里面却什么都没有的箭头 |
+
+组件按 `children(path)` 是否为 `nil` 决定画不画箭头，所以「键为空切片」和「键为 `nil`」是两种意思，别写反。
+
+树只有一个根 `/`，默认展开到 `/sdcard`（`state.tree.Open.Add("/")` + `Add("/sdcard")`），右侧默认列出 `/sdcard`。所以启动时会预取 `/` 下十几个目录——这是「点进去不用等」的价格，跳过 `/proc`、`/sys`、`/dev`、`/acct`。
+
+### 13.2 取数：一次 `stat` 往返，静默执行
+
+```sh
+cd '<目录>' || exit 9
+for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
+```
+
+- **名称放在格式串最后**，Go 侧 `SplitN(…, 6)`：文件名里有 `|` 也不会错位。
+- 路径里的 `'` 转义成 `'\''`；含换行/NUL/非绝对路径时**不发命令**，直接返回中文错误。
+- 脚本第一行是 `cd '<目录>' 2>&1 || exit 9`：`2>&1` 把 shell 自己对 `cd` 的抱怨带进输出，页面才能说「没有权限查看该文件夹：/cache」而不是笼统的「不可读」。退出码 `9` 是脚本自己的「`cd` 失败」。
+- 单目录 **2000 条**上限，超出时脚本末尾打印 `@@TRUNCATED`，页面写「只显示前 2000 项」。这是为了防止 runner 的 1 MiB 输出上限把一个巨型目录**静默**截断成"看起来完整"的列表。
+- **不显示创建时间**：`%W`（birth time）在 Android 的 ext4/f2fs 上几乎总是 0，用户已裁决不显示这一行。
+
+`Manager.ListRemoteDir` 照 `SampleResources` 的形状写：`operationTarget` → `validateTarget` → `runner.Run` → `targetIsCurrent` → 解析 → 缓存 + `notify()`。**它不建任务、不写通道日志、不进历史**——否则展开十个文件夹就把日志页和历史库刷满（`TestListRemoteDirCreatesNoTask` 钉住）。上传/下载反过来必须走 `BeginADBTask`：可取消、日志页可见、超时与脱敏免费。
+
+### 13.3 状态放哪
+
+| 状态 | 位置 | 生命周期 |
+|---|---|---|
+| 目录内容（`DirListing`） | `Manager.dirListings`，键 `dirKey{device, path}` | `Disconnect` 时清空（`forgetDirListingsLocked`）。界面是状态的函数，渲染线程不持有数据 |
+| 树展开、选中路径、右侧目录、表格列宽 | `ViewModel.files[device].fileState` | 随窗口存活；切设备不串味 |
+| 正在读 / 读取失败 | `ViewModel.fileLoads` / `fileErrs`，键 `"device|path"`，由 `fileMu` 保护 | 由命令 goroutine 写，写完 `Invalidate()` |
+
+`beginFileLoad` 保证**同一路径只有一次读取在飞**：连点两下文件夹不会发两条命令（`TestFileTreeReadsEachFolderOnce`）。
+
+### 13.3.1 失败之后等用户，不要每帧重试
+
+`loadDir` 的 `!force` 分支有三个提前返回：已缓存、**已有失败记录**、已有读取在飞。
+
+第三条是踩出来的：早先只判断「已缓存」，于是一个读不了的目录（`/cache`）会在**每一帧**重新发起读取，而每次发起都先 `clearFileFailure` ——刚记下的失败原因被自己抹掉，页面永远停在「正在读取…」，看起来就是卡死。现在失败是粘住的，只有用户点「重试」才清掉（`TestFilePageWaitsForTheUserAfterAFailedRead`：20 帧后同一目录只读过 1 次）。
+
+### 13.3.2 提前读下一级
+
+一次目录读取成功之后，同一个 goroutine 会**顺序**把它的子目录各读一遍（`prefetchDirs`），于是点进任何一个子文件夹都是立刻就绪。三条边界：
+
+- 顺序执行，不在同一台设备上并发发命令；
+- 跳过 `/proc`、`/sys`、`/dev`、`/acct` 这类伪文件系统：它们的列表又长又没用，读一次纯属浪费；
+- 失败同样记进 `fileErrs`，用户点进去直接看到原因（这反而是提前拿到的好消息）。
+
+### 13.4 交互与弹窗
+
+- 点树节点：右侧列该目录 + 展开该节点。
+- 点表格里的**目录**行：进入（`showDir`：右侧切换、树上选中并展开）。
+- 右侧上方的路径是 `components.Breadcrumbs` 面包屑：祖先可点，一路点回上层；`state.crumb` 是它的绑定，`showDir` 会把它重置为 -1。
+- 文件列表区域的「正在读取」和「读取失败」都是**居中**的一整块（`AlignItems(Center).Justify(Center)`），不是贴在左上角的一行字——它们是这一栏的全部内容，不是它的一行。
+- 点**文件**行：打开 `FileDetailView` —— 属性四行（文件名 / 文件大小 / 最后修改时间 / 文件权限 `%A (八进制)`）+ 主按钮「下载到本地…」+ 次按钮「上传到此文件夹…」。目录行改成「下载此文件夹…」。
+- 弹窗按 §3.6 的固定骨架：右上角一个 `IconButton` 关闭，`if !open` 是唯一收口；**不要在**对话框里用 `components.Tabs`。
+- 错误呈现分两类：读目录失败是**页面状态**（「读取失败：…」+「重试」），不弹提示条；发起下载/上传失败才是事件（`vm.Fail`）。
+- 树里不渲染「正在读取…」「没有子文件夹」这类**额外行**：缩进要自己算，而且会让树的行数与目录数对不上。状态直接挂在节点行上——读取中给 `components.Spinner`，失败给红色「读取失败」小字并把原因挂 `Tooltip`。要动手重试就点该目录，右侧那块居中区域会给出完整原因和「重试」。
+
+### 13.5 测试手法
+
+`internal/app/files_test.go` 用 `newRunnerViewModel` 注入一个按目录返回 `stat` 输出的假 runner，然后：
+
+| 目的 | 手法 |
+|---|---|
+| 树的形状 | `treeRows(vm)` 取整个树的路径序列，断言等于 `["/", "/sdcard", "/sdcard/DCIM", …]`：一个根、软链目录在里面、没有重复行 |
+| 列表渲染 | `waitForText(t, tt, "照片.jpg")` —— 目录读取在 goroutine 里，必须「反复 `Frame()` 直到出现」，不能只 `Frame()` 一次 |
+| 没有创建时间 | `tt.HasText("创建时间")` 为假（`HasText` 是子串匹配） |
+| 树懒加载 | 点整条路径的根（页面别处不会出现 `/system` 这个文本）→ 再点 `bin` → 断言树里出现「没有子文件夹」 |
+| 只读一次 | 点同一个节点三次，统计 runner 收到的 `cd '/system'` 命令数 = 1 |
+| 提前读下一级 | 只等 `/sdcard` 一次读取，然后断言命令里已经出现 `cd '/sdcard/Download'` 与 `cd '/sdcard/DCIM'`（没点过任何节点） |
+| 失败后不刷命令 | 让读取返回退出码 9，断言出现「读取失败：…」后再 `Frame()` 二十次，同一目录的命令数仍是 1 |
+| 展开箭头也会读 | 直接把 `*state.openAt("/system")` 置真（等价于点箭头），断言发出了 `/system` 的命令 |
+| 面包屑能回退 | 进入 `Download` 后点面屑里的 `sdcard`，断言回到了 `/sdcard` 的内容 |
+| 箭头规则 | 纯函数 `treeChildren` 的五个分支：没读过 / 读过有子目录 / 读过没子目录 / 空但已展开 |
+| 同名目录不串状态 | 让 `/sdcard` 与 `/system` 都有 `Download`，展开两者：抓 `log.SetOutput` 断言没有 `have the key`，并断言树里没有重复行 |
+| 树的实际内容 | `treeRows(vm)` 读 `TreeVirtualizedState` 的 `Rows()` / `Item(i)` 得到路径列表，比按标签找元素可靠（同名目录不会歧义） |
+| 上传/下载 | 替换包级变量 `openLocalPaths` / `saveLocalPath`（`files.go` 里的 `mygo.Dialog.Open/Save`），断言 `Manager.Tasks()` 出现对应任务 |
+
+**不要**在测试里直接改 `mygo.Dialog`：它是包级变量，改了会影响同进程其它测试；用自己的两个包装变量并在 `t.Cleanup` 还原。

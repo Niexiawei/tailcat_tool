@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -23,6 +24,9 @@ func TestDialogsCloseWithoutPanic(t *testing.T) {
 		{"settings", func(vm *ViewModel) { vm.openSettings() }, func(vm *ViewModel) { vm.SettingsOpen = false }},
 		{"reachability", func(vm *ViewModel) { vm.ReachabilityOpen = true }, func(vm *ViewModel) { vm.ReachabilityOpen = false }},
 		{"attention", func(vm *ViewModel) { vm.AttentionOpen = true }, func(vm *ViewModel) { vm.AttentionOpen = false }},
+		{"file detail", func(vm *ViewModel) {
+			vm.FileDetail = &FileDetail{Device: vm.Selection, Entry: core.RemoteEntry{Name: "log.txt", Path: "/sdcard/log.txt", Size: 2048}}
+		}, func(vm *ViewModel) { vm.FileDetail = nil }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

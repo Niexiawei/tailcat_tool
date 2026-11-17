@@ -70,6 +70,7 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 - **假实现**：`internal/core/manager_test.go` 里的 `fakeRunner`、`fakeOpener`、`fakePingDialer`、`fakePingSession`；`internal/app/app_test.go` 里的 `stubRunner`。core 的假实现放在 `package core` 的 `_test.go` 里（否则会和 `internal/testutil` 循环导入）。
 - **真实进程**：`internal/core/runner_test.go` 的 `TestMain` + `CORE_RUNNER_HELPER` 环境变量重新执行测试二进制。新增"真实管道/信号"用例就加一个 helper 模式，不要启外部程序。
 - **视图**：`ui.NewTester(vm.SidebarView, 280, 720)`，用 `HasText` / `Click` / `Texts` 断言；不要依赖像素。
+- **页面截图（人工核对，不是断言）**：`TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots` 把每个页面状态渲染成 PNG（`internal/app/screenshots_test.go`，用例表 `shotCases()`）。不设环境变量就 SKIP，CI 不写文件。改完界面自己看一眼：文字都在不等于布局是对的。加了新页面/对话框状态就加一条用例。终端页不在其中（要 libghostty-vt）。
 - **无网络**：探测测试注入 `ManagerOptions.Prober`；转发测试注入 `ChannelOpener`；任何测试都不许真连 DERP。
 
 ## GUI 组件优先级
