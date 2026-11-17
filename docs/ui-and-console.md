@@ -381,6 +381,24 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 关闭对话框会中止批次 | 注入永久阻塞的 `Prober`（`blockingProber`），断言 `Running()` 后才点右上角「关闭」，再断言 `Wait()` 后没有行停在「正在测试」 |
 | 是提示条还是内嵌横幅 | 点完动作后断言文案出现、**没有**「关闭」按钮，且 `Advance(5s)` 后消失 |
 
+### 11.1 截图核对（人工，不是断言）
+
+改完界面「文字都在」不等于「看起来是对的」：边框有没有画、缩进对不对、控件有没有被压成 0 高、对话框是不是盖在页面上——这些只有看图能判断。`internal/app/screenshots_test.go` 把每个页面状态渲染成 PNG：
+
+```sh
+# Windows（正斜杠也可以）
+TAILCAT_SHOT_DIR=D:/tmp/shots go test ./internal/app -run TestScreenshots -v
+# macOS / Linux
+TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v
+```
+
+- **不设环境变量就 SKIP**，`go test ./...` 不写文件、不耗时（CI 不受影响）。
+- **没有断言、没有基准图**：像素级比对在不同字体/平台上必然不稳，本仓库也就不会因为「差一个像素」红。它的用途是人（或代理）看一眼。
+- 用例表 `shotCases()` 覆盖：设备列表、侧栏、概览、资源、文件（列表 / 读失败 / 读取中 / 属性弹窗）、日志、设备编辑器、临时设备、工具设置、连通测试、干预弹窗。**加了页面或对话框状态就加一条**。
+- 每帧循环里都有一次真实 `time.Sleep`：`ui.Tester` 的时钟是虚拟的，目录读取、任务启动跑在 goroutine 上，不睡就永远等不到数据。
+- `view` 字段可以只截某个 shell 槽位（侧栏就是这么截的）。
+- **终端页不在此列**：真实终端要运行期加载 libghostty-vt，`go test` 不应下载它（见 §10 最后一行），终端外观用 `go run ./cmd/tailcat-manager --demo` 目视。
+
 **注意**：`ui.Tester` 的时钟是虚拟的，`Tester.Advance` 才推进。用"帧是否还在排队"判断卡死会误判——提示条动画本身会持续请求帧。判断"界面是否被锁住"要用真实的时间断言（如上面的锁测试）。
 
 ## 12. 文件索引
@@ -403,6 +421,7 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 文件页视图与属性弹窗 | `internal/app/files.go` |
 | 对话框关闭动画回归 | `internal/app/dialog_test.go` |
 | 视图测试 | `internal/app/app_test.go`、`internal/app/forms_test.go`、`internal/app/terminal_test.go`、`internal/app/files_test.go` |
+| 页面截图（人工核对） | `internal/app/screenshots_test.go`（`TAILCAT_SHOT_DIR` 打开） |
 | 锁不阻塞测试 | `internal/core/manager_test.go`（`TestSlowRecorderNeverBlocksTheManager`） |
 
 ## 13. 设备文件页（「文件」页签）
