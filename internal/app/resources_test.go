@@ -366,6 +366,85 @@ func TestResourceToolbarRefreshNeedsAConnection(t *testing.T) {
 	}
 }
 
+func TestResourceViewSwitchesBetweenAppsAndProcesses(t *testing.T) {
+	vm, _ := resourceFixture(t)
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	// The application view groups: one row per application, processes hidden
+	// until the group is opened.
+	if !tt.HasText("2 个进程") {
+		t.Fatalf("the application view does not group; texts = %v", tt.Texts())
+	}
+	if tt.HasText("PID 100") {
+		t.Fatal("the application view lists processes before the group is opened")
+	}
+
+	if err := tt.Click("进程"); err != nil {
+		t.Fatalf("no 进程 segment; texts = %v", tt.Texts())
+	}
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+
+	if tt.HasText("2 个进程") {
+		t.Fatalf("the process view still groups by application; texts = %v", tt.Texts())
+	}
+	for _, want := range []string{"PID 100", "PID 101", "PID 200"} {
+		if !tt.HasText(want) {
+			t.Fatalf("the process view is missing %q; texts = %v", want, tt.Texts())
+		}
+	}
+
+	if err := tt.Click("应用"); err != nil {
+		t.Fatalf("no 应用 segment; texts = %v", tt.Texts())
+	}
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if !tt.HasText("2 个进程") {
+		t.Fatalf("switching back did not restore the grouped view; texts = %v", tt.Texts())
+	}
+}
+
+func TestProcessViewListsEveryProcessOnce(t *testing.T) {
+	vm, _ := resourceFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	vm.resourceStateFor(profile.ID).view = resourceViewProcesses
+
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	count := func(want string) int {
+		n := 0
+		for _, text := range tt.Texts() {
+			if text == want {
+				n++
+			}
+		}
+		return n
+	}
+	for _, pid := range []string{"PID 100", "PID 101", "PID 200"} {
+		if got := count(pid); got != 1 {
+			t.Fatalf("%q appears %d times in the process view, want once; texts = %v", pid, got, tt.Texts())
+		}
+	}
+	// The application each process belongs to is still readable.
+	if !tt.HasText("com.foo") {
+		t.Fatalf("the process view does not say which application a process belongs to; texts = %v", tt.Texts())
+	}
+}
+
+func TestResourceProcessViewHasItsOwnTable(t *testing.T) {
+	vm, _ := resourceFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if _, ok := tt.Find("按应用分组的进程表"); !ok {
+		t.Fatalf("the application view has no grouped table; texts = %v", tt.Texts())
+	}
+
+	vm.resourceStateFor(profile.ID).view = resourceViewProcesses
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if _, ok := tt.Find("按进程列出的进程表"); !ok {
+		t.Fatalf("the process view has no table of its own; texts = %v", tt.Texts())
+	}
+	if _, ok := tt.Find("按应用分组的进程表"); ok {
+		t.Fatal("the process view reused the application table, so its scroll and columns would carry over")
+	}
+}
+
 func TestAppIconFollowsTheMetadataFetchTime(t *testing.T) {
 	first := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
 	icon := testIconPNG(t)

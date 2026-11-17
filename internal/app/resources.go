@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"math"
+	"sort"
 	"strconv"
 	"time"
 
@@ -16,9 +17,12 @@ import (
 // resourceState is the resource page's own state, kept per device so switching
 // devices does not carry an expanded group across.
 type resourceState struct {
-	table    components.TableState
-	expanded map[string]bool
-	scroll   ui.ScrollState
+	// view is which of the two tables the page shows; each keeps its own table
+	// state so columns and scroll do not carry over.
+	view           int
+	tableApps      components.TableState
+	tableProcesses components.TableState
+	expanded       map[string]bool
 	// batch is what a manual refresh is reading, and batchAt is when it
 	// started: a package counts as done once its status changed after that, so
 	// the toolbar can say how far along it is instead of guessing from a timer.
@@ -236,6 +240,10 @@ func (vm *ViewModel) processSection(c *ui.Context, state *resourceState, profile
 	vm.settleRefresh(state, profile.ID)
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(6).Children(func() {
 		vm.tableToolbar(c, state, profile, session, snapshot)
+		if state.view == resourceViewProcesses {
+			vm.processList(c, state, snapshot)
+			return
+		}
 		vm.processTable(c, state, profile.ID, snapshot)
 	})
 }
@@ -248,24 +256,32 @@ func (vm *ViewModel) tableToolbar(c *ui.Context, state *resourceState, profile c
 	for _, app := range snapshot.Apps {
 		processes += len(app.Processes)
 	}
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		components.Text(c, "按应用分组").FontSize(13).Bold()
-		components.Text(c, itoa(len(snapshot.Apps))+" 个应用 · "+itoa(processes)+" 个进程").
-			FontSize(11).TextColor(theme.TextMuted)
-		ui.Box(c).Grow(1)
-		if done, total := vm.batchProgress(state, profile.ID); total > 0 {
-			components.Text(c, "正在读取应用信息 "+itoa(done)+"/"+itoa(total)).
-				FontSize(11).TextColor(theme.TextMuted)
-		}
-		button := components.IconButton(c, lucide.RefreshCw(), "刷新应用信息", components.IconButtonCompact).
-			Disabled(len(state.batch) > 0 || session.State != core.StateOnline)
-		if !button.Clicked() {
-			return
-		}
-		state.batch = appPackages(snapshot)
-		state.batchAt = time.Now()
-		go func() { vm.Fail(vm.Manager.RefreshAppMeta(context.Background(), profile.ID)) }()
-		c.Invalidate()
+	ui.Column(c).FillWidth().Gap(4).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			components.Tabs(c, &state.view, components.TabsSegmented, "应用", "进程")
+			ui.Box(c).Grow(1)
+			if done, total := vm.batchProgress(state, profile.ID); total > 0 {
+				components.Text(c, "正在读取应用信息 "+itoa(done)+"/"+itoa(total)).
+					FontSize(11).TextColor(theme.TextMuted)
+			}
+			button := components.IconButton(c, lucide.RefreshCw(), "刷新应用信息", components.IconButtonCompact).
+				Disabled(len(state.batch) > 0 || session.State != core.StateOnline)
+			if !button.Clicked() {
+				return
+			}
+			state.batch = appPackages(snapshot)
+			state.batchAt = time.Now()
+			go func() { vm.Fail(vm.Manager.RefreshAppMeta(context.Background(), profile.ID)) }()
+			c.Invalidate()
+		})
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			title, counts := "按应用分组", itoa(len(snapshot.Apps))+" 个应用 · "+itoa(processes)+" 个进程"
+			if state.view == resourceViewProcesses {
+				title, counts = "按进程列出", itoa(processes)+" 个进程 · "+itoa(len(snapshot.Apps))+" 个应用"
+			}
+			components.Text(c, title).FontSize(13).Bold()
+			components.Text(c, counts).FontSize(11).TextColor(theme.TextMuted)
+		})
 	})
 }
 
@@ -314,7 +330,7 @@ func appPackages(snapshot core.ResourceSnapshot) []string {
 // processes underneath.
 func (vm *ViewModel) processTable(c *ui.Context, state *resourceState, device uuid.UUID, snapshot core.ResourceSnapshot) {
 	components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).MinHeight(0).Label("按应用分组的进程表").Children(func() {
-		components.Table(c, &state.table, processColumns(), func() {
+		components.Table(c, &state.tableApps, processColumns(), func() {
 			for _, app := range snapshot.Apps {
 				label := appLabel(app)
 				row := components.TableRow(c, app.Package, label, state.expanded[app.Package], func(col int) {
@@ -478,4 +494,79 @@ func (vm *ViewModel) appIcon(device uuid.UUID, pkg string) ui.ImageSource {
 	}
 	vm.appIcons[key] = iconAsset{fetchedAt: fetchedAt, image: image}
 	return image
+}
+
+// processList lists one process per row: the same numbers as the grouped view,
+// without folding them under the application.
+func (vm *ViewModel) processList(c *ui.Context, state *resourceState, snapshot core.ResourceSnapshot) {
+	components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).MinHeight(0).Label("按进程列出的进程表").Children(func() {
+		components.Table(c, &state.tableProcesses, processViewColumns(), func() {
+			for _, row := range processRows(snapshot) {
+				components.TableRow(c, row.id, row.process.Name, false, func(col int) {
+					vm.processRowCell(c, col, row)
+				})
+			}
+		})
+	})
+}
+
+// processViewColumns keeps the process view's columns apart from the grouped
+// view's: the application moves to the second place and the process to the
+// first, because that is what the rows are about.
+func processViewColumns() []ui.TableColumn {
+	return []ui.TableColumn{
+		{Title: "进程", ID: "proc", MinWidth: 200},
+		{Title: "应用", ID: "app", MinWidth: 160},
+		{Title: "CPU", ID: "cpu", Width: 72, Align: ui.End},
+		{Title: "GPU", ID: "gpu", Width: 72, Align: ui.End},
+		{Title: "内存", ID: "memory", Width: 88, Align: ui.End},
+	}
+}
+
+// processRow is one process with the application it belongs to.
+type processRow struct {
+	id      string
+	process core.ProcessUsage
+	app     string
+}
+
+// processRows flattens the grouped reading into one row per process, ordered by
+// CPU so the most expensive process is the first thing the page shows.
+func processRows(snapshot core.ResourceSnapshot) []processRow {
+	rows := make([]processRow, 0, len(snapshot.Apps))
+	for _, app := range snapshot.Apps {
+		for _, process := range app.Processes {
+			rows = append(rows, processRow{
+				id:      app.Package + "#" + itoa(process.PID),
+				process: process,
+				app:     appLabel(app),
+			})
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].process.CPUPercent != rows[j].process.CPUPercent {
+			return rows[i].process.CPUPercent > rows[j].process.CPUPercent
+		}
+		return rows[i].process.PID < rows[j].process.PID
+	})
+	return rows
+}
+
+func (vm *ViewModel) processRowCell(c *ui.Context, col int, row processRow) {
+	theme := c.Theme()
+	switch col {
+	case 0:
+		ui.Row(c).FillWidth().MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
+			components.Text(c, row.process.Name).FontSize(11).SingleLine()
+			components.Text(c, "PID "+itoa(row.process.PID)).FontSize(10).TextColor(theme.TextMuted)
+		})
+	case 1:
+		components.Text(c, row.app).FontSize(11).TextColor(theme.TextMuted).SingleLine()
+	case 2:
+		components.Text(c, percent1Text(row.process.CPUPercent)).FontSize(11).TextColor(theme.Text)
+	case 3:
+		components.Text(c, gpuCellText(row.process.GPUOk, row.process.GPUPercent)).FontSize(11).TextColor(theme.Text)
+	default:
+		components.Text(c, core.FormatBytes(row.process.MemBytes)).FontSize(11).TextColor(theme.Text)
+	}
 }
