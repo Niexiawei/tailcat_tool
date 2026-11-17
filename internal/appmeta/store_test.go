@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +22,10 @@ type fakeFileRunner struct {
 	apkPath string
 	apkSize string
 	payload []byte
+	// packages answers `pm list packages --user all -f <filter>`: name to the
+	// APK path the device reports for it. A nil map falls back to apkPath being
+	// installed under exactly the requested name.
+	packages map[string]string
 	// entries answers `unzip -p`: entry name to its bytes.
 	entries map[string][]byte
 	calls   []string
@@ -55,6 +60,9 @@ func (f *fakeFileRunner) Run(_ context.Context, c core.Command, _ func(string)) 
 		<-f.gate
 	}
 	switch {
+	case strings.Contains(line, "pm list packages"):
+		fields := strings.Fields(line)
+		return core.Result{Output: f.installed(fields[len(fields)-1])}, nil
 	case strings.Contains(line, "pm path"):
 		if f.apkPath == "" {
 			return core.Result{ExitCode: 1, Output: "unknown package"}, nil
@@ -113,6 +121,29 @@ func zipEntries(t *testing.T, apk []byte) map[string][]byte {
 	return out
 }
 
+// installed prints what `pm list packages --user all -f <filter>` prints: every
+// package whose name contains the filter, with the APK path behind it.
+func (f *fakeFileRunner) installed(filter string) string {
+	if len(f.packages) == 0 {
+		if f.apkPath == "" {
+			return ""
+		}
+		return "package:" + f.apkPath + "=" + filter + "\n"
+	}
+	names := make([]string, 0, len(f.packages))
+	for name := range f.packages {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, name := range names {
+		if strings.Contains(name, filter) {
+			b.WriteString("package:" + f.packages[name] + "=" + name + "\n")
+		}
+	}
+	return b.String()
+}
+
 func (f *fakeFileRunner) record(c core.Command) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -123,6 +154,15 @@ func (f *fakeFileRunner) reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = nil
+}
+
+func containsSubstring(list []string, want string) bool {
+	for _, item := range list {
+		if strings.Contains(item, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeFileRunner) callsSnapshot() []string {
@@ -198,15 +238,15 @@ func TestStoreSkipsFreshEntryAndRefetchesStale(t *testing.T) {
 
 	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
 	s.waitIdle()
-	if got := runner.count("pm path"); got != 0 {
-		t.Fatalf("a fresh entry was fetched again (%d pm path calls)", got)
+	if got := runner.count("pm list packages"); got != 0 {
+		t.Fatalf("a fresh entry was looked up again (%d lookups)", got)
 	}
 
 	now = now.Add(TTL + time.Hour)
 	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
 	s.waitIdle()
-	if got := runner.count("pm path"); got != 1 {
-		t.Fatalf("a stale entry was not refetched (%d pm path calls)", got)
+	if got := runner.count("pm list packages"); got != 1 {
+		t.Fatalf("a stale entry was not refetched (%d lookups)", got)
 	}
 }
 
@@ -228,8 +268,8 @@ func TestStoreRefreshBypassesTTL(t *testing.T) {
 	s.Refresh("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
 	s.waitIdle()
 
-	if got := runner.count("pm path"); got != 1 {
-		t.Fatalf("refresh skipped the read (%d pm path calls)", got)
+	if got := runner.count("pm list packages"); got != 1 {
+		t.Fatalf("refresh skipped the read (%d lookups)", got)
 	}
 	meta, ok := s.Lookup("dev", "com.foo")
 	if !ok || meta.Label != "新名字" {
@@ -272,7 +312,7 @@ func TestStoreIgnoresDuplicateRequests(t *testing.T) {
 	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo", "com.foo"})
 	s.waitIdle()
 
-	if got := runner.count("pm path"); got != 1 {
+	if got := runner.count("pm list packages"); got != 1 {
 		t.Fatalf("the same package was queued %d times", got)
 	}
 }
@@ -281,15 +321,15 @@ func TestStoreRetriesAFailedFetchAfterTheBackoff(t *testing.T) {
 	now := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
 	// A dropped channel: the command itself fails, which is worth retrying.
 	runner := apkRunner(buildTestAPK(t, "微信", "", nil), "4096 1700000000")
-	runner.failOn = "pm path"
+	runner.failOn = "pm "
 	runner.failErr = core.Error("adb: device offline")
 	s := newTestStore(t, runner)
 	s.now = func() time.Time { return now }
 
 	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
 	s.waitIdle()
-	if got := runner.count("pm path"); got != 1 {
-		t.Fatalf("first attempt ran %d pm path calls", got)
+	if got := runner.count("pm list packages"); got != 1 {
+		t.Fatalf("first attempt ran %d package lookups", got)
 	}
 	status, ok := s.Status("dev", "com.foo")
 	if !ok || status.State != core.AppMetaFailed || status.Final {
@@ -298,8 +338,8 @@ func TestStoreRetriesAFailedFetchAfterTheBackoff(t *testing.T) {
 
 	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
 	s.waitIdle()
-	if got := runner.count("pm path"); got != 1 {
-		t.Fatalf("a failed package was retried immediately (%d calls)", got)
+	if got := runner.count("pm list packages"); got != 1 {
+		t.Fatalf("a failed package was retried immediately (%d lookups)", got)
 	}
 
 	now = now.Add(11 * time.Minute)
@@ -308,8 +348,8 @@ func TestStoreRetriesAFailedFetchAfterTheBackoff(t *testing.T) {
 	runner.mu.Unlock()
 	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
 	s.waitIdle()
-	if got := runner.count("pm path"); got != 2 {
-		t.Fatalf("the backoff never expired (%d calls)", got)
+	if got := runner.count("pm list packages"); got != 2 {
+		t.Fatalf("the backoff never expired (%d lookups)", got)
 	}
 }
 
@@ -397,8 +437,8 @@ func TestStoreReadsEntriesThroughExecOut(t *testing.T) {
 }
 
 func TestStoreReportsNoAppPackageAsFinalFailure(t *testing.T) {
-	// The device answers `pm path` with exit 1 and no `package:` line, exactly
-	// as it does for a system service that is not an installed application.
+	// The device lists no package by that name, exactly as it does for a system
+	// service that is not an installed application.
 	runner := &fakeFileRunner{}
 	s := newTestStore(t, runner)
 
@@ -418,7 +458,7 @@ func TestStoreReportsPendingWhileReading(t *testing.T) {
 	apk := buildTestAPK(t, "微信", "", nil)
 	runner := apkRunner(apk, "4096 1700000000")
 	runner.entries = zipEntries(t, apk)
-	runner.holdOn = "pm path com.foo"
+	runner.holdOn = "-f com.foo"
 	runner.gate = make(chan struct{})
 	runner.held = make(chan struct{})
 	s := newTestStore(t, runner)
@@ -441,23 +481,23 @@ func TestStoreSkipsPackagesKnownToHaveNoAppPackage(t *testing.T) {
 
 	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"system_server"})
 	s.waitIdle()
-	if got := runner.count("pm path"); got != 1 {
-		t.Fatalf("first attempt ran %d pm path calls", got)
+	if got := runner.count("pm list packages"); got != 1 {
+		t.Fatalf("first attempt ran %d package lookups", got)
 	}
 
 	// The batch path queues it again; the store already settled the answer, so
 	// it must not spend another round trip on it.
 	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"system_server"})
 	s.waitIdle()
-	if got := runner.count("pm path"); got != 1 {
-		t.Fatalf("a settled package was asked again (%d pm path calls)", got)
+	if got := runner.count("pm list packages"); got != 1 {
+		t.Fatalf("a settled package was asked again (%d lookups)", got)
 	}
 
 	// A row's retry is the user insisting, so it may ask once more.
 	s.Refresh("dev", "/usr/bin/adb", "emulator-5554", []string{"system_server"})
 	s.waitIdle()
-	if got := runner.count("pm path"); got != 2 {
-		t.Fatalf("an explicit retry did not ask again (%d pm path calls)", got)
+	if got := runner.count("pm list packages"); got != 2 {
+		t.Fatalf("an explicit retry did not ask again (%d lookups)", got)
 	}
 }
 
@@ -484,7 +524,7 @@ func TestStoreServesRowRequestsBeforeTheBatch(t *testing.T) {
 	apk := buildTestAPK(t, "微信", "", nil)
 	runner := apkRunner(apk, "4096 1700000000")
 	runner.entries = zipEntries(t, apk)
-	runner.holdOn = "pm path ba"
+	runner.holdOn = "-f ba"
 	runner.gate = make(chan struct{})
 	runner.held = make(chan struct{})
 	s := newTestStore(t, runner)
@@ -500,10 +540,10 @@ func TestStoreServesRowRequestsBeforeTheBatch(t *testing.T) {
 	calls := runner.callsSnapshot()
 	row, next := -1, -1
 	for i, call := range calls {
-		if row < 0 && strings.Contains(call, "pm path row") {
+		if row < 0 && strings.Contains(call, "-f row") {
 			row = i
 		}
-		if next < 0 && strings.Contains(call, "pm path bb") {
+		if next < 0 && strings.Contains(call, "-f bb") {
 			next = i
 		}
 	}
@@ -518,7 +558,7 @@ func TestStoreServesRowRequestsBeforeTheBatch(t *testing.T) {
 func TestStoreMarksAFailedStateWhenTheWorkerPanics(t *testing.T) {
 	apk := buildTestAPK(t, "微信", "", nil)
 	runner := apkRunner(apk, "4096 1700000000")
-	runner.panicOn = "pm path"
+	runner.panicOn = "pm "
 	s := newTestStore(t, runner)
 
 	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
@@ -534,5 +574,81 @@ func TestStoreMarksAFailedStateWhenTheWorkerPanics(t *testing.T) {
 	s.waitIdle()
 	if status, ok := s.Status("dev", "com.foo"); !ok || status.State != core.AppMetaReady {
 		t.Fatalf("status = %+v, ok=%v; the worker died with the panic", status, ok)
+	}
+}
+
+func TestStoreFindsAPKInstalledForAnotherUser(t *testing.T) {
+	// A second profile on the same device (UserInfo{10}) holds the real package;
+	// `pm path` only looks at the shell's own user and would answer "no such
+	// package", which used to brand the row 无应用包 forever.
+	const foreign = "/data/app/~~F0KymzeUbSpBIVA87NUA8A==/com.niexiawei.lynkcam-kVJdntiU9K70_ehCNfo_EQ==/base.apk"
+	const sibling = "/data/app/~~nuOYdzNu6caWcqSWQQQv3A==/com.niexiawei.lynkcam.test-_c-MIv5XW0kFJxh970lHxw==/base.apk"
+	apk := buildTestAPK(t, "LynkCam", "res/mipmap-xxhdpi/ic.png", testPNG)
+	runner := apkRunner(apk, "4096 1700000000")
+	runner.packages = map[string]string{
+		"com.niexiawei.lynkcam":      foreign,
+		"com.niexiawei.lynkcam.test": sibling,
+	}
+	runner.entries = zipEntries(t, apk)
+	s := newTestStore(t, runner)
+
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.niexiawei.lynkcam"})
+	s.waitIdle()
+
+	if meta, ok := s.Lookup("dev", "com.niexiawei.lynkcam"); !ok || meta.Label != "LynkCam" {
+		t.Fatalf("meta = %+v, ok=%v; the package of another user was not read", meta, ok)
+	}
+	calls := runner.callsSnapshot()
+	if !containsSubstring(calls, "--user all") {
+		t.Fatalf("the lookup did not span every user: %v", calls)
+	}
+	// The filter matches substrings, so the sibling package comes back too; the
+	// read must use the exact one.
+	if containsSubstring(calls, sibling) {
+		t.Fatalf("the store read the sibling package instead: %v", calls)
+	}
+	if !containsSubstring(calls, foreign) {
+		t.Fatalf("the store never touched the real package: %v", calls)
+	}
+}
+
+func TestStoreIgnoresASimilarPackageName(t *testing.T) {
+	// Only the .test package is installed: the group name has no APK of its own,
+	// so the row must say so instead of borrowing the sibling's name.
+	runner := &fakeFileRunner{packages: map[string]string{
+		"com.niexiawei.lynkcam.test": "/data/app/com.niexiawei.lynkcam.test/base.apk",
+	}}
+	runner.apkSize = "4096 1700000000"
+	runner.payload = buildTestAPK(t, "LynkCam test", "", nil)
+	s := newTestStore(t, runner)
+
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.niexiawei.lynkcam"})
+	s.waitIdle()
+
+	status, ok := s.Status("dev", "com.niexiawei.lynkcam")
+	if !ok || status.State != core.AppMetaFailed || !status.Final || status.Reason != core.ReasonNoAppPackage {
+		t.Fatalf("status = %+v, ok=%v; want a final \"no package by that name\"", status, ok)
+	}
+	if got := runner.count("exec-out cat"); got != 0 {
+		t.Fatalf("pulled the sibling package %d times", got)
+	}
+}
+
+func TestStoreFallsBackToPMPathWhenTheListingFails(t *testing.T) {
+	// A device whose `pm list packages --user all` is unsupported still gets its
+	// names: the old, narrower command is the fallback rather than the only path.
+	apk := buildTestAPK(t, "微信", "", nil)
+	runner := apkRunner(apk, "4096 1700000000")
+	runner.failOn = "pm list packages"
+	s := newTestStore(t, runner)
+
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
+	s.waitIdle()
+
+	if meta, ok := s.Lookup("dev", "com.foo"); !ok || meta.Label != "微信" {
+		t.Fatalf("meta = %+v, ok=%v; the fallback lookup did not run", meta, ok)
+	}
+	if got := runner.count("pm path"); got != 1 {
+		t.Fatalf("pm path fallback calls = %d, want 1", got)
 	}
 }

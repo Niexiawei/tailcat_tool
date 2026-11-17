@@ -270,10 +270,56 @@ func (s *Store) fetch(queued job) (bool, fetchFailure) {
 	return true, fetchFailure{}
 }
 
-// apkPath asks the device where a package's base APK lives. An answer with no
-// `package:` line is final: this process is not an installed application, and
-// only installing one or rebuilding the channel can change that.
+// apkPath asks the device where a package's base APK lives.
+//
+// The listing spans every user on the device, and that is the whole point: the
+// resource page reads /proc, so it sees the processes of every profile, while
+// `pm path` only answers for the shell's own user. An application installed only
+// for a second profile therefore looked like a process with no APK at all.
+// `pm path` stays as the fallback for a device whose `pm list packages --user
+// all` is unsupported.
 func (s *Store) apkPath(queued job) (string, fetchFailure) {
+	if path, failure, answered := s.apkPathFromListing(queued); answered {
+		return path, failure
+	}
+	return s.apkPathFromCommand(queued)
+}
+
+// apkPathFromListing asks every user's packages in one round trip. The filter
+// matches substrings, so "com.foo" also returns "com.foobar": only the exact
+// name counts. answered is false when the command itself failed, which is the
+// only reason to try the older lookup.
+func (s *Store) apkPathFromListing(queued job) (path string, failure fetchFailure, answered bool) {
+	res, err := s.runner.Run(context.Background(), core.Command{
+		Path:    queued.adb,
+		Args:    []string{"-s", queued.serial, "shell", "pm list packages --user all -f " + queued.pkg},
+		Timeout: adbMetaTimeout,
+	}, nil)
+	if err != nil || res.TimedOut || res.ExitCode != 0 {
+		return "", fetchFailure{}, false
+	}
+	for _, raw := range strings.Split(strings.ReplaceAll(res.Output, "\r", ""), "\n") {
+		line := strings.TrimSpace(raw)
+		line, ok := strings.CutPrefix(line, "package:")
+		if !ok {
+			continue
+		}
+		found, ok := strings.CutSuffix(line, "="+queued.pkg)
+		if !ok {
+			continue
+		}
+		if found = strings.TrimSpace(found); found != "" {
+			return found, fetchFailure{}, true
+		}
+	}
+	// The device answered and names no such package: this process is not an
+	// installed application, and only installing one can change that.
+	return "", fetchFailure{reason: core.ReasonNoAppPackage, final: true}, true
+}
+
+// apkPathFromCommand is the older, narrower lookup: `pm path`, which only sees
+// the shell's own user.
+func (s *Store) apkPathFromCommand(queued job) (string, fetchFailure) {
 	res, err := s.runner.Run(context.Background(), core.Command{
 		Path:    queued.adb,
 		Args:    []string{"-s", queued.serial, "shell", "pm path " + queued.pkg},

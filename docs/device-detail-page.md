@@ -92,6 +92,8 @@ done
 | `dumpsys SurfaceFlinger \| grep -m1 '^GLES:'` | 真机 | 0.2 s / 一行 |
 | `unzip -p <apk> AndroidManifest.xml resources.arsc` | 模拟器 | 0.13 s / 127 KB |
 | `adb exec-out cat <apk>`（整包） | — | 视应用 5–100 MB |
+| `pm list packages --user all -f <包名>` | 模拟器 | 98 ms / 一行 |
+| `pm path <包名>` | 模拟器 | 112 ms |
 
 **这张表有一个陷阱，2026-11-17 才查清**：`unzip -p` 那行的 0.13 s 只量了传输，没量解析。
 同一条命令走 `adb shell` 拿回来的字节是被 PTY 改过的（见 §3.2），解析必然失败，
@@ -195,11 +197,22 @@ GPU 型号来自 `dumpsys SurfaceFlinger` 的 `GLES: <厂商>, <renderer>, <版�
 
 | 级别 | 命令 | 何时使用 |
 |---|---|---|
+| 0. 找 APK | `pm list packages --user all -f <包名>`，按 `包名` 精确匹配 | 每次读取 |
 | 1. 只取条目 | `adb exec-out unzip -p <apk> AndroidManifest.xml` / `resources.arsc` / `<icon 路径>` | 设备有 `unzip`（绝大多数 Android 都有） |
 | 2. 整包回退 | `adb exec-out cat <apk>` → 临时文件 → `apkparser.ParseApk`，**只在该包 ≤ 64 MB 时** | 没有 `unzip`，或条目读不出来 |
 | 3. 失败即说明原因 | `Pending` / `Ready` / `Failed{原因, Final}` 三种终态 | 包不存在、APK 过大、通道掉了、APK 损坏 |
 
-**为什么必须是 `exec-out`（这一条是踩出来的，别再改回 `shell`）：**
+**为什么找 APK 要看所有用户（这一条也是踩出来的）：** 采样脚本读的是整台设备的
+`/proc`，因此能看到**所有用户**（多账户 / 工作资料 / 车载的「司机 / Driver」）的进程；
+而 `pm path <包名>` 只按 **shell 自己的用户**（通常是 user 0）回答。应用装在第二个用户下时，
+`pm path` 直接报「没有这个包」，于是界面对一个真实存在的应用写「无应用包」——而且因为它是
+终态（`Final`），还会一直写下去。实测该模拟器的 `com.niexiawei.lynkcam` 只装在 `UserInfo{10:Driver}`，
+user 0 只有它的 `androidTest` 包 `com.niexiawei.lynkcam.test`。
+`pm list packages --user all -f <包名>` 一次往返列出所有用户，耗时与 `pm path` 相当（98 ms vs 112 ms）；
+它的过滤是**子串**匹配，所以 Go 侧必须按 `包名` 精确比对（`com.foo` 也会返回 `com.foobar`）。
+`pm path` 保留为回退：某些设备的 `pm list packages --user all` 不受支持。
+
+**为什么条目必须走 `exec-out`（这一条是踩出来的，别再改回 `shell`）：**
 `adb shell` 会给远端命令分配一个 PTY，tty 的 `onlcr` 把每个 `LF` 翻成 `CRLF`。
 2026-11-17 在 Android 11 车载模拟器上实测 `com.google.android.gms` 的清单：
 
@@ -239,8 +252,10 @@ APK 都解析失败，第 1 级一直是一段死代码，每次「解析应用�
 | `AppMetaFailed{Reason, Final}` | 读失败，`Reason` 是用户能读的中文原因 | 「无应用包」/「读取失败」+ Tooltip 全文；`Final` 时不给重试按钮 |
 
 `Final` = **重试无用**：设备上没有这个应用的应用包（`system_server`、`surfaceflinger`、
-`android.hardware.*.service` 之类）。这类行在真机上占多数，实测 **102 / 121 个分组**
-（同一台模拟器），所以它们必须是终态而不是「10 分钟后再试一次」。
+`android.hardware.*.service` 之类）。这类行占多数，实测 **96 / 120 个分组**
+（同一台模拟器）。早先数是「102 / 121」，多出来的那些是用只查 user 0 的 `pm path` 误判的
+跨用户应用（见 §3.2），所以这个数字本身也是一个教训：**统计口径错了，结论就会错。**
+这类行必须是终态而不是「10 分钟后再试一次」。
 设备断开时 `Manager.Disconnect` 调 `Forget(deviceKey)`：重连后新装的应用应当重新有机会被解析。
 
 worker 用 `defer` + `recover` 保证**一定**写终态：一次 panic 只丢掉这一个包的名字，
@@ -248,7 +263,8 @@ worker 用 `defer` + `recover` 保证**一定**写终态：一次 panic 只丢�
 
 批量刷新（工具栏按钮）按下时记下这批包与起点时刻，每包进入 `Ready`/`Failed` 且时间在起点
 之后才计入「正在读取应用信息 x/n」，全部落地就结束；90 秒只是防「某次读取彻底没回来」的兜底。
-批量刷新会跳过已知 `Final` 的包，因为它们的问题是读不出而不是读得慢。
+批量刷新会跳过已知 `Final` 的包，因为它们的问题是读不出而不是读得慢；要让这类行重新确认，
+重新连接设备（`Forget`）即可，不必一个个点。
 
 行内的单包请求走 `Store` 的 **urgent 队列**，批量的走普通队列，worker 优先取 urgent：
 用户点的那一行不会排在 121 个包的批量刷新后面。

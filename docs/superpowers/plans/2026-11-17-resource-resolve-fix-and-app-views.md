@@ -36,6 +36,12 @@
 | 7 | 同样两个条目改走 `exec-out` | **1.31 s**，`label="Google Play services"` |
 | 8 | `com.android.car.carlauncher` 前后对比 | 2.63 s → **0.29 s**，图标 312 B 也拿到了 |
 
+**后续更正（2026-11-17，同一设备）：** 第 2 行的 102 / 121 是用只查 user 0 的 `pm path` 量出来的，
+把「装在第二个用户（`UserInfo{10:Driver}`）下的应用」也算成了没有应用包。改用
+`pm list packages --user all` 后是 **96 / 120**。计数口径错了，结论就跟着错——所以第 2 行的
+「永远拿不到名字」只对真正的系统进程成立，对跨用户安装的应用不成立（那是一个独立的缺陷，
+已单独修复，见 `internal/appmeta/store.go` 的 `apkPathFromListing`）。
+
 ### 0.3 根因
 
 **根因 A（让「能解析的应用」也解析不出来）：`adb shell` 有 PTY，把二进制条目里的 LF 全换成 CRLF。**
