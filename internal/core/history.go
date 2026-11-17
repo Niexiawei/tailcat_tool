@@ -118,6 +118,7 @@ type HistoryReader interface {
 type Recorder interface {
 	RecordTask(TaskRecord) error
 	RecordLog(LogRecord) error
+	RecordAppLog(AppLogRecord) error
 	RecordReachability([]ReachabilityRecord) error
 	// RecentTasks returns the newest tasks, oldest first, for the task panel
 	// after a restart.

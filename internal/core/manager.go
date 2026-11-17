@@ -44,6 +44,7 @@ type Manager struct {
 	// logs carries channel log records to the recorder off the manager lock,
 	// so a slow history store can never freeze the window.
 	logs         chan LogRecord
+	appLogs      chan AppLogRecord
 	sessions     map[uuid.UUID]Session
 	tasks        []Task
 	relayPresets []RelayPreset
@@ -133,6 +134,7 @@ func NewManager(opts ManagerOptions) *Manager {
 	m := &Manager{
 		changed:             make(chan struct{}, 1),
 		logs:                make(chan LogRecord, 256),
+		appLogs:             make(chan AppLogRecord, 256),
 		config:              opts.Config,
 		credentials:         opts.Credentials,
 		identities:          opts.Identities,
@@ -200,6 +202,8 @@ func (m *Manager) writeLogs() {
 			return
 		case record := <-m.logs:
 			_ = m.recorder.RecordLog(record)
+		case record := <-m.appLogs:
+			_ = m.recorder.RecordAppLog(record)
 		}
 	}
 }
@@ -954,4 +958,27 @@ func (m *Manager) validateTargetLocked(ctx context.Context, id uuid.UUID, serial
 		return Error("该设备的 ADB 尚未进入 device 状态")
 	}
 	return nil
+}
+
+// RecordAppLog queues one line the app itself produced: a failed action, a
+// startup problem. It is safe to call from the UI thread — a full queue drops
+// the line and returns, because a log is best effort and a frame is not.
+func (m *Manager) RecordAppLog(record AppLogRecord) {
+	if m.recorder == nil {
+		return
+	}
+	record.Text = strings.TrimSpace(Redact(record.Text, ""))
+	if record.Text == "" {
+		return
+	}
+	if record.Level == "" {
+		record.Level = LogInfo
+	}
+	if record.At.IsZero() {
+		record.At = time.Now()
+	}
+	select {
+	case m.appLogs <- record:
+	default:
+	}
 }

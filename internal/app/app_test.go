@@ -731,3 +731,124 @@ func TestSavedToolSettingsIsAToastNotInlineText(t *testing.T) {
 		t.Fatalf("the message did not expire, so it is not a toast; texts = %v", tt.Texts())
 	}
 }
+
+// fakeAppRecorder keeps the lines the app itself recorded, the way main()
+// hands them to the history store.
+type fakeAppRecorder struct {
+	mu    sync.Mutex
+	lines []core.AppLogRecord
+}
+
+func (r *fakeAppRecorder) record(record core.AppLogRecord) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lines = append(r.lines, record)
+}
+
+func (r *fakeAppRecorder) recorded() []core.AppLogRecord {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]core.AppLogRecord(nil), r.lines...)
+}
+
+// newRecorderApp builds the app with a recorder and no window.
+func newRecorderApp(t *testing.T, notice string) (*App, *fakeAppRecorder) {
+	t.Helper()
+	m, _ := newTestManager(t)
+	t.Cleanup(func() { m.Shutdown(context.Background()) })
+	recorder := &fakeAppRecorder{}
+	app := New(Environment{
+		Manager:      m,
+		Locate:       func(string) (string, bool) { return "", false },
+		Notice:       notice,
+		RecordAppLog: recorder.record,
+	})
+	return app, recorder
+}
+
+func TestFailTextRecordsAnErrorLine(t *testing.T) {
+	app, recorder := newRecorderApp(t, "")
+	app.vm.FailText("上传失败：没有权限")
+	lines := recorder.recorded()
+	if len(lines) != 1 {
+		t.Fatalf("recorded %d lines, want 1: %+v", len(lines), lines)
+	}
+	if lines[0].Level != core.LogError || lines[0].Text != "上传失败：没有权限" {
+		t.Fatalf("recorded %+v, want an error with the toast text", lines[0])
+	}
+	if lines[0].At.IsZero() {
+		t.Fatalf("recorded %+v, want a timestamp", lines[0])
+	}
+}
+
+func TestStartupProblemIsRecordedAsAWarning(t *testing.T) {
+	const notice = "历史库无法打开，本次运行的历史不会保存"
+	_, recorder := newRecorderApp(t, notice)
+	lines := recorder.recorded()
+	if len(lines) != 1 {
+		t.Fatalf("recorded %d lines, want 1: %+v", len(lines), lines)
+	}
+	if lines[0].Level != core.LogWarn || lines[0].Text != notice {
+		t.Fatalf("recorded %+v, want a warning with the startup notice", lines[0])
+	}
+}
+
+func TestSuccessToastIsNotRecorded(t *testing.T) {
+	app, recorder := newRecorderApp(t, "")
+	app.vm.Notify("已复制 ADB 入口")
+	if lines := recorder.recorded(); len(lines) != 0 {
+		t.Fatalf("a success toast was recorded: %+v", lines)
+	}
+}
+
+func TestAppLogTextIsRedacted(t *testing.T) {
+	app, recorder := newRecorderApp(t, "")
+	app.vm.FailText("连接 " + testAddress + " 失败")
+	lines := recorder.recorded()
+	if len(lines) != 1 {
+		t.Fatalf("recorded %d lines, want 1: %+v", len(lines), lines)
+	}
+	if strings.Contains(lines[0].Text, testAddress) {
+		t.Fatalf("the address reached the log: %q", lines[0].Text)
+	}
+	if !strings.Contains(lines[0].Text, core.MsgRedacted) {
+		t.Fatalf("recorded %q, want the redaction marker", lines[0].Text)
+	}
+}
+
+func TestDemoEnvironmentHasLogRows(t *testing.T) {
+	env := NewDemoEnvironment()
+	if env.History == nil {
+		t.Fatal("the demo has no history reader, so its log page would be empty")
+	}
+	entries, err := env.History.Timeline(core.LogQuery{})
+	if err != nil {
+		t.Fatalf("Timeline() error: %v", err)
+	}
+	var levels = map[core.LogLevel]bool{}
+	var sources = map[core.LogSource]bool{}
+	for _, entry := range entries {
+		levels[entry.Level] = true
+		sources[entry.Source] = true
+	}
+	if !levels[core.LogError] || !levels[core.LogWarn] || !sources[core.LogChannel] {
+		t.Fatalf("demo rows = %+v, want an error, a warning and a channel line", entries)
+	}
+	// The demo's own recordings land in the same store, so a demo error typed
+	// by a visitor shows up on the page.
+	if env.RecordAppLog == nil {
+		t.Fatal("the demo cannot record app lines")
+	}
+	env.RecordAppLog(core.AppLogRecord{Level: core.LogError, Text: "演示错误"})
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		entries, err := env.History.Timeline(core.LogQuery{Search: "演示错误"})
+		if err == nil && len(entries) == 1 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the demo recorded line never appeared: %v, %v", entries, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}

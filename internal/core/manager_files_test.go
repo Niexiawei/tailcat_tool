@@ -19,6 +19,7 @@ type countingRecorder struct {
 	mu    sync.Mutex
 	tasks []TaskRecord
 	logs  []LogRecord
+	apps  []AppLogRecord
 }
 
 func (r *countingRecorder) RecordTask(t TaskRecord) error {
@@ -32,6 +33,13 @@ func (r *countingRecorder) RecordLog(l LogRecord) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.logs = append(r.logs, l)
+	return nil
+}
+
+func (r *countingRecorder) RecordAppLog(a AppLogRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.apps = append(r.apps, a)
 	return nil
 }
 

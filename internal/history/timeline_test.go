@@ -374,3 +374,42 @@ func TestTaskOutputReturnsTheWholeOutput(t *testing.T) {
 		t.Fatalf("output = %q", output)
 	}
 }
+
+func TestStoredLogTextIsRedacted(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	address := "tc" + strings.Repeat("A", 30)
+	if err := store.RecordAppLog(core.AppLogRecord{
+		At: time.Now(), Level: core.LogError, Text: "连接 " + address + " 失败",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordLog(core.LogRecord{
+		DeviceID: uuid.New(), At: time.Now(), Text: "通道 " + address + " 就绪",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// Both halves: what the page would show, and what is on disk. The second
+	// one is the one that matters after a restart.
+	if got := countRows(t, store, `SELECT COUNT(*) FROM logs WHERE text LIKE ?`, "%"+address+"%"); got != 0 {
+		t.Fatalf("%d rows kept the address on disk", got)
+	}
+	entries, err := store.Timeline(core.LogQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Text, address) {
+			t.Fatalf("the timeline shows the address: %q", entry.Text)
+		}
+		if !strings.Contains(entry.Text, core.MsgRedacted) {
+			t.Fatalf("text = %q, want the redaction marker", entry.Text)
+		}
+	}
+}

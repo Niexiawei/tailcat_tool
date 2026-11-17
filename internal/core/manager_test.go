@@ -557,11 +557,23 @@ func TestFailedConnectClearsDeviceInformation(t *testing.T) {
 // a busy SQLite writer.
 type blockingRecorder struct {
 	block chan struct{}
+	// appStarted is closed once the writer has taken the first app line, so a
+	// test knows the writer is stalled inside the recorder.
+	appStarted chan struct{}
+	appOnce    sync.Once
 }
 
 func (b *blockingRecorder) RecordTask(TaskRecord) error { return nil }
 
 func (b *blockingRecorder) RecordLog(LogRecord) error {
+	<-b.block
+	return nil
+}
+
+func (b *blockingRecorder) RecordAppLog(AppLogRecord) error {
+	if b.appStarted != nil {
+		b.appOnce.Do(func() { close(b.appStarted) })
+	}
 	<-b.block
 	return nil
 }
@@ -600,5 +612,58 @@ func TestSlowRecorderNeverBlocksTheManager(t *testing.T) {
 	case <-read:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the manager lock was held by the history store")
+	}
+}
+
+func TestAppLogsReachTheRecorderRedacted(t *testing.T) {
+	recorder := &countingRecorder{}
+	f := newManagerFixture(t, func(o *ManagerOptions) { o.Recorder = recorder })
+	f.m.RecordAppLog(AppLogRecord{Level: LogError, Text: "连接 " + sampleAddress + " 失败"})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		recorder.mu.Lock()
+		lines := append([]AppLogRecord(nil), recorder.apps...)
+		recorder.mu.Unlock()
+		if len(lines) > 0 {
+			if strings.Contains(lines[0].Text, sampleAddress) {
+				t.Fatalf("the address reached the recorder: %q", lines[0].Text)
+			}
+			if !strings.Contains(lines[0].Text, MsgRedacted) {
+				t.Fatalf("recorded text = %q, want the redaction marker", lines[0].Text)
+			}
+			if lines[0].Level != LogError || lines[0].At.IsZero() {
+				t.Fatalf("recorded line = %+v, want an error with a time", lines[0])
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the app line never reached the recorder")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func TestAppLogDoesNotBlockWhenTheQueueIsFull(t *testing.T) {
+	block := make(chan struct{})
+	recorder := &blockingRecorder{block: block, appStarted: make(chan struct{})}
+	f := newManagerFixture(t, func(o *ManagerOptions) { o.Recorder = recorder })
+	defer close(block)
+
+	// The first line stalls the writer inside the recorder; everything after
+	// it meets a queue that never drains.
+	f.m.RecordAppLog(AppLogRecord{Level: LogError, Text: "第一条"})
+	select {
+	case <-recorder.appStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the writer never took the first app line")
+	}
+
+	start := time.Now()
+	for i := 0; i < 500; i++ {
+		f.m.RecordAppLog(AppLogRecord{Level: LogError, Text: "洪泛"})
+	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("recording 500 lines took %v; a full queue must be dropped, not waited on", elapsed)
 	}
 }

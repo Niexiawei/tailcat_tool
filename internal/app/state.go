@@ -39,6 +39,13 @@ type ViewModel struct {
 	Install  func(core.ToolComponent)
 	Activate func(deviceID string)
 
+	// History answers the log page's queries; nil keeps the page empty rather
+	// than letting it touch SQL itself.
+	History core.HistoryReader
+	// RecordAppLog stores a line the app itself produced. The manager hands it
+	// to history without blocking; nil makes it a no-op.
+	RecordAppLog func(core.AppLogRecord)
+
 	// Router owns the content pages; the sidebar and the breadcrumbs
 	// navigate it, so Back returns to the page before.
 	Router *ui.Router
@@ -117,8 +124,20 @@ func (vm *ViewModel) Fail(err error) {
 	vm.FailText(err.Error())
 }
 
-// FailText reports a message as an error-level toast.
+// FailText reports a message as an error-level toast, and keeps a redacted
+// copy in the log: a failed action is exactly what a user comes to the log page
+// looking for.
 func (vm *ViewModel) FailText(text string) {
+	if text == "" {
+		return
+	}
+	vm.recordAppLog(core.LogError, text)
+	vm.queueErrorToast(text)
+}
+
+// queueErrorToast reports a message as an error-level toast without logging it,
+// for a message the caller already recorded at its own level.
+func (vm *ViewModel) queueErrorToast(text string) {
 	if text == "" {
 		return
 	}
@@ -128,6 +147,17 @@ func (vm *ViewModel) FailText(text string) {
 		Description: text,
 		Timeout:     8 * time.Second,
 	})
+}
+
+// recordAppLog keeps one line for the log page. Success toasts are deliberately
+// not recorded: "已复制" would bury the errors the page exists for.
+func (vm *ViewModel) recordAppLog(level core.LogLevel, text string) {
+	if vm.RecordAppLog == nil {
+		return
+	}
+	// The address is the one thing that must never reach the log file; the
+	// manager redacts again, so one missed caller is not a leak.
+	vm.RecordAppLog(core.AppLogRecord{At: time.Now(), Level: level, Text: core.Redact(text, "")})
 }
 
 // Notify reports a completed action as a success toast.

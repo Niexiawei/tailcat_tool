@@ -19,6 +19,11 @@ type Environment struct {
 	Notice     string
 	Demo       bool
 	OnShutdown func()
+
+	// History is where the log page reads from.
+	History core.HistoryReader
+	// RecordAppLog stores the app's own errors and warnings.
+	RecordAppLog func(core.AppLogRecord)
 }
 
 // App is the running window: a view model, its shell and the tray.
@@ -33,10 +38,16 @@ type App struct {
 // New builds the app from the environment.
 func New(env Environment) *App {
 	vm := NewViewModel(env.Manager, env.Locate)
+	vm.Demo = env.Demo
+	vm.History = env.History
+	vm.RecordAppLog = env.RecordAppLog
 	// Startup problems (a configuration or history store that would not open)
 	// surface as an error toast instead of a banner that only some page shows.
-	vm.FailText(env.Notice)
-	vm.Demo = env.Demo
+	// They are logged as warnings: the app runs, just without that piece.
+	if env.Notice != "" {
+		vm.recordAppLog(core.LogWarn, env.Notice)
+		vm.queueErrorToast(env.Notice)
+	}
 	return &App{env: env, vm: vm}
 }
 
@@ -57,6 +68,7 @@ func (a *App) Start(trayIcon []byte) {
 		go a.keepTrayFresh()
 	} else {
 		log.Printf("tray icon unavailable: %v", err)
+		a.vm.recordAppLog(core.LogWarn, "托盘图标不可用："+err.Error())
 	}
 	a.vm.Install = a.installComponent
 	a.vm.Activate = func(id string) { go a.connectByID(id) }

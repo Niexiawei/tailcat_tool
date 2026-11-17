@@ -214,10 +214,12 @@ ON CONFLICT(id) DO UPDATE SET ended_at=excluded.ended_at, state=excluded.state, 
 // the device's first task is still labelled.
 func (s *Store) RecordLog(record core.LogRecord) error {
 	return s.submit(func(db *sql.DB) error {
+		// Redact here as well as in the manager: this is the last wall before
+		// the file, and one caller that forgets is a credential on disk.
 		_, err := db.Exec(`INSERT INTO logs (at, level, source, device_id, device_name, text)
 VALUES (?,?,?,?,?,?)`,
 			record.At.UnixMilli(), string(core.LogInfo), string(core.LogChannel),
-			record.DeviceID.String(), "", record.Text)
+			record.DeviceID.String(), "", core.Redact(record.Text, ""))
 		if err == nil {
 			s.afterLogWrite(db)
 		}
@@ -234,7 +236,7 @@ func (s *Store) RecordAppLog(record core.AppLogRecord) error {
 	return s.submit(func(db *sql.DB) error {
 		_, err := db.Exec(`INSERT INTO logs (at, level, source, device_id, device_name, text)
 VALUES (?,?,?,?,?,?)`,
-			record.At.UnixMilli(), string(level), string(core.LogApp), "", "", record.Text)
+			record.At.UnixMilli(), string(level), string(core.LogApp), "", "", core.Redact(record.Text, ""))
 		if err == nil {
 			s.afterLogWrite(db)
 		}

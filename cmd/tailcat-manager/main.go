@@ -89,6 +89,7 @@ func buildEnvironment() app.Environment {
 	// The history file needs its directory to exist before SQLite opens it.
 	_ = os.MkdirAll(configDir, 0o700)
 	var recorder core.Recorder
+	var logs core.HistoryReader
 	historyPath := filepath.Join(configDir, "history.db")
 	if store, err := history.Open(historyPath); err != nil {
 		if notice == "" {
@@ -96,6 +97,7 @@ func buildEnvironment() app.Environment {
 		}
 	} else {
 		recorder = store
+		logs = store
 	}
 
 	runner := core.NewExecRunner()
@@ -130,13 +132,15 @@ func buildEnvironment() app.Environment {
 	}
 
 	return app.Environment{
-		Manager:    manager,
-		Locate:     platform.FindTool,
-		Runner:     runner,
-		ConfigDir:  configDir,
-		Notice:     notice,
-		Install:    newInstaller(runner),
-		OnShutdown: func() { manager.Shutdown(context.Background()) },
+		Manager:      manager,
+		Locate:       platform.FindTool,
+		Runner:       runner,
+		ConfigDir:    configDir,
+		Notice:       notice,
+		Install:      newInstaller(runner),
+		History:      logs,
+		RecordAppLog: manager.RecordAppLog,
+		OnShutdown:   func() { manager.Shutdown(context.Background()) },
 	}
 }
 

@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"os"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
@@ -91,6 +93,9 @@ func NewDemoEnvironment() Environment {
 	// The demo never runs a process, so pointing ADB at this executable keeps
 	// the tool row honest (present) without spawning anything.
 	self, _ := os.Executable()
+	// --demo never opens history.db, but its log page must still have rows:
+	// a screenshot of an empty page proves nothing.
+	demo := newDemoHistory(profiles)
 	manager := core.NewManager(core.ManagerOptions{
 		Configuration: core.Configuration{
 			Profiles: profiles,
@@ -102,8 +107,15 @@ func NewDemoEnvironment() Environment {
 		Forwarder:   &demoOpener{},
 		Locate:      func(string) (string, bool) { return "", false },
 		AppMeta:     demoAppMeta{},
+		Recorder:    demo,
 	})
-	return Environment{Manager: manager, Locate: func(string) (string, bool) { return "", false }, Demo: true}
+	return Environment{
+		Manager:      manager,
+		Locate:       func(string) (string, bool) { return "", false },
+		Demo:         true,
+		History:      demo,
+		RecordAppLog: manager.RecordAppLog,
+	}
 }
 
 func portPtr(v int) *int { return &v }
@@ -198,3 +210,181 @@ com.demo.gallery
 VmRSS:	   102400 kB
 system_server 
 `
+
+// demoHistory is the simulated history: one timeline in memory, no file.
+type demoHistory struct {
+	mu      sync.Mutex
+	entries []core.TimelineEntry
+	outputs map[uuid.UUID]string
+}
+
+// newDemoHistory seeds the timeline the demo page shows: the app's own
+// problems, a channel line and one failed task per device.
+func newDemoHistory(profiles []core.Profile) *demoHistory {
+	base := time.Now().Add(-20 * time.Minute)
+	h := &demoHistory{outputs: map[uuid.UUID]string{}}
+	h.entries = append(h.entries,
+		core.TimelineEntry{
+			At: base.Add(19 * time.Minute), Level: core.LogWarn, Source: core.LogApp,
+			Text: "未检测到系统凭据库，连接地址仅在本次运行中保留",
+		},
+		core.TimelineEntry{
+			At: base.Add(8 * time.Minute), Level: core.LogError, Source: core.LogApp,
+			Text: "上传失败：/sdcard/Download/update.zip 权限不足",
+		},
+	)
+	for i, profile := range profiles {
+		h.entries = append(h.entries, core.TimelineEntry{
+			At: base.Add(time.Duration(10+i) * time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+			DeviceID: profile.ID, DeviceName: profile.Name,
+			Text: "Tailcat 通道已就绪，本地 adb 入口 127.0.0.1:" + itoa(5556+i),
+		})
+		taskID := uuid.New()
+		h.outputs[taskID] = "/sdcard/Download/update.zip: No such file or directory\n"
+		h.entries = append(h.entries, core.TimelineEntry{
+			At: base.Add(time.Duration(5+i) * time.Minute), Level: core.LogInfo, Source: core.LogTask,
+			DeviceID: profile.ID, DeviceName: profile.Name, TaskID: taskID,
+			Text: "adb pull /sdcard/Download/update.zip · 失败",
+		})
+	}
+	sort.SliceStable(h.entries, func(i, j int) bool { return h.entries[i].At.After(h.entries[j].At) })
+	return h
+}
+
+// RecordTask, RecordLog and RecordAppLog keep what the demo produces while it
+// runs, so a visitor's failed action appears on the page like the real thing.
+func (h *demoHistory) RecordTask(record core.TaskRecord) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	entry := core.TimelineEntry{
+		At: record.Started, Level: core.LogInfo, Source: core.LogTask,
+		DeviceID: record.DeviceID, DeviceName: record.DeviceName, TaskID: record.ID,
+		Text: record.Title + " · " + record.State.Label(),
+	}
+	h.outputs[record.ID] = record.Output
+	h.insert(entry)
+	return nil
+}
+
+func (h *demoHistory) RecordLog(record core.LogRecord) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.insert(core.TimelineEntry{
+		At: record.At, Level: core.LogInfo, Source: core.LogChannel,
+		DeviceID: record.DeviceID, Text: record.Text,
+	})
+	return nil
+}
+
+func (h *demoHistory) RecordAppLog(record core.AppLogRecord) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	level := record.Level
+	if level == "" {
+		level = core.LogInfo
+	}
+	h.insert(core.TimelineEntry{At: record.At, Level: level, Source: core.LogApp, Text: record.Text})
+	return nil
+}
+
+func (h *demoHistory) RecordReachability([]core.ReachabilityRecord) error { return nil }
+
+func (h *demoHistory) RecentTasks(int) ([]core.Task, error) { return nil, nil }
+
+func (h *demoHistory) Close() error { return nil }
+
+// insert keeps the newest-first order without a sort on every write.
+func (h *demoHistory) insert(entry core.TimelineEntry) {
+	if entry.DeviceName == "" && entry.DeviceID != uuid.Nil {
+		for _, existing := range h.entries {
+			if existing.DeviceID == entry.DeviceID && existing.DeviceName != "" {
+				entry.DeviceName = existing.DeviceName
+				break
+			}
+		}
+	}
+	at := sort.Search(len(h.entries), func(i int) bool { return h.entries[i].At.Before(entry.At) })
+	h.entries = append(h.entries, core.TimelineEntry{})
+	copy(h.entries[at+1:], h.entries[at:])
+	h.entries[at] = entry
+}
+
+// Timeline applies the same rules as the real store: device, level, since,
+// every search term, then the limit.
+func (h *demoHistory) Timeline(query core.LogQuery) ([]core.TimelineEntry, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	limit := query.Limit
+	if limit <= 0 {
+		limit = core.DefaultLogLimit
+	}
+	terms := strings.Fields(query.Search)
+	var out []core.TimelineEntry
+	for _, entry := range h.entries {
+		switch {
+		case query.DeviceID == nil:
+		case *query.DeviceID == uuid.Nil:
+			if entry.DeviceID != uuid.Nil {
+				continue
+			}
+		default:
+			if entry.DeviceID != *query.DeviceID {
+				continue
+			}
+		}
+		if query.Level != "" && entry.Level != query.Level {
+			continue
+		}
+		if !query.Since.IsZero() && entry.At.Before(query.Since) {
+			continue
+		}
+		if !demoMatchesAll(append([]string{entry.Text}, demoTaskOutput(h, entry.TaskID)), terms) {
+			continue
+		}
+		out = append(out, entry)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func demoTaskOutput(h *demoHistory, id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	return h.outputs[id]
+}
+
+// demoMatchesAll reports whether every term appears in one of the fields.
+func demoMatchesAll(fields []string, terms []string) bool {
+	for _, term := range terms {
+		found := false
+		for _, field := range fields {
+			if strings.Contains(strings.ToLower(field), strings.ToLower(term)) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// TaskOutput returns what the demo's task printed.
+func (h *demoHistory) TaskOutput(id uuid.UUID) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	output, ok := h.outputs[id]
+	if !ok {
+		return "", core.Error(core.MsgTaskOutputMissing)
+	}
+	return output, nil
+}
+
+var (
+	_ core.Recorder      = (*demoHistory)(nil)
+	_ core.HistoryReader = (*demoHistory)(nil)
+)
