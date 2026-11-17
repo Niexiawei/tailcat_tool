@@ -97,6 +97,11 @@ type ViewModel struct {
 	toastsMu sync.Mutex
 	toasts   []ui.Toast
 
+	// PageLogFilter is the log page's filter; nil means it was never opened.
+	PageLogFilter *logFilter
+	// logMu guards what the log queries write from their goroutines.
+	logMu sync.Mutex
+
 	// consoles holds the embedded terminal of each device.
 	consoles map[uuid.UUID]*consoleHost
 	// logStates holds the log page's buffer and scroll position per device.
@@ -221,6 +226,10 @@ func NewViewModel(m *core.Manager, locate core.LocateTool) *ViewModel {
 // DeviceIndexRoute is the page that lists the devices.
 const DeviceIndexRoute = "/devices"
 
+// LogsRoute is the page that merges the app's own lines, every channel and
+// every task into one searchable timeline.
+const LogsRoute = "/logs"
+
 // DeviceRoute is the page of one device.
 func DeviceRoute(id uuid.UUID) string { return DeviceIndexRoute + "/" + id.String() }
 
@@ -235,6 +244,13 @@ func (vm *ViewModel) OpenDevice(id uuid.UUID) {
 	}
 	if target := DeviceRoute(id); vm.Router.Path() != target {
 		vm.Router.Push(target)
+	}
+}
+
+// OpenLogs shows the log page.
+func (vm *ViewModel) OpenLogs() {
+	if vm.Router != nil && vm.Router.Path() != LogsRoute {
+		vm.Router.Push(LogsRoute)
 	}
 }
 
@@ -284,6 +300,14 @@ func (vm *ViewModel) ContentTitle(c *ui.Context) {
 	}
 	id, ok := deviceIDFromPath(vm.Router.Path())
 	if !ok {
+		if name, isManage := managePageTitle(vm.Router.Path()); isManage {
+			vm.CrumbChoice = -1
+			crumbs := components.Breadcrumbs(c, []string{pageName, name}, &vm.CrumbChoice)
+			if crumbs.Changed() && vm.CrumbChoice == 0 {
+				vm.OpenDevices()
+			}
+			return
+		}
 		components.Text(c, pageName).Bold().SingleLine()
 		return
 	}
@@ -395,6 +419,9 @@ func (vm *ViewModel) SidebarView(c *ui.Context) {
 	ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), theme.Space(2), 0, theme.Space(2)).Children(func() {
 		ui.Scroll(c).FillWidth().Grow(1).Children(func() {
 			vm.deviceGroups(c)
+			// Pages, not window actions: they belong under the device list,
+			// inside the scrolling area, rather than in the fixed footer.
+			ui.Column(c).Padding(0, 4).Gap(2).Children(func() { vm.manageEntries(c) })
 		})
 	})
 }

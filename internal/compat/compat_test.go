@@ -119,6 +119,17 @@ var (
 	_                                                                                                                       = components.Split
 	_                                                                                                                       = components.SplitOptions{}.FirstMin
 	_                                                                                                                       = components.Tree
+	_                                                                                                                       = components.TableVirtualized
+	_                                                                                                                       = components.TableVirtualizedState{}.List
+	_ func(*ui.Context, *components.TableVirtualizedState, []ui.TableColumn, int, func(int, int)) ui.Element                = components.TableVirtualized
+	_                                                                                                                       = components.Badge
+	_                                                                                                                       = components.BadgeOptions{}.Tone
+	_                                                                                                                       = components.BadgeDanger
+	_                                                                                                                       = components.Select[string]
+	_                                                                                                                       = (*components.SelectParts[string]).Popup
+	_                                                                                                                       = (*components.SelectParts[string]).Item
+	_ func() *ui.SVG                                                                                                        = lucide.ScrollText
+	_                                                                                                                       = components.Switch
 	_                                                                                                                       = components.TreeItemWithLeading
 	_                                                                                                                       = components.FileIcon
 	_                                                                                                                       = mygo.Dialog.Save

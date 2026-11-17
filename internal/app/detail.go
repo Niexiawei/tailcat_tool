@@ -39,6 +39,11 @@ func (vm *ViewModel) routedPage(c *ui.Context) {
 		return
 	}
 	vm.Router.View(c, func(r *ui.Route) {
+		if name, isManage := managePageTitle(r.Path()); isManage {
+			r.Title(name)
+			vm.logsPage(c)
+			return
+		}
 		if r.Match("/devices/{id}") {
 			profile, ok := vm.profileByID(r.Param("id"))
 			if !ok {

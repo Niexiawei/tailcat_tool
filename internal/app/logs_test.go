@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"math"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -217,4 +219,276 @@ func TestLogPageEndsAboveThePageEdge(t *testing.T) {
 	if bottom := rect.Y + rect.H; bottom > window-20 {
 		t.Fatalf("the log area ends at %v, past the page's bottom padding", bottom)
 	}
+}
+
+// fakeLogReader answers the log page and records what it was asked, so a test
+// can prove the page queries what the user chose.
+type fakeLogReader struct {
+	mu      sync.Mutex
+	queries []core.LogQuery
+	rows    []core.TimelineEntry
+	outputs map[uuid.UUID]string
+	err     error
+}
+
+func (r *fakeLogReader) Timeline(query core.LogQuery) ([]core.TimelineEntry, error) {
+	r.mu.Lock()
+	r.queries = append(r.queries, query)
+	rows := append([]core.TimelineEntry(nil), r.rows...)
+	err := r.err
+	r.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	limit := query.Limit
+	if limit <= 0 {
+		limit = core.DefaultLogLimit
+	}
+	var out []core.TimelineEntry
+	for _, row := range rows {
+		if query.DeviceID != nil {
+			if *query.DeviceID == uuid.Nil {
+				if row.DeviceID != uuid.Nil {
+					continue
+				}
+			} else if row.DeviceID != *query.DeviceID {
+				continue
+			}
+		}
+		if query.Level != "" && row.Level != query.Level {
+			continue
+		}
+		if !query.Since.IsZero() && row.At.Before(query.Since) {
+			continue
+		}
+		if !demoMatchesAll([]string{row.Text}, strings.Fields(query.Search)) {
+			continue
+		}
+		out = append(out, row)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (r *fakeLogReader) TaskOutput(id uuid.UUID) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	output, ok := r.outputs[id]
+	if !ok {
+		return "", core.Error(core.MsgTaskOutputMissing)
+	}
+	return output, nil
+}
+
+func (r *fakeLogReader) add(rows ...core.TimelineEntry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rows = append(r.rows, rows...)
+}
+
+func (r *fakeLogReader) recorded() []core.LogQuery {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]core.LogQuery(nil), r.queries...)
+}
+
+func (r *fakeLogReader) last() (core.LogQuery, bool) {
+	queries := r.recorded()
+	if len(queries) == 0 {
+		return core.LogQuery{}, false
+	}
+	return queries[len(queries)-1], true
+}
+
+// waitForQuery blocks until the reader has answered n queries.
+func waitForQuery(t *testing.T, reader *fakeLogReader, n int) core.LogQuery {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if queries := reader.recorded(); len(queries) >= n {
+			return queries[n-1]
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the log page made %d queries, want %d", len(reader.recorded()), n)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func TestSidebarHasTheLogsEntry(t *testing.T) {
+	vm := newTestViewModel(t)
+	tt := sidebarTester(vm, 280, 720)
+	device, ok := tt.Find("E245")
+	if !ok {
+		t.Fatalf("device row missing; texts = %v", tt.Texts())
+	}
+	entry, ok := tt.Find("日志")
+	if !ok {
+		t.Fatalf("the logs entry is missing; texts = %v", tt.Texts())
+	}
+	if entry.Y <= device.Y {
+		t.Fatalf("日志 is above the device list (%0.0f <= %0.0f)", entry.Y, device.Y)
+	}
+	if err := tt.Click("日志"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if got := vm.Router.Path(); got != LogsRoute {
+		t.Fatalf("path = %q, want %q", got, LogsRoute)
+	}
+}
+
+func TestLogsPageTitleHasABreadcrumbBack(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.OpenLogs()
+	title := ui.NewTester(vm.ContentTitle, 400, 40)
+	if !title.HasText("我的设备") || !title.HasText("日志") {
+		t.Fatalf("title = %v, want 我的设备 › 日志", title.Texts())
+	}
+}
+
+func TestLogsPageListsAppAndDeviceRows(t *testing.T) {
+	vm, reader, base := logsPageFixture(t)
+	reader.add(
+		core.TimelineEntry{At: base.Add(-time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+			DeviceID: vm.Manager.Profiles()[0].ID, DeviceName: "E245", Text: "通道已就绪"},
+		core.TimelineEntry{At: base.Add(-2 * time.Minute), Level: core.LogError, Source: core.LogApp,
+			Text: "配置读取失败"},
+		core.TimelineEntry{At: base.Add(-3 * time.Minute), Level: core.LogInfo, Source: core.LogTask,
+			DeviceID: vm.Manager.Profiles()[0].ID, DeviceName: "E245", TaskID: uuid.New(),
+			Text: "adb pull /sdcard/x · 失败"},
+	)
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	waitForText(t, tt, "配置读取失败")
+	for _, want := range []string{"通道已就绪", "adb pull /sdcard/x · 失败", "错误", "通道", "任务", "E245"} {
+		if !tt.HasText(want) {
+			t.Fatalf("%q missing from the log page; texts = %v", want, tt.Texts())
+		}
+	}
+}
+
+func TestLogsPageFiltersCallReaderWithChosenValues(t *testing.T) {
+	vm, reader, base := logsPageFixture(t)
+	reader.add(core.TimelineEntry{At: base.Add(-time.Minute), Level: core.LogError, Source: core.LogApp, Text: "配置读取失败"})
+	profile := vm.Manager.Profiles()[0]
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	first := waitForQuery(t, reader, 1)
+	if first.DeviceID != nil {
+		t.Fatalf("the page opened filtered to %v, want every device", first.DeviceID)
+	}
+	if first.Since.IsZero() {
+		t.Fatal("the default range must carry a lower bound")
+	}
+
+	if err := tt.Click("错误"); err != nil {
+		t.Fatalf("Click(错误) error: %v", err)
+	}
+	tt.Frame()
+	second := waitForQuery(t, reader, 2)
+	if second.Level != core.LogError {
+		t.Fatalf("level query = %q, want error", second.Level)
+	}
+
+	vm.pageLogFilter().Search = "超时"
+	tt.Frame()
+	third := waitForQuery(t, reader, 3)
+	if third.Search != "超时" {
+		t.Fatalf("search query = %q, want 超时", third.Search)
+	}
+
+	vm.pageLogFilter().Device = &profile.ID
+	tt.Frame()
+	fourth := waitForQuery(t, reader, 4)
+	if fourth.DeviceID == nil || *fourth.DeviceID != profile.ID {
+		t.Fatalf("device query = %v, want %v", fourth.DeviceID, profile.ID)
+	}
+
+	if err := tt.Click("全部"); err != nil {
+		t.Fatalf("Click(全部) error: %v", err)
+	}
+	tt.Frame()
+	fifth := waitForQuery(t, reader, 5)
+	if fifth.Since.IsZero() {
+		t.Fatal("choosing 全部 must lift the time lower bound")
+	}
+}
+
+func TestLogsPageExplainsAnEmptyRange(t *testing.T) {
+	vm, reader, _ := logsPageFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	tt.Frame()
+	if !tt.HasText("这段时间没有日志") {
+		t.Fatalf("no empty state; texts = %v", tt.Texts())
+	}
+}
+
+func TestFollowQueriesOnlyNewRows(t *testing.T) {
+	vm, reader, base := logsPageFixture(t)
+	newest := base.Add(-time.Minute)
+	reader.add(core.TimelineEntry{At: newest, Level: core.LogInfo, Source: core.LogApp, Text: "第一条"})
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+
+	filter := vm.pageLogFilter()
+	filter.Follow = true
+	reader.add(core.TimelineEntry{At: newest.Add(time.Minute), Level: core.LogError, Source: core.LogApp, Text: "新的一行"})
+	vm.followLogs(filter)
+
+	query := waitForQuery(t, reader, 2)
+	if !query.Since.Equal(newest) {
+		t.Fatalf("the follow query asked since %v, want the last row's time %v", query.Since, newest)
+	}
+	tt.Frame()
+	if !tt.HasText("新的一行") {
+		t.Fatalf("the new row did not arrive; texts = %v", tt.Texts())
+	}
+	if tt.HasText("第一条") == false {
+		t.Fatal("following dropped the rows already shown")
+	}
+}
+
+func TestLogsPageKeepsTheReaderAtTheTail(t *testing.T) {
+	vm, reader, base := logsPageFixture(t)
+	var rows []core.TimelineEntry
+	for i := 0; i < 40; i++ {
+		rows = append(rows, core.TimelineEntry{
+			At: base.Add(time.Duration(-i) * time.Minute), Level: core.LogInfo, Source: core.LogApp,
+			Text: "第" + itoa(i) + "行",
+		})
+	}
+	reader.add(rows...)
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	tt.Frame()
+
+	filter := vm.pageLogFilter()
+	filter.Follow = true
+	reader.add(core.TimelineEntry{At: base.Add(time.Minute), Level: core.LogError, Source: core.LogApp, Text: "最新一行"})
+	vm.followLogs(filter)
+	tt.Frame()
+	waitForText(t, tt, "最新一行")
+	// The newest row is at the top, so "at the tail" means the table still
+	// shows the top of the list rather than staying where the reader was.
+	if first, _ := filter.table.List.Visible(); first != 0 {
+		t.Fatalf("the followed table starts at row %d, want the newest row", first)
+	}
+}
+
+// logsPageFixture is a view model on the log page with a fake reader.
+func logsPageFixture(t *testing.T) (*ViewModel, *fakeLogReader, time.Time) {
+	t.Helper()
+	vm := newTestViewModel(t)
+	reader := &fakeLogReader{outputs: map[uuid.UUID]string{}}
+	vm.History = reader
+	vm.OpenLogs()
+	return vm, reader, time.Now()
 }
