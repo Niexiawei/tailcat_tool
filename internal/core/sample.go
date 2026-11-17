@@ -514,16 +514,24 @@ func (m *Manager) stopResourceSamplingLocked(id uuid.UUID) {
 
 // RefreshAppMeta reads the names and icons of the applications the last
 // reading saw again, ignoring the cache lifetime. It returns as soon as the
-// work is queued: the page refreshes when the metadata arrives.
+// work is queued: the page refreshes when the metadata arrives. Processes the
+// device already said have no APK are skipped: asking again cannot help and
+// costs a round trip each.
 func (m *Manager) RefreshAppMeta(ctx context.Context, id uuid.UUID) error {
 	m.mu.Lock()
 	snapshot, seen := m.resources[id]
+	source := m.appMeta
 	m.mu.Unlock()
 	if !seen {
 		return nil
 	}
 	pkgs := make([]string, 0, len(snapshot.Apps))
 	for _, app := range snapshot.Apps {
+		if source != nil {
+			if status, known := source.Status(deviceKey(id), app.Package); known && status.Final {
+				continue
+			}
+		}
 		pkgs = append(pkgs, app.Package)
 	}
 	return m.ResolveAppMeta(ctx, id, pkgs)
@@ -563,4 +571,17 @@ func (m *Manager) AppMeta(id uuid.UUID, pkg string) (AppMeta, bool) {
 		return AppMeta{}, false
 	}
 	return source.Lookup(deviceKey(id), pkg)
+}
+
+// AppMetaStatus reports whether a package's name is being read, is known, or
+// failed to read, and why. The view draws its spinner from this instead of
+// waiting on a timer it cannot verify.
+func (m *Manager) AppMetaStatus(id uuid.UUID, pkg string) (AppMetaStatus, bool) {
+	m.mu.Lock()
+	source := m.appMeta
+	m.mu.Unlock()
+	if source == nil {
+		return AppMetaStatus{}, false
+	}
+	return source.Status(deviceKey(id), pkg)
 }

@@ -135,6 +135,20 @@ func (demoAppMeta) Request(string, string, string, []string) {}
 
 func (demoAppMeta) Refresh(string, string, string, []string) {}
 
+// Status answers for the simulated processes so the demo shows a named
+// application, a system process with no APK, and an unasked row.
+func (demoAppMeta) Status(_, pkg string) (core.AppMetaStatus, bool) {
+	switch pkg {
+	case "com.demo.camera", "com.demo.gallery":
+		return core.AppMetaStatus{State: core.AppMetaReady}, true
+	case "system_server":
+		return core.AppMetaStatus{State: core.AppMetaFailed, Reason: core.ReasonNoAppPackage, Final: true}, true
+	}
+	return core.AppMetaStatus{}, false
+}
+
+func (demoAppMeta) Forget(string) {}
+
 // demoResourceOutput is what the simulated device prints for one sampling
 // round: two applications, a system process and no GPU counter.
 const demoResourceOutput = `@@STAT

@@ -3,12 +3,13 @@ package core
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // refreshFixture wires a manager whose metadata source records refreshes.
 func refreshFixture(t *testing.T) (*managerFixture, *fakeAppMeta) {
 	t.Helper()
-	meta := &fakeAppMeta{metas: map[string]AppMeta{}}
+	meta := &fakeAppMeta{metas: map[string]AppMeta{}, statuses: map[string]AppMetaStatus{}}
 	f := newManagerFixture(t, func(o *ManagerOptions) { o.AppMeta = meta })
 	return f, meta
 }
@@ -87,5 +88,83 @@ func TestRefreshAppMetaWithoutSnapshotRefreshesNothing(t *testing.T) {
 	}
 	if got := meta.snapshot(); len(got) != 0 {
 		t.Fatalf("refreshed = %v, want nothing before the first reading", got)
+	}
+}
+
+func TestAppMetaStatusIsUnknownUntilAsked(t *testing.T) {
+	f, _ := refreshFixture(t)
+
+	if status, ok := f.m.AppMetaStatus(f.id, "com.foo"); ok {
+		t.Fatalf("AppMetaStatus() answered %+v for an application nobody asked about", status)
+	}
+}
+
+func TestAppMetaStatusIsReportedThroughTheManager(t *testing.T) {
+	f, meta := refreshFixture(t)
+	pending := AppMetaStatus{State: AppMetaPending, At: time.Unix(1000, 0)}
+	failed := AppMetaStatus{
+		State:  AppMetaFailed,
+		Reason: ReasonNoAppPackage,
+		Final:  true,
+		At:     time.Unix(1001, 0),
+	}
+	meta.statuses["com.foo"] = pending
+	meta.statuses["system_server"] = failed
+
+	if status, ok := f.m.AppMetaStatus(f.id, "com.foo"); !ok || status.State != AppMetaPending {
+		t.Fatalf("com.foo = %+v, %v; want the pending state back", status, ok)
+	}
+	if status, ok := f.m.AppMetaStatus(f.id, "system_server"); !ok || status != failed {
+		t.Fatalf("system_server = %+v, %v; want the failure back verbatim", status, ok)
+	}
+	// The cache is keyed by the device's identity, not by its serial, so the
+	// answer survives reconnects. A serial would namespace a second channel.
+	for _, device := range meta.statusKeys() {
+		if device != f.id.String() {
+			t.Fatalf("Status() was asked about %q, want the device key %q", device, f.id.String())
+		}
+	}
+}
+
+func TestDisconnectForgetsAppMetaStatus(t *testing.T) {
+	f, meta := refreshFixture(t)
+	f.connect(t)
+	meta.statuses["system_server"] = AppMetaStatus{State: AppMetaFailed, Reason: ReasonNoAppPackage, Final: true}
+
+	f.m.Disconnect(context.Background(), f.id)
+
+	forgotten := meta.forgottenKeys()
+	if len(forgotten) != 1 || forgotten[0] != f.id.String() {
+		t.Fatalf("forgotten = %v, want exactly the device key %q", forgotten, f.id.String())
+	}
+}
+
+func TestRefreshAppMetaSkipsPackagesWithNoAppPackage(t *testing.T) {
+	f, meta := refreshFixture(t)
+	f.connect(t)
+	round := defaultRound()
+	round.procs = append(round.procs, sampleProc{pid: 300, utime: 1, start: 800, rssKB: 2048, cmd: "android.hardware.audio.service"})
+	f.serveRounds(t, round)
+	if _, err := f.m.SampleResources(context.Background(), f.id); err != nil {
+		t.Fatalf("SampleResources() error: %v", err)
+	}
+	meta.resetCalls()
+	// A process the device already said has no APK cannot become an
+	// application by asking again; the batch must not spend a round trip on it.
+	meta.statuses["android.hardware.audio.service"] = AppMetaStatus{
+		State:  AppMetaFailed,
+		Reason: ReasonNoAppPackage,
+		Final:  true,
+	}
+
+	if err := f.m.RefreshAppMeta(context.Background(), f.id); err != nil {
+		t.Fatalf("RefreshAppMeta() error: %v", err)
+	}
+	refreshed := meta.snapshot()
+	if containsString(refreshed, "android.hardware.audio.service") {
+		t.Fatalf("refreshed = %v; a process with no APK was asked again", refreshed)
+	}
+	if !containsString(refreshed, "com.foo") || !containsString(refreshed, "system_server") {
+		t.Fatalf("refreshed = %v; the real applications must still be refreshed", refreshed)
 	}
 }

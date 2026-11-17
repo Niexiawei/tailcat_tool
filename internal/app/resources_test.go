@@ -128,6 +128,7 @@ func TestResourcePageStopsPollingWhenTheTabCloses(t *testing.T) {
 type stubAppMeta struct {
 	mu        sync.Mutex
 	metas     map[string]core.AppMeta
+	statuses  map[string]core.AppMetaStatus
 	requested []string
 	refreshed []string
 }
@@ -150,6 +151,15 @@ func (s *stubAppMeta) Refresh(_, _, _ string, pkgs []string) {
 	defer s.mu.Unlock()
 	s.refreshed = append(s.refreshed, pkgs...)
 }
+
+func (s *stubAppMeta) Status(_, pkg string) (core.AppMetaStatus, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	status, ok := s.statuses[pkg]
+	return status, ok
+}
+
+func (s *stubAppMeta) Forget(string) {}
 
 func (s *stubAppMeta) refreshedPackages() []string {
 	s.mu.Lock()

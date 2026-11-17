@@ -2,6 +2,34 @@ package core
 
 import "time"
 
+// AppMetaState is what is known about one application's name and icon right
+// now. The view reads it instead of guessing from a timer: a row is busy only
+// while the store says so.
+type AppMetaState int
+
+const (
+	// AppMetaUnknown means nobody ever asked about this package.
+	AppMetaUnknown AppMetaState = iota
+	// AppMetaPending means a read is queued or running.
+	AppMetaPending
+	// AppMetaReady means the cache holds a name for it (possibly stale).
+	AppMetaReady
+	// AppMetaFailed means the read finished without a name; Reason says why.
+	AppMetaFailed
+)
+
+// AppMetaStatus is one package's state plus the reason it reached it.
+type AppMetaStatus struct {
+	State AppMetaState
+	// Reason is the user-facing sentence explaining a failure; empty otherwise.
+	Reason string
+	// At is when this state began, for ordering and for staleness hints.
+	At time.Time
+	// Final reports that retrying cannot help: the device has no APK for this
+	// process at all. A batch refresh skips those.
+	Final bool
+}
+
 // AppMeta is one application's identity as the device's own APK describes it.
 type AppMeta struct {
 	Package string
@@ -36,6 +64,13 @@ type AppMetaSource interface {
 	Request(device, adbPath, serial string, pkgs []string)
 	// Refresh queues the packages regardless of their cache state.
 	Refresh(device, adbPath, serial string, pkgs []string)
+	// Status reports what is known about one package right now, so the view can
+	// show a spinner only while a read is really running and can say why one
+	// failed.
+	Status(device, pkg string) (AppMetaStatus, bool)
+	// Forget drops every status this device accumulated. After a reconnect a
+	// process that had no APK may be an application the user just installed.
+	Forget(device string)
 }
 
 // AppMetaCache is what the cache management page will use. It has no UI

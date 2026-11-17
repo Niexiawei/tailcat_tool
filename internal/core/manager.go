@@ -587,6 +587,7 @@ func (m *Manager) Disconnect(ctx context.Context, id uuid.UUID) {
 	generation := uuid.New()
 	m.generations[id] = generation
 	runtime := m.runtimes[id]
+	source := m.appMeta
 	delete(m.runtimes, id)
 	delete(m.retryCounts, id)
 	delete(m.nextRetries, id)
@@ -598,6 +599,13 @@ func (m *Manager) Disconnect(ctx context.Context, id uuid.UUID) {
 	})
 	m.notify()
 	m.mu.Unlock()
+
+	// Outside the lock: after a reconnect a process that had no APK may be an
+	// application the user installed meanwhile, so the failure has to expire
+	// together with the channel it was observed on.
+	if source != nil {
+		source.Forget(deviceKey(id))
+	}
 
 	jobs := m.cancelDeviceTasks(id)
 	waitDones(jobs)

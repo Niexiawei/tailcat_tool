@@ -83,6 +83,44 @@ func (s *Store) Lookup(device, pkg string) (core.AppMeta, bool) {
 	return s.cache.lookupAt(device, pkg, s.now())
 }
 
+// Status reports what the store knows about one package right now: a queued or
+// running read, a cached name, or a failure. It is derived from the queue and
+// the failure record for now; the reader rewrite replaces it with a record that
+// also carries the reason.
+func (s *Store) Status(device, pkg string) (core.AppMetaStatus, bool) {
+	key := entryKey(device, pkg)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pending[key] {
+		return core.AppMetaStatus{State: core.AppMetaPending, At: s.now()}, true
+	}
+	if last, failed := s.failed[key]; failed {
+		return core.AppMetaStatus{State: core.AppMetaFailed, Reason: core.ReasonAPKUnreadable, At: last}, true
+	}
+	if meta, ok := s.cache.lookupAt(device, pkg, s.now()); ok {
+		return core.AppMetaStatus{State: core.AppMetaReady, At: meta.FetchedAt}, true
+	}
+	return core.AppMetaStatus{}, false
+}
+
+// Forget drops the statuses this device accumulated, keeping the cached names:
+// after a reconnect a process that had no APK may be a real application.
+func (s *Store) Forget(device string) {
+	prefix := device + "|"
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.failed {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.failed, key)
+		}
+	}
+	for key := range s.forced {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.forced, key)
+		}
+	}
+}
+
 // Request queues the packages without a fresh entry.
 func (s *Store) Request(device, adbPath, serial string, pkgs []string) {
 	s.enqueue(device, adbPath, serial, pkgs, false)
