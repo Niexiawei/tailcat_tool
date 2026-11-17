@@ -22,6 +22,7 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 	})
 	vm.EditorView(c)
 	vm.TransferView(c)
+	vm.FileDetailView(c)
 	vm.SettingsView(c)
 	vm.ReachabilityView(c)
 	vm.AttentionDialog(c)
@@ -183,7 +184,7 @@ func (vm *ViewModel) devicePage(c *ui.Context, profile core.Profile) {
 				go manager.Disconnect(context.Background(), profile.ID)
 			}
 		})
-		components.Tabs(c, &vm.DetailTab, components.TabsSegmented, "概览", "资源", "终端", "日志")
+		components.Tabs(c, &vm.DetailTab, components.TabsSegmented, "概览", "资源", "终端", "文件", "日志")
 		switch vm.DetailTab {
 		case detailResources:
 			vm.resourcePage(c, profile, session)
@@ -192,6 +193,9 @@ func (vm *ViewModel) devicePage(c *ui.Context, profile core.Profile) {
 			vm.Manager.StopResourceSampling(profile.ID)
 			components.Tabs(c, &vm.ConsoleTab, components.TabsSegmented, "设备 Shell", "ADB 命令")
 			vm.consoleView(c, profile, session)
+		case detailFiles:
+			vm.Manager.StopResourceSampling(profile.ID)
+			vm.filesPage(c, profile, session)
 		case detailLog:
 			vm.Manager.StopResourceSampling(profile.ID)
 			vm.logPage(c, profile, session)
