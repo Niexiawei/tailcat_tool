@@ -270,8 +270,6 @@ func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.
 				go func() { _, err := manager.BeginScreen(context.Background(), profile.ID); vm.Fail(err) }()
 			}
 		})
-
-		components.Text(c, "任务始终绑定启动时的设备和 ADB 入口。").FontSize(11)
 	})
 }
 
