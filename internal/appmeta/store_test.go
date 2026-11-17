@@ -24,6 +24,17 @@ type fakeFileRunner struct {
 	// entries answers `unzip -p`: entry name to its bytes.
 	entries map[string][]byte
 	calls   []string
+	// holdOn blocks the call whose arguments contain it until gate closes, so a
+	// test can look at the store's state while a read is running.
+	holdOn string
+	gate   chan struct{}
+	held   chan struct{}
+	// panicOn makes the worker explode, to prove a panic still ends the row's
+	// pending state.
+	panicOn string
+	// failOn makes the call return an error, the way a dropped adb channel does.
+	failOn  string
+	failErr error
 }
 
 func (f *fakeFileRunner) Start(context.Context, core.Command, func(string)) (*core.Proc, error) {
@@ -33,6 +44,16 @@ func (f *fakeFileRunner) Start(context.Context, core.Command, func(string)) (*co
 func (f *fakeFileRunner) Run(_ context.Context, c core.Command, _ func(string)) (core.Result, error) {
 	f.record(c)
 	line := strings.Join(c.Args, " ")
+	if f.panicOn != "" && strings.Contains(line, f.panicOn) {
+		panic("the fake runner exploded")
+	}
+	if f.failOn != "" && strings.Contains(line, f.failOn) {
+		return core.Result{ExitCode: 1}, f.failErr
+	}
+	if f.gate != nil && f.holdOn != "" && strings.Contains(line, f.holdOn) {
+		close(f.held)
+		<-f.gate
+	}
 	switch {
 	case strings.Contains(line, "pm path"):
 		if f.apkPath == "" {
@@ -102,6 +123,12 @@ func (f *fakeFileRunner) reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = nil
+}
+
+func (f *fakeFileRunner) callsSnapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
 }
 
 func (f *fakeFileRunner) count(needle string) int {
@@ -250,28 +277,36 @@ func TestStoreIgnoresDuplicateRequests(t *testing.T) {
 	}
 }
 
-func TestStoreBacksOffAfterAFailedFetch(t *testing.T) {
+func TestStoreRetriesAFailedFetchAfterTheBackoff(t *testing.T) {
 	now := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
-	// No APK path: the device answers "unknown package", as it does for
-	// processes that are not applications at all.
-	runner := &fakeFileRunner{}
+	// A dropped channel: the command itself fails, which is worth retrying.
+	runner := apkRunner(buildTestAPK(t, "微信", "", nil), "4096 1700000000")
+	runner.failOn = "pm path"
+	runner.failErr = core.Error("adb: device offline")
 	s := newTestStore(t, runner)
 	s.now = func() time.Time { return now }
 
-	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"system_server"})
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
 	s.waitIdle()
 	if got := runner.count("pm path"); got != 1 {
 		t.Fatalf("first attempt ran %d pm path calls", got)
 	}
+	status, ok := s.Status("dev", "com.foo")
+	if !ok || status.State != core.AppMetaFailed || status.Final {
+		t.Fatalf("status = %+v, ok=%v; want a retryable failure", status, ok)
+	}
 
-	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"system_server"})
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
 	s.waitIdle()
 	if got := runner.count("pm path"); got != 1 {
 		t.Fatalf("a failed package was retried immediately (%d calls)", got)
 	}
 
 	now = now.Add(11 * time.Minute)
-	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"system_server"})
+	runner.mu.Lock()
+	runner.failOn = ""
+	runner.mu.Unlock()
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
 	s.waitIdle()
 	if got := runner.count("pm path"); got != 2 {
 		t.Fatalf("the backoff never expired (%d calls)", got)
@@ -333,5 +368,171 @@ func TestStoreFallsBackToTheWholeApkWithoutUnzip(t *testing.T) {
 	}
 	if got := runner.count("exec-out cat"); got != 1 {
 		t.Fatalf("whole-APK pulls = %d, want the fallback to run once", got)
+	}
+}
+
+func TestStoreReadsEntriesThroughExecOut(t *testing.T) {
+	apk := buildTestAPK(t, "微信", "res/mipmap-xxhdpi/ic.png", testPNG)
+	runner := apkRunner(apk, "4096 1700000000")
+	runner.entries = zipEntries(t, apk)
+	s := newTestStore(t, runner)
+
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
+	s.waitIdle()
+
+	if meta, ok := s.Lookup("dev", "com.foo"); !ok || meta.Label != "微信" {
+		t.Fatalf("meta = %+v, ok=%v", meta, ok)
+	}
+	// `adb shell` gives the remote command a PTY, and the tty rewrites every LF
+	// into CRLF: the emulator's 724620-byte manifest arrives as 739233 bytes and
+	// the parser then fails for every APK. Binary entries must use exec-out.
+	for _, call := range runner.callsSnapshot() {
+		if strings.Contains(call, "shell unzip") {
+			t.Fatalf("an entry was read through adb shell, whose PTY corrupts it: %q", call)
+		}
+	}
+	if got := runner.count("exec-out unzip"); got < 2 {
+		t.Fatalf("exec-out entry reads = %d, want the manifest and the icon", got)
+	}
+}
+
+func TestStoreReportsNoAppPackageAsFinalFailure(t *testing.T) {
+	// The device answers `pm path` with exit 1 and no `package:` line, exactly
+	// as it does for a system service that is not an installed application.
+	runner := &fakeFileRunner{}
+	s := newTestStore(t, runner)
+
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"android.hardware.audio.service"})
+	s.waitIdle()
+
+	status, ok := s.Status("dev", "android.hardware.audio.service")
+	if !ok || status.State != core.AppMetaFailed {
+		t.Fatalf("status = %+v, ok=%v", status, ok)
+	}
+	if !status.Final || status.Reason != core.ReasonNoAppPackage {
+		t.Fatalf("status = %+v; a process with no APK is a final failure with a reason", status)
+	}
+}
+
+func TestStoreReportsPendingWhileReading(t *testing.T) {
+	apk := buildTestAPK(t, "微信", "", nil)
+	runner := apkRunner(apk, "4096 1700000000")
+	runner.entries = zipEntries(t, apk)
+	runner.holdOn = "pm path com.foo"
+	runner.gate = make(chan struct{})
+	runner.held = make(chan struct{})
+	s := newTestStore(t, runner)
+
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
+	<-runner.held
+	if status, ok := s.Status("dev", "com.foo"); !ok || status.State != core.AppMetaPending {
+		t.Fatalf("status = %+v, ok=%v; a running read must read as pending", status, ok)
+	}
+	close(runner.gate)
+	s.waitIdle()
+	if status, ok := s.Status("dev", "com.foo"); !ok || status.State != core.AppMetaReady {
+		t.Fatalf("status = %+v, ok=%v; want ready once the read finished", status, ok)
+	}
+}
+
+func TestStoreSkipsPackagesKnownToHaveNoAppPackage(t *testing.T) {
+	runner := &fakeFileRunner{}
+	s := newTestStore(t, runner)
+
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"system_server"})
+	s.waitIdle()
+	if got := runner.count("pm path"); got != 1 {
+		t.Fatalf("first attempt ran %d pm path calls", got)
+	}
+
+	// The batch path queues it again; the store already settled the answer, so
+	// it must not spend another round trip on it.
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"system_server"})
+	s.waitIdle()
+	if got := runner.count("pm path"); got != 1 {
+		t.Fatalf("a settled package was asked again (%d pm path calls)", got)
+	}
+
+	// A row's retry is the user insisting, so it may ask once more.
+	s.Refresh("dev", "/usr/bin/adb", "emulator-5554", []string{"system_server"})
+	s.waitIdle()
+	if got := runner.count("pm path"); got != 2 {
+		t.Fatalf("an explicit retry did not ask again (%d pm path calls)", got)
+	}
+}
+
+func TestStoreGivesUpOnAPKsTooLargeToPull(t *testing.T) {
+	// 80 MB is below the parse ceiling and above what is worth downloading over
+	// a channel. No entries map, so the fast path fails and the fallback would
+	// have to pull the whole package.
+	runner := apkRunner(buildTestAPK(t, "微信", "", nil), "83886080 1700000000")
+	s := newTestStore(t, runner)
+
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
+	s.waitIdle()
+
+	status, ok := s.Status("dev", "com.foo")
+	if !ok || status.State != core.AppMetaFailed || status.Reason != core.ReasonAPKTooLarge {
+		t.Fatalf("status = %+v, ok=%v; want a stated \"too large\" failure", status, ok)
+	}
+	if got := runner.count("exec-out cat"); got != 0 {
+		t.Fatalf("pulled an 80 MB APK %d times instead of giving up", got)
+	}
+}
+
+func TestStoreServesRowRequestsBeforeTheBatch(t *testing.T) {
+	apk := buildTestAPK(t, "微信", "", nil)
+	runner := apkRunner(apk, "4096 1700000000")
+	runner.entries = zipEntries(t, apk)
+	runner.holdOn = "pm path ba"
+	runner.gate = make(chan struct{})
+	runner.held = make(chan struct{})
+	s := newTestStore(t, runner)
+
+	// A batch refresh is already running...
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"ba", "bb", "bc", "bd", "be"})
+	<-runner.held
+	// ...and the user clicks one row.
+	s.Refresh("dev", "/usr/bin/adb", "emulator-5554", []string{"row"})
+	close(runner.gate)
+	s.waitIdle()
+
+	calls := runner.callsSnapshot()
+	row, next := -1, -1
+	for i, call := range calls {
+		if row < 0 && strings.Contains(call, "pm path row") {
+			row = i
+		}
+		if next < 0 && strings.Contains(call, "pm path bb") {
+			next = i
+		}
+	}
+	if row < 0 {
+		t.Fatalf("the row was never read: %v", calls)
+	}
+	if next >= 0 && row > next {
+		t.Fatalf("the row was read as call %d, after the batch's call %d: %v", row, next, calls)
+	}
+}
+
+func TestStoreMarksAFailedStateWhenTheWorkerPanics(t *testing.T) {
+	apk := buildTestAPK(t, "微信", "", nil)
+	runner := apkRunner(apk, "4096 1700000000")
+	runner.panicOn = "pm path"
+	s := newTestStore(t, runner)
+
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
+	s.waitIdle()
+
+	if status, ok := s.Status("dev", "com.foo"); !ok || status.State != core.AppMetaFailed {
+		t.Fatalf("status = %+v, ok=%v; a panicking read must still settle the row", status, ok)
+	}
+
+	// The worker survived the panic and still serves the next request.
+	runner.panicOn = ""
+	s.Refresh("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
+	s.waitIdle()
+	if status, ok := s.Status("dev", "com.foo"); !ok || status.State != core.AppMetaReady {
+		t.Fatalf("status = %+v, ok=%v; the worker died with the panic", status, ok)
 	}
 }
