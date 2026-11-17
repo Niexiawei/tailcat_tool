@@ -274,7 +274,15 @@ func (vm *ViewModel) tableToolbar(c *ui.Context, state *resourceState, profile c
 			if !button.Clicked() {
 				return
 			}
-			state.batch = appPackages(snapshot)
+			// The page reports progress over exactly what will be read, which
+			// is the manager's answer and not the row count: processes with no
+			// APK are skipped and would otherwise keep the button busy.
+			targets := vm.Manager.RefreshTargets(profile.ID)
+			if len(targets) == 0 {
+				vm.Manager.SetNotice("列表里没有可读取的应用包")
+				return
+			}
+			state.batch = targets
 			state.batchAt = time.Now()
 			go func() { vm.Fail(vm.Manager.RefreshAppMeta(context.Background(), profile.ID)) }()
 			c.Invalidate()
@@ -323,14 +331,6 @@ func (vm *ViewModel) batchProgress(state *resourceState, device uuid.UUID) (done
 // progress. It never hides a row's own state; it only re-enables one button.
 const batchGiveUpAfter = 90 * time.Second
 
-func appPackages(snapshot core.ResourceSnapshot) []string {
-	pkgs := make([]string, 0, len(snapshot.Apps))
-	for _, app := range snapshot.Apps {
-		pkgs = append(pkgs, app.Package)
-	}
-	return pkgs
-}
-
 // processTable lists one row per application and, when the user expands it, its
 // processes underneath. While a query is active the groups are open: what the
 // user is looking for is a process inside one of them.
@@ -346,7 +346,10 @@ func (vm *ViewModel) processTable(c *ui.Context, state *resourceState, device uu
 			for _, item := range kept {
 				app := item.app
 				label := appLabel(app)
-				expanded := state.expanded[app.Package] || (filtering && len(item.processes) > 0)
+				// A query opens every group it kept: the row that matched is
+				// a process underneath it, or the whole application the user
+				// asked for.
+				expanded := filtering || state.expanded[app.Package]
 				row := components.TableRow(c, app.Package, label, expanded, func(col int) {
 					vm.appCell(c, col, state, device, app, label)
 				})

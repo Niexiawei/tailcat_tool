@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // refreshFixture wires a manager whose metadata source records refreshes.
@@ -136,6 +138,35 @@ func TestDisconnectForgetsAppMetaStatus(t *testing.T) {
 	forgotten := meta.forgottenKeys()
 	if len(forgotten) != 1 || forgotten[0] != f.id.String() {
 		t.Fatalf("forgotten = %v, want exactly the device key %q", forgotten, f.id.String())
+	}
+}
+
+func TestRefreshTargetsListOnlyThePackagesItWillRead(t *testing.T) {
+	f, meta := refreshFixture(t)
+	f.connect(t)
+	round := defaultRound()
+	round.procs = append(round.procs, sampleProc{pid: 300, utime: 1, start: 800, rssKB: 2048, cmd: "android.hardware.audio.service"})
+	f.serveRounds(t, round)
+	if _, err := f.m.SampleResources(context.Background(), f.id); err != nil {
+		t.Fatalf("SampleResources() error: %v", err)
+	}
+	// A process the device already said has no APK is not a refresh target, and
+	// the page needs the same answer to report progress honestly.
+	meta.statuses["android.hardware.audio.service"] = AppMetaStatus{
+		State:  AppMetaFailed,
+		Reason: ReasonNoAppPackage,
+		Final:  true,
+	}
+
+	targets := f.m.RefreshTargets(f.id)
+	if containsString(targets, "android.hardware.audio.service") {
+		t.Fatalf("targets = %v; a process with no APK was listed", targets)
+	}
+	if !containsString(targets, "com.foo") || !containsString(targets, "system_server") {
+		t.Fatalf("targets = %v; the real applications must be listed", targets)
+	}
+	if got := f.m.RefreshTargets(uuid.New()); len(got) != 0 {
+		t.Fatalf("targets = %v for a device that was never sampled", got)
 	}
 }
 

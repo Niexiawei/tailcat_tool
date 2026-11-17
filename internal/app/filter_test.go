@@ -111,3 +111,22 @@ func TestFilterAppliesToBothViews(t *testing.T) {
 		t.Fatalf("the process view kept a row the filter excluded; texts = %v", tt.Texts())
 	}
 }
+
+func TestFilterOpensGroupsMatchedByTheApplicationName(t *testing.T) {
+	// The application answers to 微信 while its processes are named com.foo, so
+	// only the application row matches: the group must still open, because that
+	// is the application the user asked for.
+	vm, _ := resourceFixtureWithMeta(t, map[string]core.AppMeta{
+		"com.foo": {Package: "com.foo", Label: "微信"},
+	})
+	profile := vm.Manager.Profiles()[0]
+	vm.resourceStateFor(profile.ID).filter = "微信"
+
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if !tt.HasText("PID 100") {
+		t.Fatalf("a group matched by its application name is not opened; texts = %v", tt.Texts())
+	}
+	if tt.HasText("system_server") {
+		t.Fatalf("a group the query excluded survived; texts = %v", tt.Texts())
+	}
+}

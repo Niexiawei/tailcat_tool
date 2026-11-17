@@ -329,6 +329,32 @@ func TestRefreshProgressEndsWhenEveryRowIsSettled(t *testing.T) {
 	}
 }
 
+func TestRefreshCountsOnlyThePackagesItWillRead(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	meta.setStatus("system_server", core.AppMetaStatus{
+		State:  core.AppMetaFailed,
+		Reason: core.ReasonNoAppPackage,
+		Final:  true,
+	})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if err := tt.Click("刷新应用信息"); err != nil {
+		t.Fatalf("clicking the refresh button: %v", err)
+	}
+
+	// Only com.foo will be read, so the progress must not wait for the process
+	// that has no APK to settle.
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if !tt.HasText("正在读取应用信息 0/1") {
+		t.Fatalf("the progress counts rows that will never be read; texts = %v", tt.Texts())
+	}
+
+	meta.setStatus("com.foo", settledStatus())
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if tt.HasText("正在读取应用信息") {
+		t.Fatalf("the refresh never finished; texts = %v", tt.Texts())
+	}
+}
+
 func TestRefreshDoesNotAskAboutProcessesWithNoAppPackage(t *testing.T) {
 	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
 	meta.setStatus("system_server", core.AppMetaStatus{

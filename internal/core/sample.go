@@ -518,6 +518,18 @@ func (m *Manager) stopResourceSamplingLocked(id uuid.UUID) {
 // device already said have no APK are skipped: asking again cannot help and
 // costs a round trip each.
 func (m *Manager) RefreshAppMeta(ctx context.Context, id uuid.UUID) error {
+	pkgs := m.RefreshTargets(id)
+	if len(pkgs) == 0 {
+		return nil
+	}
+	return m.ResolveAppMeta(ctx, id, pkgs)
+}
+
+// RefreshTargets lists the packages a batch refresh would ask about: what the
+// last reading saw, minus the processes the device already said have no APK.
+// The page uses the same list to report progress, so it never waits on a row
+// that will not be read.
+func (m *Manager) RefreshTargets(id uuid.UUID) []string {
 	m.mu.Lock()
 	snapshot, seen := m.resources[id]
 	source := m.appMeta
@@ -534,7 +546,7 @@ func (m *Manager) RefreshAppMeta(ctx context.Context, id uuid.UUID) error {
 		}
 		pkgs = append(pkgs, app.Package)
 	}
-	return m.ResolveAppMeta(ctx, id, pkgs)
+	return pkgs
 }
 
 // ResolveAppMeta queues a read of the given packages' names and icons,
