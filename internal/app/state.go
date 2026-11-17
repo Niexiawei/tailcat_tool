@@ -105,11 +105,14 @@ type ViewModel struct {
 	LogClear *logClear
 	// logMu guards what the log queries write from their goroutines.
 	logMu sync.Mutex
+	// activeLog is the log view drawing this frame; the previous one stops
+	// following when the user navigates away.
+	activeLog *logFilter
 
 	// consoles holds the embedded terminal of each device.
 	consoles map[uuid.UUID]*consoleHost
-	// logStates holds the log page's buffer and scroll position per device.
-	logStates map[uuid.UUID]*logState
+	// logFilters holds one log view per device, for the device page's tab.
+	logFilters map[uuid.UUID]*logFilter
 	// resources holds the resource page's state per device.
 	resources map[uuid.UUID]*resourceState
 	// appIcons caches decoded application icons, keyed by device and package,

@@ -1,9 +1,6 @@
 package app
 
 import (
-	"math"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
@@ -11,53 +8,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/oneo-me/onevra/source/components"
 )
-
-// logLine is one row of the device log page.
-type logLine struct {
-	At   time.Time
-	Text string
-	// task sorts after a channel log line that happened at the same instant,
-	// so a task's "已完成" line reads after the log line it caused.
-	task bool
-}
-
-// deviceTimeline merges the channel log with this device's tasks, oldest
-// first, so one page answers "what happened to this device".
-func deviceTimeline(session core.Session, tasks []core.Task) []logLine {
-	lines := make([]logLine, 0, len(session.Logs)+len(tasks))
-	for _, entry := range session.Logs {
-		lines = append(lines, logLine{At: entry.At, Text: entry.Text})
-	}
-	for _, task := range tasks {
-		lines = append(lines, logLine{
-			At:   task.Started,
-			Text: task.Title + " · " + task.State.Label(),
-			task: true,
-		})
-	}
-	sort.SliceStable(lines, func(i, j int) bool {
-		if lines[i].At.Equal(lines[j].At) {
-			return !lines[i].task && lines[j].task
-		}
-		return lines[i].At.Before(lines[j].At)
-	})
-	return lines
-}
-
-// logText renders a timeline one entry per line, each prefixed with its
-// wall-clock time: "15:04:05 通道已就绪".
-func logText(lines []logLine) string {
-	var builder strings.Builder
-	for i, line := range lines {
-		if i > 0 {
-			builder.WriteByte('\n')
-		}
-		builder.WriteString(line.At.Format("15:04:05"))
-		builder.WriteByte(' ')
-		builder.WriteString(line.Text)
-	}
-	return builder.String()
-}
 
 // runningTasks keeps the tasks of one device that are still running.
 func runningTasks(tasks []core.Task, id uuid.UUID) []core.Task {
@@ -81,50 +31,10 @@ func deviceTasks(tasks []core.Task, id uuid.UUID) []core.Task {
 	return kept
 }
 
-// logState is one device's read-only log buffer plus its scroll position.
-type logState struct {
-	buffer *ui.TextBuffer
-	scroll ui.ScrollState
-	text   string // what buffer currently holds
-	follow bool   // was at the tail last frame
-}
-
-// logState returns the (lazily created) state of one device's log page.
-func (vm *ViewModel) logState(id uuid.UUID) *logState {
-	if vm.logStates == nil {
-		vm.logStates = map[uuid.UUID]*logState{}
-	}
-	state, ok := vm.logStates[id]
-	if !ok {
-		state = &logState{buffer: ui.NewTextBuffer("")}
-		vm.logStates[id] = state
-	}
-	return state
-}
-
-// logPageText refreshes one device's buffer from a session snapshot and keeps
-// the follow-the-tail decision. It is the only place that writes the buffer.
-func (vm *ViewModel) logPageText(id uuid.UUID, session core.Session) {
-	state := vm.logState(id)
-	state.follow = state.text == "" || state.scroll.Y >= state.scroll.MaxY-4
-	if !state.follow {
-		// Reading up: leave the text alone until the reader comes back to the
-		// tail. Rewriting it reloads the editor, whose caret sits at the end,
-		// and the reload would drag the view back down on every new line.
-		return
-	}
-	if text := logText(deviceTimeline(session, deviceTasks(vm.Manager.Tasks(), id))); text != state.text {
-		state.text = text
-		state.buffer.Set(text)
-	}
-	state.scroll.Y = math.MaxFloat32
-}
-
-// logPage renders the log tab: a header line, the optional cancel action and
-// the read-only text area.
+// logPage is the device page's 日志 tab. It is a thin wrapper around the one
+// log UI: the device is fixed to this device, the picker is hidden, and the
+// tab keeps following the newest line the way the old text view did.
 func (vm *ViewModel) logPage(c *ui.Context, profile core.Profile, session core.Session) {
-	vm.logPageText(profile.ID, session)
-	state := vm.logState(profile.ID)
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(6).Children(func() {
 		ui.Row(c).FillWidth().Shrink(0).Gap(8).AlignItems(ui.Center).Children(func() {
 			components.Text(c, "通道日志与任务").FontSize(13).Bold()
@@ -137,15 +47,26 @@ func (vm *ViewModel) logPage(c *ui.Context, profile core.Profile, session core.S
 				}
 			}
 		})
-		if state.text == "" {
-			components.Text(c, "暂无通道日志与任务").FontSize(11)
-			return
-		}
-		// ReadOnly keeps focus, selection and copying but refuses edits; the
-		// text area is its own scroll container, which the probe confirmed.
-		components.TextBoxBuffer(c, state.buffer, components.TextBoxOptions{Multiline: true, ReadOnly: true}).
-			FillWidth().Grow(1).MinHeight(0).Label("通道日志与任务内容").TrackScroll(&state.scroll)
+		vm.logView(c, vm.logFilterFor(profile.ID), logViewOptions{AllowClear: true})
 	})
+}
+
+// logFilterFor is one device's log view. It starts filtered to that device and
+// following the newest line, because a tab under a device is read while
+// watching it work.
+func (vm *ViewModel) logFilterFor(id uuid.UUID) *logFilter {
+	vm.logMu.Lock()
+	defer vm.logMu.Unlock()
+	if filter, ok := vm.logFilters[id]; ok {
+		return filter
+	}
+	device := id
+	filter := &logFilter{Device: &device, Range: logRangeToday, Follow: true, selected: -1}
+	if vm.logFilters == nil {
+		vm.logFilters = map[uuid.UUID]*logFilter{}
+	}
+	vm.logFilters[id] = filter
+	return filter
 }
 
 // The log page's time ranges, in the order its tabs show them.
@@ -241,6 +162,7 @@ func sameLogQuery(shown, query core.LogQuery) bool {
 // logView is the only log UI. The page and the device tab differ only in the
 // filter they pass and whether the device picker is shown.
 func (vm *ViewModel) logView(c *ui.Context, f *logFilter, opts logViewOptions) {
+	vm.markLogVisible(f)
 	vm.ensureLogQuery(f)
 	vm.ensureLogFollow(f)
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(8).Children(func() {
@@ -610,6 +532,18 @@ func (vm *ViewModel) ensureLogFollow(f *logFilter) {
 	}()
 }
 
+// markLogVisible remembers which view is drawing and stops the previous one
+// from following: a hidden page must not keep querying the database.
+func (vm *ViewModel) markLogVisible(f *logFilter) {
+	vm.logMu.Lock()
+	previous := vm.activeLog
+	vm.activeLog = f
+	if previous != nil && previous != f {
+		previous.following = false
+	}
+	vm.logMu.Unlock()
+}
+
 // requestFrame asks for one more paint; nil during tests that drive frames.
 func (vm *ViewModel) requestFrame() {
 	if vm.Invalidate != nil {
@@ -691,6 +625,9 @@ type logClear struct {
 	Device *uuid.UUID
 	Busy   bool
 	Error  string
+	// filter is the view the dialog was opened from, so the refresh after a
+	// clear re-reads what the user is looking at.
+	filter *logFilter
 }
 
 // openLogOutput reads a task's output off the render path and shows it.
@@ -769,7 +706,7 @@ func (vm *ViewModel) LogOutputView(c *ui.Context) {
 func (vm *ViewModel) openLogClear(f *logFilter) {
 	entries, _, _, _, _ := vm.logSnapshot(f)
 	vm.logMu.Lock()
-	vm.LogClear = &logClear{Count: len(entries), Range: f.Range, Device: f.Device}
+	vm.LogClear = &logClear{Count: len(entries), Range: f.Range, Device: f.Device, filter: f}
 	vm.logMu.Unlock()
 	vm.requestFrame()
 }
@@ -831,6 +768,7 @@ func (vm *ViewModel) runLogClear() {
 	dialog.Busy = true
 	dialog.Error = ""
 	query := core.LogQuery{DeviceID: dialog.Device, Since: logRangeSince(dialog.Range)}
+	filter := dialog.filter
 	vm.logMu.Unlock()
 
 	go func() {
@@ -845,9 +783,9 @@ func (vm *ViewModel) runLogClear() {
 			}
 		}
 		vm.logMu.Unlock()
-		// The page re-reads either way: a partial failure still deleted rows.
-		if f := vm.PageLogFilter; f != nil {
-			vm.refreshLogs(f)
+		// The view re-reads either way: a partial failure still deleted rows.
+		if filter != nil {
+			vm.refreshLogs(filter)
 		}
 	}()
 }

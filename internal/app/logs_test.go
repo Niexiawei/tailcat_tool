@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -13,27 +12,6 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/google/uuid"
 )
-
-func TestDeviceTimelineMergesLogsAndTasksInOrder(t *testing.T) {
-	base := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
-	session := core.Session{Logs: []core.SessionLog{
-		{At: base.Add(2 * time.Second), Text: "通道已就绪"},
-		{At: base.Add(4 * time.Second), Text: "adb 已连接"},
-	}}
-	tasks := []core.Task{{
-		ID: uuid.New(), Title: "adb shell cat /proc/meminfo",
-		Started: base.Add(3 * time.Second), State: core.TaskSucceeded,
-	}}
-	got := logText(deviceTimeline(session, tasks))
-	want := strings.Join([]string{
-		"12:00:02 通道已就绪",
-		"12:00:03 adb shell cat /proc/meminfo · 已完成",
-		"12:00:04 adb 已连接",
-	}, "\n")
-	if got != want {
-		t.Fatalf("log text = %q, want %q", got, want)
-	}
-}
 
 func TestDeviceTasksFiltersByDevice(t *testing.T) {
 	mine, other := uuid.New(), uuid.New()
@@ -47,66 +25,12 @@ func TestDeviceTasksFiltersByDevice(t *testing.T) {
 	}
 }
 
-func TestLogTextKeepsEveryLineOfAFullWindow(t *testing.T) {
-	session := core.Session{}
-	for i := 0; i < 200; i++ {
-		session.Logs = append(session.Logs, core.SessionLog{Text: "第" + itoa(i) + "行"})
-	}
-	tasks := make([]core.Task, 50)
-	for i := range tasks {
-		tasks[i] = core.Task{DeviceID: uuid.New(), Title: "任务" + itoa(i)}
-	}
-	if lines := strings.Split(logText(deviceTimeline(session, tasks)), "\n"); len(lines) != 250 {
-		t.Fatalf("log text has %d lines, want 250", len(lines))
-	}
-}
-
 func TestLogPageHasAnEmptyState(t *testing.T) {
-	vm := newTestViewModel(t)
-	vm.DetailTab = detailLog
-	vm.OpenDevice(vm.Manager.Profiles()[0].ID)
-	tt := ui.NewTester(vm.ContentView, 900, 700)
-	if !tt.HasText("暂无通道日志与任务") {
-		t.Fatalf("no empty state on the log page; texts = %v", tt.Texts())
-	}
-}
-
-func TestLogPageKeepsBuffersSeparatePerDevice(t *testing.T) {
-	vm := newTestViewModel(t)
-	first := vm.Manager.Profiles()[0]
-	secondID, err := vm.Manager.SaveDevice(core.SaveDeviceRequest{Name: "第二台", Address: testAddress, RemotePort: 5555})
-	if err != nil {
-		t.Fatalf("SaveDevice() error: %v", err)
-	}
-	vm.logPageText(first.ID, core.Session{Logs: []core.SessionLog{{Text: "第一台的日志"}}})
-	vm.logPageText(secondID, core.Session{Logs: []core.SessionLog{{Text: "第二台的日志"}}})
-	if got := vm.logState(first.ID).text; strings.Contains(got, "第二台") {
-		t.Fatalf("device A's buffer holds device B's lines: %q", got)
-	}
-	if got := vm.logState(secondID).text; strings.Contains(got, "第一台") {
-		t.Fatalf("device B's buffer holds device A's lines: %q", got)
-	}
-}
-
-func TestLogPageStopsFollowingAfterScrollUp(t *testing.T) {
-	vm := newTestViewModel(t)
-	id := vm.Manager.Profiles()[0].ID
-	// 第一次刷新：空缓冲必须跟到尾部，这里先把内容与"在尾部"的状态建好。
-	vm.logPageText(id, core.Session{Logs: []core.SessionLog{{Text: "第一行"}}})
-	state := vm.logState(id)
-	if !state.follow {
-		t.Fatal("the first refresh must follow the tail")
-	}
-	state.scroll.Y, state.scroll.MaxY = 0, 400
-	vm.logPageText(id, core.Session{Logs: []core.SessionLog{{Text: "新的一行"}}})
-	if state.follow {
-		t.Fatal("scrolling up must stop the log page from following the tail")
-	}
-	state.scroll.Y = 396
-	vm.logPageText(id, core.Session{Logs: []core.SessionLog{{Text: "又一行"}}})
-	if !state.follow {
-		t.Fatal("scrolling back to the bottom must resume following")
-	}
+	vm, reader, _ := deviceLogFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	waitForText(t, tt, "这段时间没有日志")
 }
 
 func TestLogPageCancelsTheRunningTask(t *testing.T) {
@@ -147,77 +71,31 @@ func TestRunningTasksFiltersByDeviceAndState(t *testing.T) {
 	}
 }
 
-func TestLogPagePausesWhileReadingUp(t *testing.T) {
-	vm := newTestViewModel(t)
-	profile := vm.Manager.Profiles()[0]
-	base := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
-	session := core.Session{}
-	for i := 0; i < 200; i++ {
-		session.Logs = append(session.Logs, core.SessionLog{At: base.Add(time.Duration(i) * time.Second), Text: "第" + itoa(i) + "行"})
-	}
-	// The page runs against this snapshot on every frame, the way the device
-	// page passes the manager's session.
-	tt := ui.NewTester(func(c *ui.Context) { vm.logPage(c, profile, session) }, 900, 700)
-	tt.Frame()
-	state := vm.logState(profile.ID)
-	if state.scroll.MaxY == 0 {
-		t.Fatal("the log page does not scroll")
-	}
-
-	state.scroll.Y = 0
-	tt.Frame()
-	if state.follow {
-		t.Fatal("scrolling up must stop following")
-	}
-	session.Logs = append(session.Logs, core.SessionLog{At: base.Add(time.Hour), Text: "新的一行"})
-	tt.Frame()
-	// Rewriting the buffer moves the caret to the tail and drags the view
-	// with it, so a paused page must not touch the text at all.
-	if strings.Contains(state.text, "新的一行") {
-		t.Fatal("a paused log page rewrote the text under the reader")
-	}
-	if state.scroll.Y > 1 {
-		t.Fatalf("the view jumped to y=%.0f while the reader was scrolled up", state.scroll.Y)
-	}
-
-	state.scroll.Y = math.MaxFloat32
-	tt.Frame()
-	if !strings.Contains(state.text, "新的一行") {
-		t.Fatalf("returning to the tail did not catch up: %q", state.text)
-	}
-}
-
 func TestLogPageEndsAboveThePageEdge(t *testing.T) {
-	vm, _ := newRunnerViewModel(t, func(c core.Command) (core.Result, error) {
-		if strings.Contains(strings.Join(c.Args, " "), "get-state") {
-			return core.Result{Output: "device\n"}, nil
-		}
-		return core.Result{}, nil
-	})
-	t.Cleanup(func() { vm.Manager.Shutdown(context.Background()) })
+	vm, reader, base := deviceLogFixture(t)
 	profile := vm.Manager.Profiles()[0]
-	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
-		t.Fatalf("Connect() error: %v", err)
-	}
-	state := vm.logState(profile.ID)
-	state.text = ""
-	var lines []logLine
-	base := time.Now()
+	var rows []core.TimelineEntry
 	for i := 0; i < 80; i++ {
-		lines = append(lines, logLine{At: base.Add(time.Duration(i) * time.Second), Text: "第" + itoa(i) + "行日志"})
+		rows = append(rows, core.TimelineEntry{
+			At: base.Add(time.Duration(-i) * time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+			DeviceID: profile.ID, DeviceName: "E245", Text: "第" + itoa(i) + "行日志",
+		})
 	}
-	state.buffer.Set(logText(lines))
-	vm.DetailTab = detailLog
-	vm.OpenDevice(profile.ID)
+	reader.add(rows...)
 
 	const window = 700
 	tt := ui.NewTester(vm.ContentView, 900, window)
-	rect, ok := tt.Find("通道日志与任务内容")
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	waitForText(t, tt, "第0行日志")
+	// The footer row is the last thing the tab draws; the page's bottom
+	// padding has to stay clear of the window edge.
+	rect, ok := tt.Find("清空日志…")
 	if !ok {
-		t.Fatalf("no log text area; texts = %v", tt.Texts())
+		t.Fatalf("no footer row; texts = %v", tt.Texts())
 	}
-	if bottom := rect.Y + rect.H; bottom > window-20 {
-		t.Fatalf("the log area ends at %v, past the page's bottom padding", bottom)
+	if bottom := rect.Y + rect.H; bottom > window-10 {
+		t.Fatalf("the log tab ends at %v, past the page's bottom padding", bottom)
 	}
 }
 
@@ -618,4 +496,136 @@ func TestClearFailureIsShownInTheDialog(t *testing.T) {
 		t.Fatalf("Click(确认清空) error: %v", err)
 	}
 	waitForText(t, tt, "历史库已关闭")
+}
+
+// deviceLogFixture is a view model on one device's 日志 tab with a fake reader.
+func deviceLogFixture(t *testing.T) (*ViewModel, *fakeLogReader, time.Time) {
+	t.Helper()
+	vm := newTestViewModel(t)
+	reader := &fakeLogReader{outputs: map[uuid.UUID]string{}}
+	vm.History = reader
+	vm.DetailTab = detailLog
+	vm.OpenDevice(vm.Manager.Profiles()[0].ID)
+	return vm, reader, time.Now()
+}
+
+func TestDeviceLogTabQueriesOnlyThatDevice(t *testing.T) {
+	vm, reader, base := deviceLogFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	otherID, err := vm.Manager.SaveDevice(core.SaveDeviceRequest{Name: "第二台", Address: testAddress, RemotePort: 5555})
+	if err != nil {
+		t.Fatalf("SaveDevice() error: %v", err)
+	}
+	reader.add(
+		core.TimelineEntry{At: base.Add(-time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+			DeviceID: profile.ID, DeviceName: "E245", Text: "第一台的日志"},
+		core.TimelineEntry{At: base.Add(-2 * time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+			DeviceID: otherID, DeviceName: "第二台", Text: "第二台的日志"},
+		core.TimelineEntry{At: base.Add(-3 * time.Minute), Level: core.LogError, Source: core.LogApp,
+			Text: "应用级错误"},
+	)
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	query := waitForQuery(t, reader, 1)
+	if query.DeviceID == nil {
+		t.Fatal("the device tab queried every device; it must pass its own id")
+	}
+	if *query.DeviceID != profile.ID {
+		t.Fatalf("the device tab queried %v, want %v", *query.DeviceID, profile.ID)
+	}
+	waitForText(t, tt, "第一台的日志")
+	if tt.HasText("第二台的日志") {
+		t.Fatalf("another device's line leaked into this tab; texts = %v", tt.Texts())
+	}
+	if tt.HasText("应用级错误") {
+		t.Fatalf("an app line leaked into the device tab; texts = %v", tt.Texts())
+	}
+
+	// Each device keeps its own filter: opening the second one is not the
+	// first one's query.
+	vm.DetailTab = detailLog
+	vm.OpenDevice(otherID)
+	tt.Frame()
+	second := waitForQuery(t, reader, 2)
+	if second.DeviceID == nil || *second.DeviceID != otherID {
+		t.Fatalf("the second device queried %v, want %v", second.DeviceID, otherID)
+	}
+	waitForText(t, tt, "第二台的日志")
+}
+
+func TestDeviceLogTabHidesTheDevicePicker(t *testing.T) {
+	vm, reader, base := deviceLogFixture(t)
+	reader.add(core.TimelineEntry{At: base.Add(-time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+		DeviceID: vm.Manager.Profiles()[0].ID, DeviceName: "E245", Text: "第一台的日志"})
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	waitForText(t, tt, "第一台的日志")
+	if tt.HasText("全部设备与应用") || tt.HasText("只看应用") {
+		t.Fatalf("the device tab shows the device picker; texts = %v", tt.Texts())
+	}
+}
+
+func TestLogPageAndDeviceTabShareTheSameRows(t *testing.T) {
+	vm, reader, base := deviceLogFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	reader.add(
+		core.TimelineEntry{At: base.Add(-time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+			DeviceID: profile.ID, DeviceName: "E245", Text: "通道已就绪"},
+		core.TimelineEntry{At: base.Add(-2 * time.Minute), Level: core.LogInfo, Source: core.LogTask,
+			DeviceID: profile.ID, DeviceName: "E245", TaskID: uuid.New(), Text: "adb pull · 失败"},
+	)
+	tab := ui.NewTester(vm.ContentView, 1100, 760)
+	tab.Frame()
+	waitForQuery(t, reader, 1)
+	waitForText(t, tab, "adb pull · 失败")
+	tabTexts := tab.Texts()
+
+	vm.OpenLogs()
+	vm.pageLogFilter().Device = &profile.ID
+	page := ui.NewTester(vm.ContentView, 1100, 760)
+	page.Frame()
+	waitForQuery(t, reader, 2)
+	waitForText(t, page, "adb pull · 失败")
+	for _, want := range []string{"通道已就绪", "adb pull · 失败"} {
+		if !containsText(tabTexts, want) {
+			t.Fatalf("the tab lost %q: %v", want, tabTexts)
+		}
+		if !page.HasText(want) {
+			t.Fatalf("the page shows different rows for the same filter; missing %q", want)
+		}
+	}
+}
+
+func containsText(texts []string, want string) bool {
+	for _, text := range texts {
+		if text == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDeviceLogTabKeepsFollowTheTail(t *testing.T) {
+	vm, reader, base := deviceLogFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	reader.add(core.TimelineEntry{At: base.Add(-time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+		DeviceID: profile.ID, DeviceName: "E245", Text: "第一行"})
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	tt.Frame()
+
+	filter := vm.logFilterFor(profile.ID)
+	if !filter.Follow {
+		t.Fatal("the device tab must follow the newest line by default")
+	}
+	reader.add(core.TimelineEntry{At: base.Add(time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+		DeviceID: profile.ID, DeviceName: "E245", Text: "又一行"})
+	vm.followLogs(filter)
+	tt.Frame()
+	waitForText(t, tt, "又一行")
+	if first, _ := filter.table.List.Visible(); first != 0 {
+		t.Fatalf("the followed tab starts at row %d, want the newest row", first)
+	}
 }

@@ -97,28 +97,22 @@ func TestDetailRows(t *testing.T) {
 }
 
 func TestLogPageShowsFinishedTasks(t *testing.T) {
-	vm := newTestViewModel(t)
+	vm, reader, base := deviceLogFixture(t)
 	profile := vm.Manager.Profiles()[0]
-	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
-		t.Fatalf("Connect() error: %v", err)
-	}
-	defer vm.Manager.Disconnect(context.Background(), profile.ID)
-	taskID, err := vm.Manager.BeginADBTask(context.Background(), profile.ID, "上传 a", []string{"push", "/tmp/a", "/sdcard/a"}, time.Minute)
-	if err != nil {
-		t.Fatalf("BeginADBTask() error: %v", err)
-	}
-	vm.Manager.WaitTask(taskID)
-	vm.DetailTab = detailLog
-	vm.OpenDevice(profile.ID)
-	tt := ui.NewTester(vm.ContentView, 900, 700)
+	// Tasks reach the tab through history now, so the fake answers with the
+	// row the store would have written.
+	reader.add(core.TimelineEntry{
+		At: base.Add(-time.Minute), Level: core.LogInfo, Source: core.LogTask,
+		DeviceID: profile.ID, DeviceName: "E245", TaskID: uuid.New(),
+		Text: "上传 a · 已完成",
+	})
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
 	if !tt.HasText("通道日志与任务") {
-		t.Fatalf("the log page is missing: %v", tt.Texts())
+		t.Fatalf("the log tab is missing: %v", tt.Texts())
 	}
-	// The task line lives inside the read-only text area, which the tester
-	// does not list as labels, so assert on the buffer the page wrote.
-	if got := vm.logState(profile.ID).text; !strings.Contains(got, "上传 a · 已完成") {
-		t.Fatalf("the log page lost the task: %q", got)
-	}
+	waitForText(t, tt, "上传 a · 已完成")
 }
 
 func TestReachabilityTableRows(t *testing.T) {
