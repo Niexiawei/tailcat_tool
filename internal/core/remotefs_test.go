@@ -120,7 +120,7 @@ func TestRemoteListScriptQuotesAPathWithAQuote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(script, `cd '/sdcard/John'\''s' || exit 9`) {
+	if !strings.Contains(script, `cd '/sdcard/John'\''s' 2>&1 || exit 9`) {
 		t.Fatalf("script = %q", script)
 	}
 	for _, want := range []string{"stat -c '%F|%s|%a|%A|%Y|%n'", "exit 0", truncationMarker} {

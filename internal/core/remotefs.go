@@ -161,7 +161,9 @@ func remoteListScript(dir string) (string, error) {
 	// the string early, so it is escaped the way POSIX shells expect.
 	quoted := strings.ReplaceAll(dir, "'", `'\''`)
 	limit := strconv.Itoa(maxRemoteDirEntries)
-	return "cd '" + quoted + "' || exit 9\n" +
+	// 2>&1 sends the shell's own complaint about cd into the output, so the
+	// page can say why a folder is unreachable instead of guessing.
+	return "cd '" + quoted + "' 2>&1 || exit 9\n" +
 		"n=0\n" +
 		"for f in ./* ./.[!.]* ; do\n" +
 		"  [ -e \"$f\" ] || [ -L \"$f\" ] || continue\n" +

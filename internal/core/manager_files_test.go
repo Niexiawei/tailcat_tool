@@ -210,3 +210,24 @@ func TestListRemoteDirTimeoutSaysWhatHappened(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// TestListRemoteDirExplainsAMissingPermission turns the shell's own words into
+// what the user actually needs: which folder, and why. /cache on Android is the
+// everyday example — it belongs to root, not to the shell user.
+func TestListRemoteDirExplainsAMissingPermission(t *testing.T) {
+	f := newManagerFixture(t)
+	f.runner.setHandler(func(_ context.Context, c Command) (Result, error) {
+		if contains(c.Args, "get-state") {
+			return Result{Output: "device\n"}, nil
+		}
+		return Result{ExitCode: 9, Output: "/system/bin/sh: cd: /cache: Permission denied\n"}, nil
+	})
+	if err := f.m.Connect(context.Background(), f.id); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+
+	_, err := f.m.ListRemoteDir(context.Background(), f.id, "/cache")
+	if err == nil || err.Error() != "没有权限查看该文件夹：/cache" {
+		t.Fatalf("error = %v", err)
+	}
+}

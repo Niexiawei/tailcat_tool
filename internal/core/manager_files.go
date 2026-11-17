@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,10 +50,10 @@ func (m *Manager) ListRemoteDir(ctx context.Context, id uuid.UUID, dir string) (
 	if res.TimedOut {
 		return DirListing{}, Error("读取目录超时，请重试")
 	}
-	// 9 is the script's own code for "cd failed", which is the one failure the
-	// user can act on.
+	// 9 is the script's own code for "cd failed"; the shell's message for it
+	// is in the output, because that is the one failure the user can act on.
 	if res.ExitCode == 9 {
-		return DirListing{}, Error("目录不存在或不可读：" + dir)
+		return DirListing{}, directoryError(dir, res.Output)
 	}
 	if err := res.RequireSuccess(); err != nil {
 		return DirListing{}, sanitizeError(err)
@@ -77,6 +78,23 @@ func (m *Manager) DirListing(id uuid.UUID, dir string) (DirListing, bool) {
 	defer m.mu.Unlock()
 	listing, ok := m.dirListings[dirKey{device: id, path: dir}]
 	return listing, ok
+}
+
+// directoryError turns the shell's complaint into a sentence that names what
+// the user can do about it. "Permission denied" is the common case on Android:
+// /cache and most of /data belong to root, not to the shell user.
+func directoryError(dir, output string) error {
+	detail := strings.TrimSpace(Redact(output, ""))
+	switch {
+	case detail == "":
+		return Error("目录不存在或不可读：" + dir)
+	case strings.Contains(detail, "Permission denied"):
+		return Error("没有权限查看该文件夹：" + dir)
+	case strings.Contains(detail, "No such file"):
+		return Error("目录不存在：" + dir)
+	default:
+		return Error(detail)
+	}
 }
 
 // forgetDirListingsLocked drops every cached directory of one device. m.mu must
