@@ -128,6 +128,7 @@ func TestResourcePageStopsPollingWhenTheTabCloses(t *testing.T) {
 type stubAppMeta struct {
 	mu        sync.Mutex
 	metas     map[string]core.AppMeta
+	statuses  map[string]core.AppMetaStatus
 	requested []string
 	refreshed []string
 }
@@ -149,6 +150,34 @@ func (s *stubAppMeta) Refresh(_, _, _ string, pkgs []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.refreshed = append(s.refreshed, pkgs...)
+}
+
+func (s *stubAppMeta) Status(_, pkg string) (core.AppMetaStatus, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	status, ok := s.statuses[pkg]
+	return status, ok
+}
+
+func (s *stubAppMeta) Forget(string) {}
+
+func containsString(list []string, want string) bool {
+	for _, item := range list {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+// setStatus publishes what the store would answer for one package.
+func (s *stubAppMeta) setStatus(pkg string, status core.AppMetaStatus) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.statuses == nil {
+		s.statuses = map[string]core.AppMetaStatus{}
+	}
+	s.statuses[pkg] = status
 }
 
 func (s *stubAppMeta) refreshedPackages() []string {
@@ -249,8 +278,105 @@ func TestResourceToolbarRefreshAsksManagerToRefresh(t *testing.T) {
 		t.Fatal("the refresh button queued nothing")
 	}
 	profile := vm.Manager.Profiles()[0]
-	if !vm.resourceStateFor(profile.ID).refreshing {
+	if len(vm.resourceStateFor(profile.ID).batch) == 0 {
 		t.Fatal("the page does not show that a refresh is running")
+	}
+}
+
+// settledStatus is a terminal status reached after a batch started, which is
+// what tells the toolbar that this package is done.
+func settledStatus() core.AppMetaStatus {
+	return core.AppMetaStatus{State: core.AppMetaReady, At: time.Now().Add(time.Minute)}
+}
+
+func TestRefreshSaysHowManyAreDone(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if err := tt.Click("刷新应用信息"); err != nil {
+		t.Fatalf("clicking the refresh button: %v", err)
+	}
+
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if !tt.HasText("正在读取应用信息 0/2") {
+		t.Fatalf("the toolbar does not say how far the refresh got; texts = %v", tt.Texts())
+	}
+
+	meta.setStatus("com.foo", settledStatus())
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if !tt.HasText("正在读取应用信息 1/2") {
+		t.Fatalf("one settled application did not move the count; texts = %v", tt.Texts())
+	}
+}
+
+func TestRefreshProgressEndsWhenEveryRowIsSettled(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if err := tt.Click("刷新应用信息"); err != nil {
+		t.Fatalf("clicking the refresh button: %v", err)
+	}
+
+	meta.setStatus("com.foo", settledStatus())
+	meta.setStatus("system_server", core.AppMetaStatus{
+		State:  core.AppMetaFailed,
+		Reason: core.ReasonNoAppPackage,
+		Final:  true,
+		At:     time.Now().Add(time.Minute),
+	})
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+
+	if tt.HasText("正在读取应用信息 1/2") || tt.HasText("正在读取应用信息 2/2") {
+		t.Fatalf("a finished refresh still reports progress; texts = %v", tt.Texts())
+	}
+}
+
+func TestRefreshCountsOnlyThePackagesItWillRead(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	meta.setStatus("system_server", core.AppMetaStatus{
+		State:  core.AppMetaFailed,
+		Reason: core.ReasonNoAppPackage,
+		Final:  true,
+	})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if err := tt.Click("刷新应用信息"); err != nil {
+		t.Fatalf("clicking the refresh button: %v", err)
+	}
+
+	// Only com.foo will be read, so the progress must not wait for the process
+	// that has no APK to settle.
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if !tt.HasText("正在读取应用信息 0/1") {
+		t.Fatalf("the progress counts rows that will never be read; texts = %v", tt.Texts())
+	}
+
+	meta.setStatus("com.foo", settledStatus())
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if tt.HasText("正在读取应用信息") {
+		t.Fatalf("the refresh never finished; texts = %v", tt.Texts())
+	}
+}
+
+func TestRefreshDoesNotAskAboutProcessesWithNoAppPackage(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	meta.setStatus("system_server", core.AppMetaStatus{
+		State:  core.AppMetaFailed,
+		Reason: core.ReasonNoAppPackage,
+		Final:  true,
+	})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if err := tt.Click("刷新应用信息"); err != nil {
+		t.Fatalf("clicking the refresh button: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(meta.refreshedPackages()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	refreshed := meta.refreshedPackages()
+	if containsString(refreshed, "system_server") {
+		t.Fatalf("refreshed = %v; a process with no APK was asked again", refreshed)
+	}
+	if !containsString(refreshed, "com.foo") {
+		t.Fatalf("refreshed = %v; the real application was skipped too", refreshed)
 	}
 }
 
@@ -263,6 +389,85 @@ func TestResourceToolbarRefreshNeedsAConnection(t *testing.T) {
 	tt := ui.NewTester(vm.ContentView, 900, 900)
 	if err := tt.Click("刷新应用信息"); err == nil {
 		t.Fatal("an offline page offered the refresh button")
+	}
+}
+
+func TestResourceViewSwitchesBetweenAppsAndProcesses(t *testing.T) {
+	vm, _ := resourceFixture(t)
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	// The application view groups: one row per application, processes hidden
+	// until the group is opened.
+	if !tt.HasText("2 个进程") {
+		t.Fatalf("the application view does not group; texts = %v", tt.Texts())
+	}
+	if tt.HasText("PID 100") {
+		t.Fatal("the application view lists processes before the group is opened")
+	}
+
+	if err := tt.Click("进程"); err != nil {
+		t.Fatalf("no 进程 segment; texts = %v", tt.Texts())
+	}
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+
+	if tt.HasText("2 个进程") {
+		t.Fatalf("the process view still groups by application; texts = %v", tt.Texts())
+	}
+	for _, want := range []string{"PID 100", "PID 101", "PID 200"} {
+		if !tt.HasText(want) {
+			t.Fatalf("the process view is missing %q; texts = %v", want, tt.Texts())
+		}
+	}
+
+	if err := tt.Click("应用"); err != nil {
+		t.Fatalf("no 应用 segment; texts = %v", tt.Texts())
+	}
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if !tt.HasText("2 个进程") {
+		t.Fatalf("switching back did not restore the grouped view; texts = %v", tt.Texts())
+	}
+}
+
+func TestProcessViewListsEveryProcessOnce(t *testing.T) {
+	vm, _ := resourceFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	vm.resourceStateFor(profile.ID).view = resourceViewProcesses
+
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	count := func(want string) int {
+		n := 0
+		for _, text := range tt.Texts() {
+			if text == want {
+				n++
+			}
+		}
+		return n
+	}
+	for _, pid := range []string{"PID 100", "PID 101", "PID 200"} {
+		if got := count(pid); got != 1 {
+			t.Fatalf("%q appears %d times in the process view, want once; texts = %v", pid, got, tt.Texts())
+		}
+	}
+	// The application each process belongs to is still readable.
+	if !tt.HasText("com.foo") {
+		t.Fatalf("the process view does not say which application a process belongs to; texts = %v", tt.Texts())
+	}
+}
+
+func TestResourceProcessViewHasItsOwnTable(t *testing.T) {
+	vm, _ := resourceFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if _, ok := tt.Find("按应用分组的进程表"); !ok {
+		t.Fatalf("the application view has no grouped table; texts = %v", tt.Texts())
+	}
+
+	vm.resourceStateFor(profile.ID).view = resourceViewProcesses
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if _, ok := tt.Find("按进程列出的进程表"); !ok {
+		t.Fatalf("the process view has no table of its own; texts = %v", tt.Texts())
+	}
+	if _, ok := tt.Find("按应用分组的进程表"); ok {
+		t.Fatal("the process view reused the application table, so its scroll and columns would carry over")
 	}
 }
 
@@ -465,29 +670,69 @@ func TestProcessTableHidesResolveButtonOnceNamed(t *testing.T) {
 	}
 }
 
-func TestProcessTableShowsASpinnerWhileResolving(t *testing.T) {
-	vm, _ := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
-	count := func(tt *ui.Tester) int {
-		n := 0
-		for _, text := range tt.Texts() {
-			if text == "解析应用信息" {
-				n++
-			}
-		}
-		return n
-	}
+func TestRowShowsSpinnerWhileTheReadIsPending(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	meta.setStatus("com.foo", core.AppMetaStatus{State: core.AppMetaPending})
 
 	tt := ui.NewTester(vm.ContentView, 900, 900)
-	before := count(tt)
-	if before == 0 {
-		t.Fatalf("no row offers to resolve itself; texts = %v", tt.Texts())
+	if _, ok := tt.Find("正在读取应用信息"); !ok {
+		t.Fatalf("a pending read shows no spinner; texts = %v", tt.Texts())
 	}
-	if err := tt.Click("解析应用信息"); err != nil {
-		t.Fatalf("clicking the row button: %v", err)
+}
+
+func TestResolvingSpinnerEndsWhenTheReadFails(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	meta.setStatus("com.foo", core.AppMetaStatus{State: core.AppMetaPending})
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if _, ok := tt.Find("正在读取应用信息"); !ok {
+		t.Fatalf("no spinner to start with; texts = %v", tt.Texts())
 	}
 
+	// The device has no APK for this process, so the read ends without a name.
+	// The row must say so instead of waiting out a two-minute timer.
+	meta.setStatus("com.foo", core.AppMetaStatus{
+		State:  core.AppMetaFailed,
+		Reason: core.ReasonNoAppPackage,
+		Final:  true,
+	})
 	tt = ui.NewTester(vm.ContentView, 900, 900)
-	if after := count(tt); after != before-1 {
-		t.Fatalf("resolve buttons %d → %d; the clicked row should show a spinner instead", before, after)
+
+	if _, ok := tt.Find("正在读取应用信息"); ok {
+		t.Fatalf("the row still spins after the read failed; texts = %v", tt.Texts())
+	}
+	if !tt.HasText(core.LabelNoAppPackage) {
+		t.Fatalf("the failed row does not say why; texts = %v", tt.Texts())
+	}
+	if tt.HasText("重试读取应用信息") {
+		t.Fatal("a settled \"no APK\" answer still offers a retry that cannot work")
+	}
+}
+
+func TestRowOffersRetryAfterATransientFailure(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+	meta.setStatus("com.foo", core.AppMetaStatus{State: core.AppMetaFailed, Reason: core.ReasonAPKUnreadable})
+
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if !tt.HasText(core.LabelReadFailed) {
+		t.Fatalf("a failed read says nothing; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("重试读取应用信息"); err != nil {
+		t.Fatalf("no retry button on a transient failure; texts = %v", tt.Texts())
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !containsString(meta.refreshedPackages(), "com.foo") && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !containsString(meta.refreshedPackages(), "com.foo") {
+		t.Fatalf("the retry button queued %v", meta.refreshedPackages())
+	}
+}
+
+func TestRowStillOffersResolveWhenNothingIsKnown(t *testing.T) {
+	vm, _ := resourceFixtureWithMeta(t, map[string]core.AppMeta{})
+
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	if !tt.HasText("解析应用信息") {
+		t.Fatalf("a row nobody asked about lost its button; texts = %v", tt.Texts())
 	}
 }

@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"math"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
@@ -16,19 +18,20 @@ import (
 // resourceState is the resource page's own state, kept per device so switching
 // devices does not carry an expanded group across.
 type resourceState struct {
-	table    components.TableState
-	expanded map[string]bool
-	scroll   ui.ScrollState
-	// resolving remembers which applications the user asked to read, so the
-	// row can show a spinner until the name arrives.
-	resolving map[string]time.Time
-	// refreshing is set while a manual refresh runs, so the button cannot be
-	// pressed twice and the user sees why nothing changed yet.
-	refreshing bool
-	// refreshAt and refreshSeen are what tells the page a refresh finished:
-	// a newer reading, or a different number of named applications.
-	refreshAt   time.Time
-	refreshSeen int
+	// view is which of the two tables the page shows; each keeps its own table
+	// state so columns and scroll do not carry over.
+	view           int
+	tableApps      components.TableState
+	tableProcesses components.TableState
+	expanded       map[string]bool
+	// batch is what a manual refresh is reading, and batchAt is when it
+	// started: a package counts as done once its status changed after that, so
+	// the toolbar can say how far along it is instead of guessing from a timer.
+	batch   []string
+	batchAt time.Time
+	// filter narrows both tables: one box serves the application view and the
+	// process view, so switching views does not lose the question.
+	filter string
 }
 
 // resourceStateFor returns one device's page state, creating it on first use.
@@ -38,7 +41,7 @@ func (vm *ViewModel) resourceStateFor(device uuid.UUID) *resourceState {
 	}
 	state, ok := vm.resources[device]
 	if !ok {
-		state = &resourceState{expanded: map[string]bool{}, resolving: map[string]time.Time{}}
+		state = &resourceState{expanded: map[string]bool{}}
 		vm.resources[device] = state
 	}
 	return state
@@ -238,9 +241,13 @@ func memoryText(memory core.MemorySample) string {
 
 // processSection is the toolbar plus the grouped process table.
 func (vm *ViewModel) processSection(c *ui.Context, state *resourceState, profile core.Profile, session core.Session, snapshot core.ResourceSnapshot) {
-	vm.settleRefresh(state, snapshot)
+	vm.settleRefresh(state, profile.ID)
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(6).Children(func() {
 		vm.tableToolbar(c, state, profile, session, snapshot)
+		if state.view == resourceViewProcesses {
+			vm.processList(c, state, snapshot)
+			return
+		}
 		vm.processTable(c, state, profile.ID, snapshot)
 	})
 }
@@ -249,70 +256,114 @@ func (vm *ViewModel) processSection(c *ui.Context, state *resourceState, profile
 // user can force the names and icons to be read again.
 func (vm *ViewModel) tableToolbar(c *ui.Context, state *resourceState, profile core.Profile, session core.Session, snapshot core.ResourceSnapshot) {
 	theme := c.Theme()
-	processes := 0
-	for _, app := range snapshot.Apps {
-		processes += len(app.Processes)
-	}
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		components.Text(c, "按应用分组").FontSize(13).Bold()
-		components.Text(c, itoa(len(snapshot.Apps))+" 个应用 · "+itoa(processes)+" 个进程").
-			FontSize(11).TextColor(theme.TextMuted)
-		ui.Box(c).Grow(1)
-		if state.refreshing {
-			components.Text(c, "正在刷新应用信息…").FontSize(11).TextColor(theme.TextMuted)
-		}
-		button := components.IconButton(c, lucide.RefreshCw(), "刷新应用信息", components.IconButtonCompact).
-			Disabled(state.refreshing || session.State != core.StateOnline)
-		if !button.Clicked() {
-			return
-		}
-		state.refreshing = true
-		state.refreshAt = snapshot.At
-		state.refreshSeen = namedApps(snapshot)
-		go func() { vm.Fail(vm.Manager.RefreshAppMeta(context.Background(), profile.ID)) }()
-		c.Invalidate()
+	apps, processes := viewCounts(state, snapshot)
+	ui.Column(c).FillWidth().Gap(4).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			components.Tabs(c, &state.view, components.TabsSegmented, "应用", "进程")
+			components.TextBox(c, &state.filter, components.TextBoxOptions{LeadingIcon: lucide.Search()}).
+				Placeholder("筛选应用或进程").
+				Label("筛选应用或进程").
+				Width(200)
+			ui.Box(c).Grow(1)
+			if done, total := vm.batchProgress(state, profile.ID); total > 0 {
+				components.Text(c, "正在读取应用信息 "+itoa(done)+"/"+itoa(total)).
+					FontSize(11).TextColor(theme.TextMuted)
+			}
+			button := components.IconButton(c, lucide.RefreshCw(), "刷新应用信息", components.IconButtonCompact).
+				Disabled(len(state.batch) > 0 || session.State != core.StateOnline)
+			if !button.Clicked() {
+				return
+			}
+			// The page reports progress over exactly what will be read, which
+			// is the manager's answer and not the row count: processes with no
+			// APK are skipped and would otherwise keep the button busy.
+			targets := vm.Manager.RefreshTargets(profile.ID)
+			if len(targets) == 0 {
+				vm.Manager.SetNotice("列表里没有可读取的应用包")
+				return
+			}
+			state.batch = targets
+			state.batchAt = time.Now()
+			go func() { vm.Fail(vm.Manager.RefreshAppMeta(context.Background(), profile.ID)) }()
+			c.Invalidate()
+		})
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			title, counts := "按应用分组", itoa(apps)+" 个应用 · "+itoa(processes)+" 个进程"
+			if state.view == resourceViewProcesses {
+				title, counts = "按进程列出", itoa(processes)+" 个进程 · "+itoa(apps)+" 个应用"
+			}
+			components.Text(c, title).FontSize(13).Bold()
+			components.Text(c, counts).FontSize(11).TextColor(theme.TextMuted)
+		})
 	})
 }
 
-// settleRefresh ends the "refreshing" state once a newer reading arrived or the
-// number of named applications changed. Waiting for every application would
-// never end: system binaries have no APK to read.
-func (vm *ViewModel) settleRefresh(state *resourceState, snapshot core.ResourceSnapshot) {
-	if !state.refreshing {
+// settleRefresh ends the refresh once every package it asked about has settled.
+// The 90-second guard is the only timer left on this page, and it exists for the
+// one case the statuses cannot cover: a read that never reports back at all.
+func (vm *ViewModel) settleRefresh(state *resourceState, device uuid.UUID) {
+	if len(state.batch) == 0 {
 		return
 	}
-	if namedApps(snapshot) != state.refreshSeen || snapshot.At.After(state.refreshAt) || time.Since(state.refreshAt) > 30*time.Second {
-		state.refreshing = false
+	if done, total := vm.batchProgress(state, device); done >= total || time.Since(state.batchAt) > batchGiveUpAfter {
+		state.batch = nil
 	}
 }
 
-func namedApps(snapshot core.ResourceSnapshot) int {
-	named := 0
-	for _, app := range snapshot.Apps {
-		if app.Label != "" {
-			named++
+// batchProgress counts the packages of a running refresh that reached a
+// terminal state after it started.
+func (vm *ViewModel) batchProgress(state *resourceState, device uuid.UUID) (done, total int) {
+	for _, pkg := range state.batch {
+		total++
+		status, known := vm.Manager.AppMetaStatus(device, pkg)
+		if !known || status.State == core.AppMetaPending || status.State == core.AppMetaUnknown {
+			continue
 		}
+		if status.At.Before(state.batchAt) {
+			continue
+		}
+		done++
 	}
-	return named
+	return done, total
 }
+
+// batchGiveUpAfter is how long a refresh may keep the toolbar busy without
+// progress. It never hides a row's own state; it only re-enables one button.
+const batchGiveUpAfter = 90 * time.Second
 
 // processTable lists one row per application and, when the user expands it, its
-// processes underneath.
+// processes underneath. While a query is active the groups are open: what the
+// user is looking for is a process inside one of them.
 func (vm *ViewModel) processTable(c *ui.Context, state *resourceState, device uuid.UUID, snapshot core.ResourceSnapshot) {
+	filtering := filtering(state)
+	kept := filterApps(snapshot.Apps, state.filter)
 	components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).MinHeight(0).Label("按应用分组的进程表").Children(func() {
-		components.Table(c, &state.table, processColumns(), func() {
-			for _, app := range snapshot.Apps {
+		if filtering && len(kept) == 0 {
+			vm.noFilterMatch(c, "没有匹配的应用")
+			return
+		}
+		components.Table(c, &state.tableApps, processColumns(), func() {
+			for _, item := range kept {
+				app := item.app
 				label := appLabel(app)
-				row := components.TableRow(c, app.Package, label, state.expanded[app.Package], func(col int) {
+				// A query opens every group it kept: the row that matched is
+				// a process underneath it, or the whole application the user
+				// asked for.
+				expanded := filtering || state.expanded[app.Package]
+				row := components.TableRow(c, app.Package, label, expanded, func(col int) {
 					vm.appCell(c, col, state, device, app, label)
 				})
 				if row.Clicked() {
 					state.expanded[app.Package] = !state.expanded[app.Package]
 				}
-				if !state.expanded[app.Package] {
+				if !expanded {
 					continue
 				}
-				for _, process := range app.Processes {
+				processes := item.app.Processes
+				if filtering && !item.full {
+					processes = item.processes
+				}
+				for _, process := range processes {
 					components.TableRow(c, app.Package+"#"+itoa(process.PID), "  "+process.Name, false, func(col int) {
 						vm.processCell(c, col, process)
 					})
@@ -320,6 +371,41 @@ func (vm *ViewModel) processTable(c *ui.Context, state *resourceState, device uu
 			}
 		})
 	})
+}
+
+// filtering reports whether the box holds a question, as opposed to blanks the
+// user left behind.
+func filtering(state *resourceState) bool {
+	return strings.TrimSpace(state.filter) != ""
+}
+
+// noFilterMatch explains an empty table instead of leaving the area blank.
+func (vm *ViewModel) noFilterMatch(c *ui.Context, what string) {
+	theme := c.Theme()
+	components.Text(c, what).FontSize(12).TextColor(theme.TextMuted)
+	components.Text(c, "清空筛选即可看到全部").FontSize(11).TextColor(theme.TextMuted)
+}
+
+// viewCounts is what the toolbar says the table holds, after the filter.
+func viewCounts(state *resourceState, snapshot core.ResourceSnapshot) (apps, processes int) {
+	active := filtering(state)
+	if state.view == resourceViewProcesses {
+		seen := map[string]bool{}
+		for _, row := range filterProcessRows(processRows(snapshot), state.filter) {
+			processes++
+			seen[row.pkg] = true
+		}
+		return len(seen), processes
+	}
+	for _, item := range filterApps(snapshot.Apps, state.filter) {
+		apps++
+		if !active || item.full {
+			processes += len(item.app.Processes)
+			continue
+		}
+		processes += len(item.processes)
+	}
+	return apps, processes
 }
 
 // processColumns are the table's columns. The order is fixed: the page sorts by
@@ -344,24 +430,8 @@ func (vm *ViewModel) appCell(c *ui.Context, col int, state *resourceState, devic
 			if app.MetaStale {
 				components.Text(c, "7 天前更新").FontSize(10).TextColor(theme.TextMuted)
 			}
-			// Names and icons cost an APK pull per application, which is slow
-			// over a tailcat channel, so each row offers to read itself, and
-			// says so while it works.
 			if app.Label == "" {
-				if state.resolving[app.Package] != (time.Time{}) {
-					if time.Since(state.resolving[app.Package]) < resolveTimeout {
-						components.Spinner(c, components.SpinnerRing).Width(14).Height(14)
-						return
-					}
-					delete(state.resolving, app.Package)
-				}
-				if components.IconButton(c, lucide.PackageSearch(), "解析应用信息", components.IconButtonCompact).Clicked() {
-					state.resolving[app.Package] = time.Now()
-					go func(pkg string) {
-						vm.Fail(vm.Manager.ResolveAppMeta(context.Background(), device, []string{pkg}))
-					}(app.Package)
-					c.Invalidate()
-				}
+				vm.appMetaAction(c, device, app.Package)
 			}
 		})
 	case 1:
@@ -400,9 +470,43 @@ func appLabel(app core.AppUsage) string {
 	return app.Package
 }
 
-// resolveTimeout stops a spinner that will never end: a read whose result never
-// arrives must not leave the row busy forever.
-const resolveTimeout = 2 * time.Minute
+// appMetaAction is the end of an unnamed row: a spinner while the store says a
+// read is running, the reason it failed, or the button that asks for one. The
+// state comes from the store, never from a timer here: a blind two-minute wait
+// is why a row whose package does not exist looked busy forever.
+func (vm *ViewModel) appMetaAction(c *ui.Context, device uuid.UUID, pkg string) {
+	theme := c.Theme()
+	status, known := vm.Manager.AppMetaStatus(device, pkg)
+	switch {
+	case known && status.State == core.AppMetaPending:
+		components.Spinner(c, components.SpinnerRing).Width(14).Height(14).Label("正在读取应用信息")
+	case known && status.State == core.AppMetaFailed:
+		label := core.LabelReadFailed
+		if status.Final {
+			label = core.LabelNoAppPackage
+		}
+		components.Tooltip(c, components.Text(c, label).FontSize(10).TextColor(theme.TextMuted), status.Reason)
+		if status.Final {
+			// Asking again cannot produce an APK the device does not have.
+			return
+		}
+		if components.IconButton(c, lucide.RefreshCw(), "重试读取应用信息", components.IconButtonCompact).Clicked() {
+			vm.askAppMeta(c, device, pkg)
+		}
+	default:
+		if components.IconButton(c, lucide.PackageSearch(), "解析应用信息", components.IconButtonCompact).Clicked() {
+			vm.askAppMeta(c, device, pkg)
+		}
+	}
+}
+
+// askAppMeta queues one row's read. The call only queues work, so it runs on the
+// render goroutine and the row shows its spinner on the very next frame instead
+// of after the next two-second sampling tick.
+func (vm *ViewModel) askAppMeta(c *ui.Context, device uuid.UUID, pkg string) {
+	vm.Fail(vm.Manager.ResolveAppMeta(context.Background(), device, []string{pkg}))
+	c.Invalidate()
+}
 
 // gpuCellText never prints 0% for a device without GPU counters.
 func gpuCellText(available bool, percent float64) string {
@@ -446,4 +550,86 @@ func (vm *ViewModel) appIcon(device uuid.UUID, pkg string) ui.ImageSource {
 	}
 	vm.appIcons[key] = iconAsset{fetchedAt: fetchedAt, image: image}
 	return image
+}
+
+// processList lists one process per row: the same numbers as the grouped view,
+// without folding them under the application.
+func (vm *ViewModel) processList(c *ui.Context, state *resourceState, snapshot core.ResourceSnapshot) {
+	rows := filterProcessRows(processRows(snapshot), state.filter)
+	components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).MinHeight(0).Label("按进程列出的进程表").Children(func() {
+		if filtering(state) && len(rows) == 0 {
+			vm.noFilterMatch(c, "没有匹配的进程")
+			return
+		}
+		components.Table(c, &state.tableProcesses, processViewColumns(), func() {
+			for _, row := range rows {
+				components.TableRow(c, row.id, row.process.Name, false, func(col int) {
+					vm.processRowCell(c, col, row)
+				})
+			}
+		})
+	})
+}
+
+// processViewColumns keeps the process view's columns apart from the grouped
+// view's: the application moves to the second place and the process to the
+// first, because that is what the rows are about.
+func processViewColumns() []ui.TableColumn {
+	return []ui.TableColumn{
+		{Title: "进程", ID: "proc", MinWidth: 200},
+		{Title: "应用", ID: "app", MinWidth: 160},
+		{Title: "CPU", ID: "cpu", Width: 72, Align: ui.End},
+		{Title: "GPU", ID: "gpu", Width: 72, Align: ui.End},
+		{Title: "内存", ID: "memory", Width: 88, Align: ui.End},
+	}
+}
+
+// processRow is one process with the application it belongs to.
+type processRow struct {
+	id      string
+	process core.ProcessUsage
+	app     string
+	pkg     string
+}
+
+// processRows flattens the grouped reading into one row per process, ordered by
+// CPU so the most expensive process is the first thing the page shows.
+func processRows(snapshot core.ResourceSnapshot) []processRow {
+	rows := make([]processRow, 0, len(snapshot.Apps))
+	for _, app := range snapshot.Apps {
+		for _, process := range app.Processes {
+			rows = append(rows, processRow{
+				id:      app.Package + "#" + itoa(process.PID),
+				process: process,
+				app:     appLabel(app),
+				pkg:     app.Package,
+			})
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].process.CPUPercent != rows[j].process.CPUPercent {
+			return rows[i].process.CPUPercent > rows[j].process.CPUPercent
+		}
+		return rows[i].process.PID < rows[j].process.PID
+	})
+	return rows
+}
+
+func (vm *ViewModel) processRowCell(c *ui.Context, col int, row processRow) {
+	theme := c.Theme()
+	switch col {
+	case 0:
+		ui.Row(c).FillWidth().MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
+			components.Text(c, row.process.Name).FontSize(11).SingleLine()
+			components.Text(c, "PID "+itoa(row.process.PID)).FontSize(10).TextColor(theme.TextMuted)
+		})
+	case 1:
+		components.Text(c, row.app).FontSize(11).TextColor(theme.TextMuted).SingleLine()
+	case 2:
+		components.Text(c, percent1Text(row.process.CPUPercent)).FontSize(11).TextColor(theme.Text)
+	case 3:
+		components.Text(c, gpuCellText(row.process.GPUOk, row.process.GPUPercent)).FontSize(11).TextColor(theme.Text)
+	default:
+		components.Text(c, core.FormatBytes(row.process.MemBytes)).FontSize(11).TextColor(theme.Text)
+	}
 }

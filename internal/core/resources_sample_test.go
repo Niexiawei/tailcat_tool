@@ -281,6 +281,11 @@ type fakeAppMeta struct {
 	metas     map[string]AppMeta
 	requested []string
 	refreshed []string
+	// statuses is what Status answers; anything missing is "never asked".
+	statuses map[string]AppMetaStatus
+	// devices records every device key Status and Forget were called with.
+	statusDevices []string
+	forgotten     []string
 }
 
 func (f *fakeAppMeta) Lookup(device, pkg string) (AppMeta, bool) {
@@ -300,6 +305,42 @@ func (f *fakeAppMeta) Refresh(_, _, _ string, pkgs []string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.refreshed = append(f.refreshed, pkgs...)
+}
+
+func (f *fakeAppMeta) Status(device, pkg string) (AppMetaStatus, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.statusDevices = append(f.statusDevices, device)
+	status, ok := f.statuses[pkg]
+	return status, ok
+}
+
+func (f *fakeAppMeta) Forget(device string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.forgotten = append(f.forgotten, device)
+}
+
+// statusKeys is the device keys Status was called with, deduplicated.
+func (f *fakeAppMeta) statusKeys() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	seen := map[string]bool{}
+	keys := make([]string, 0, len(f.statusDevices))
+	for _, device := range f.statusDevices {
+		if seen[device] {
+			continue
+		}
+		seen[device] = true
+		keys = append(keys, device)
+	}
+	return keys
+}
+
+func (f *fakeAppMeta) forgottenKeys() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.forgotten...)
 }
 
 func TestSampleResourcesUsesAppMetaLabels(t *testing.T) {

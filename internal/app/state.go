@@ -22,6 +22,13 @@ const (
 	detailLog
 )
 
+// The resource page shows the same reading two ways: one row per application
+// (processes fold underneath), or one row per process.
+const (
+	resourceViewApps = iota
+	resourceViewProcesses
+)
+
 // ViewModel is everything the window reads. It owns no manager state of its
 // own: the manager is the single source of truth and the window redraws when
 // it says something changed.

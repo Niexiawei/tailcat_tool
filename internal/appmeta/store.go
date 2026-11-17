@@ -21,11 +21,18 @@ const (
 	// maxIconBytes is the largest icon file it will keep.
 	maxIconBytes = 1 << 20
 
+	// maxWholeAPKPull bounds the fallback that downloads a whole package: past
+	// this size the download costs more than the name is worth, and saying so
+	// beats waiting for a 60-second timeout.
+	maxWholeAPKPull = 64 << 20
+
 	adbMetaTimeout = 10 * time.Second
 	apkPullTimeout = 60 * time.Second
 
-	// failedRetryAfter keeps a package with no readable APK (a system process,
-	// a package the shell cannot see) from being asked about every two seconds.
+	// failedRetryAfter keeps a package whose read failed for a transient reason
+	// (a dropped channel, an unreadable package) from being asked about on every
+	// sampling round. A package the device has no APK for is Final and never
+	// retried by itself.
 	failedRetryAfter = 10 * time.Minute
 )
 
@@ -33,16 +40,18 @@ const (
 // application off the device, reads its name and icon, and keeps them for a
 // week. It implements both core.AppMetaSource and core.AppMetaCache.
 type Store struct {
-	runner  core.FileRunner
-	cache   *cache
-	now     func() time.Time
-	queue   chan job
-	wg      sync.WaitGroup
-	mu      sync.Mutex
-	pending map[string]bool
-	forced  map[string]bool
-	// failed remembers when a package last failed, keyed like pending.
-	failed map[string]time.Time
+	runner core.FileRunner
+	cache  *cache
+	now    func() time.Time
+	// queue carries batches; urgent carries the single package the user just
+	// asked about, so a click never waits behind a full refresh.
+	queue  chan job
+	urgent chan job
+	wg     sync.WaitGroup
+	mu     sync.Mutex
+	// status is the answer to "what is happening to this package": queued,
+	// named, or failed with the reason. It replaces the view's blind timer.
+	status map[string]core.AppMetaStatus
 }
 
 type job struct {
@@ -64,13 +73,12 @@ func New(dir string, runner core.FileRunner, workers int) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{
-		runner:  runner,
-		cache:   c,
-		now:     time.Now,
-		queue:   make(chan job, 512),
-		pending: map[string]bool{},
-		forced:  map[string]bool{},
-		failed:  map[string]time.Time{},
+		runner: runner,
+		cache:  c,
+		now:    time.Now,
+		queue:  make(chan job, 512),
+		urgent: make(chan job, 64),
+		status: map[string]core.AppMetaStatus{},
 	}
 	for i := 0; i < workers; i++ {
 		go s.work()
@@ -81,6 +89,45 @@ func New(dir string, runner core.FileRunner, workers int) (*Store, error) {
 // Lookup returns what the cache knows, marked stale when past its lifetime.
 func (s *Store) Lookup(device, pkg string) (core.AppMeta, bool) {
 	return s.cache.lookupAt(device, pkg, s.now())
+}
+
+// Status reports what the store knows about one package right now: a queued or
+// running read, a cached name, or a failure with its reason. A cached name from
+// a previous run still answers the question, so a restarted app does not offer
+// to read what it already has.
+func (s *Store) Status(device, pkg string) (core.AppMetaStatus, bool) {
+	key := entryKey(device, pkg)
+	s.mu.Lock()
+	status, known := s.status[key]
+	s.mu.Unlock()
+	if known {
+		return status, true
+	}
+	if meta, found := s.cache.lookupAt(device, pkg, s.now()); found {
+		return core.AppMetaStatus{State: core.AppMetaReady, At: meta.FetchedAt}, true
+	}
+	return core.AppMetaStatus{}, false
+}
+
+// setStatus publishes one package's state; the view redraws when sampling next
+// reports, so nothing else has to be signalled here.
+func (s *Store) setStatus(key string, status core.AppMetaStatus) {
+	s.mu.Lock()
+	s.status[key] = status
+	s.mu.Unlock()
+}
+
+// Forget drops the statuses this device accumulated, keeping the cached names:
+// after a reconnect a process that had no APK may be a real application.
+func (s *Store) Forget(device string) {
+	prefix := device + "|"
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.status {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.status, key)
+		}
+	}
 }
 
 // Request queues the packages without a fresh entry.
@@ -110,6 +157,9 @@ func (s *Store) waitIdle() { s.wg.Wait() }
 
 func (s *Store) enqueue(device, adbPath, serial string, pkgs []string, force bool) {
 	now := s.now()
+	// One package is the row the user is looking at; a long list is background
+	// work that must not hold that row up.
+	interactive := len(pkgs) == 1
 	var jobs []job
 	s.mu.Lock()
 	for _, pkg := range pkgs {
@@ -117,97 +167,176 @@ func (s *Store) enqueue(device, adbPath, serial string, pkgs []string, force boo
 			continue
 		}
 		key := entryKey(device, pkg)
-		if force {
-			// Whatever is queued may have skipped this package as fresh, so
-			// let the worker know it must read the APK this time.
-			s.forced[key] = true
-			delete(s.failed, key)
-		} else {
-			if meta, ok := s.cache.lookupAt(device, pkg, now); ok && !meta.Stale {
+		current := s.status[key]
+		if !force {
+			switch current.State {
+			case core.AppMetaPending:
 				continue
-			}
-			if last, failed := s.failed[key]; failed && now.Sub(last) < failedRetryAfter {
-				continue
+			case core.AppMetaReady:
+				if meta, ok := s.cache.lookupAt(device, pkg, now); ok && !meta.Stale {
+					continue
+				}
+			case core.AppMetaFailed:
+				// A settled "no APK" answer only changes if the package does, so
+				// only an explicit retry asks again.
+				if current.Final || now.Sub(current.At) < failedRetryAfter {
+					continue
+				}
 			}
 		}
-		if s.pending[key] {
-			continue
-		}
-		s.pending[key] = true
+		s.status[key] = core.AppMetaStatus{State: core.AppMetaPending, At: now}
 		jobs = append(jobs, job{device: device, adb: adbPath, serial: serial, pkg: pkg, force: force})
 	}
 	s.wg.Add(len(jobs))
 	s.mu.Unlock()
 
 	for _, queued := range jobs {
+		if interactive {
+			s.urgent <- queued
+			continue
+		}
 		s.queue <- queued
 	}
 }
 
 func (s *Store) work() {
-	for queued := range s.queue {
-		key := entryKey(queued.device, queued.pkg)
-		s.mu.Lock()
-		force := queued.force || s.forced[key]
-		delete(s.forced, key)
-		s.mu.Unlock()
-
-		stored := s.fetch(queued, force)
-
-		s.mu.Lock()
-		delete(s.pending, key)
-		if stored {
-			delete(s.failed, key)
-		} else {
-			s.failed[key] = s.now()
+	for {
+		var queued job
+		// A row request that arrived while this one was being taken still goes
+		// first; the inner select keeps an idle worker from missing it.
+		select {
+		case queued = <-s.urgent:
+		default:
+			select {
+			case queued = <-s.urgent:
+			case queued = <-s.queue:
+			}
 		}
-		s.mu.Unlock()
-		s.wg.Done()
+		s.handle(queued)
 	}
 }
 
-// fetch reads one application's APK and stores its name and icon. It reports
-// whether the cache now holds an entry, so a package with nothing to read backs
-// off instead of being asked about on every round.
-func (s *Store) fetch(queued job, force bool) bool {
-	apk, err := s.apkPath(queued)
-	if err != nil || apk == "" {
-		return false
+// handle runs one job and publishes how it ended. Every path writes a terminal
+// status: a row must never be left spinning because a read went missing.
+func (s *Store) handle(queued job) {
+	key := entryKey(queued.device, queued.pkg)
+	stored, failure := s.fetchSafely(queued)
+	status := core.AppMetaStatus{State: core.AppMetaReady, At: s.now()}
+	if !stored {
+		status = core.AppMetaStatus{State: core.AppMetaFailed, Reason: failure.reason, Final: failure.final, At: s.now()}
+	}
+	s.setStatus(key, status)
+	s.wg.Done()
+}
+
+// fetchFailure says why a read produced nothing, in the user's words, and
+// whether trying again could ever help.
+type fetchFailure struct {
+	reason string
+	final  bool
+}
+
+// fetchSafely turns a panic in the untrusted-APK path into a stated failure.
+func (s *Store) fetchSafely(queued job) (stored bool, failure fetchFailure) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			stored, failure = false, fetchFailure{reason: core.ReasonAPKUnreadable}
+		}
+	}()
+	return s.fetch(queued)
+}
+
+// fetch reads one application's APK and stores its name and icon.
+func (s *Store) fetch(queued job) (bool, fetchFailure) {
+	apk, failure := s.apkPath(queued)
+	if failure.reason != "" {
+		return false, failure
 	}
 	size, stamp := s.apkIdentity(queued, apk)
 	if size > maxAPKSize {
-		return false
+		return false, fetchFailure{reason: core.ReasonAPKTooLarge}
 	}
 	key := queued.pkg + "|" + apk + "|" + strconv.FormatInt(size, 10) + "|" + stamp
-	if !force && s.cache.freshAt(queued.device, queued.pkg, key, s.now()) {
-		return true
+	if !queued.force && s.cache.freshAt(queued.device, queued.pkg, key, s.now()) {
+		return true, fetchFailure{}
 	}
-	label, icon := s.readApk(queued, apk)
-	if label == "" {
-		return false
+	label, icon, failure := s.readApk(queued, apk, size)
+	if failure.reason != "" {
+		return false, failure
 	}
 	if err := s.cache.putAt(queued.device, queued.pkg, key, label, icon, s.now()); err != nil {
-		return false
+		return false, fetchFailure{reason: core.ReasonAPKUnreadable}
 	}
-	return true
+	return true, fetchFailure{}
 }
 
 // apkPath asks the device where a package's base APK lives.
-func (s *Store) apkPath(queued job) (string, error) {
+//
+// The listing spans every user on the device, and that is the whole point: the
+// resource page reads /proc, so it sees the processes of every profile, while
+// `pm path` only answers for the shell's own user. An application installed only
+// for a second profile therefore looked like a process with no APK at all.
+// `pm path` stays as the fallback for a device whose `pm list packages --user
+// all` is unsupported.
+func (s *Store) apkPath(queued job) (string, fetchFailure) {
+	if path, failure, answered := s.apkPathFromListing(queued); answered {
+		return path, failure
+	}
+	return s.apkPathFromCommand(queued)
+}
+
+// apkPathFromListing asks every user's packages in one round trip. The filter
+// matches substrings, so "com.foo" also returns "com.foobar": only the exact
+// name counts. answered is false when the command itself failed, which is the
+// only reason to try the older lookup.
+func (s *Store) apkPathFromListing(queued job) (path string, failure fetchFailure, answered bool) {
+	res, err := s.runner.Run(context.Background(), core.Command{
+		Path:    queued.adb,
+		Args:    []string{"-s", queued.serial, "shell", "pm list packages --user all -f " + queued.pkg},
+		Timeout: adbMetaTimeout,
+	}, nil)
+	if err != nil || res.TimedOut || res.ExitCode != 0 {
+		return "", fetchFailure{}, false
+	}
+	for _, raw := range strings.Split(strings.ReplaceAll(res.Output, "\r", ""), "\n") {
+		line := strings.TrimSpace(raw)
+		line, ok := strings.CutPrefix(line, "package:")
+		if !ok {
+			continue
+		}
+		found, ok := strings.CutSuffix(line, "="+queued.pkg)
+		if !ok {
+			continue
+		}
+		if found = strings.TrimSpace(found); found != "" {
+			return found, fetchFailure{}, true
+		}
+	}
+	// The device answered and names no such package: this process is not an
+	// installed application, and only installing one can change that.
+	return "", fetchFailure{reason: core.ReasonNoAppPackage, final: true}, true
+}
+
+// apkPathFromCommand is the older, narrower lookup: `pm path`, which only sees
+// the shell's own user.
+func (s *Store) apkPathFromCommand(queued job) (string, fetchFailure) {
 	res, err := s.runner.Run(context.Background(), core.Command{
 		Path:    queued.adb,
 		Args:    []string{"-s", queued.serial, "shell", "pm path " + queued.pkg},
 		Timeout: adbMetaTimeout,
 	}, nil)
 	if err != nil {
-		return "", err
+		return "", fetchFailure{reason: core.ReasonAPKUnreadable}
+	}
+	if res.TimedOut {
+		return "", fetchFailure{reason: core.ReasonAPKTimeout}
 	}
 	for _, line := range strings.Split(strings.ReplaceAll(res.Output, "\r", ""), "\n") {
-		if path, ok := strings.CutPrefix(strings.TrimSpace(line), "package:"); ok {
-			return path, nil
+		if path, ok := strings.CutPrefix(strings.TrimSpace(line), "package:"); ok && path != "" {
+			return path, fetchFailure{}
 		}
 	}
-	return "", core.Error("设备上没有这个应用")
+	return "", fetchFailure{reason: core.ReasonNoAppPackage, final: true}
 }
 
 // apkIdentity is the size and modification time that identify one APK build.
@@ -236,13 +365,20 @@ func (s *Store) apkIdentity(queued job, apk string) (int64, string) {
 	return size, stamp
 }
 
-// readApk reads one application's name and icon: entries first, whole APK only
-// as a fallback.
-func (s *Store) readApk(queued job, apk string) (string, []byte) {
+// readApk reads one application's name and icon: the three entries first, the
+// whole APK only as a fallback, and only when that download is affordable.
+func (s *Store) readApk(queued job, apk string, size int64) (string, []byte, fetchFailure) {
 	if label, icon, ok := s.readApkEntries(queued, apk); ok {
-		return label, icon
+		return label, icon, fetchFailure{}
 	}
-	return s.readWholeApk(queued, apk)
+	if size > maxWholeAPKPull {
+		return "", nil, fetchFailure{reason: core.ReasonAPKTooLarge}
+	}
+	label, icon := s.readWholeApk(queued, apk)
+	if label == "" {
+		return "", nil, fetchFailure{reason: core.ReasonAPKUnreadable}
+	}
+	return label, icon, fetchFailure{}
 }
 
 // readApkEntries pulls just the three entries reading a name needs: the
@@ -301,13 +437,17 @@ func (s *Store) readApkEntries(queued job, apk string) (label string, icon []byt
 	return label, icon, true
 }
 
-// extractEntry writes one zip entry of the APK to path. A device without
-// `unzip`, or an entry the shell cannot read, reports false and the caller
-// falls back to the whole APK.
+// extractEntry writes one zip entry of the APK to path. It must go through
+// `exec-out`, never `shell`: adb shell gives the remote command a PTY, and the
+// tty rewrites every LF into CRLF, so a 724620-byte manifest arrives as 739233
+// bytes and every binary entry is corrupt. `apkparser` then fails for every
+// application, the fast path silently dies, and each read falls back to
+// downloading the whole APK. A device without `unzip`, or an entry the shell
+// cannot read, reports false and the caller falls back to the whole APK.
 func (s *Store) extractEntry(queued job, apk, entry, path string) bool {
 	res, err := s.runner.RunToFile(context.Background(), core.Command{
 		Path:    queued.adb,
-		Args:    []string{"-s", queued.serial, "shell", "unzip -p '" + apk + "' '" + entry + "'"},
+		Args:    []string{"-s", queued.serial, "exec-out", "unzip", "-p", apk, entry},
 		Timeout: adbMetaTimeout,
 	}, path)
 	if err != nil || res.ExitCode != 0 {

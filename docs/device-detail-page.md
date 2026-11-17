@@ -92,6 +92,12 @@ done
 | `dumpsys SurfaceFlinger \| grep -m1 '^GLES:'` | 真机 | 0.2 s / 一行 |
 | `unzip -p <apk> AndroidManifest.xml resources.arsc` | 模拟器 | 0.13 s / 127 KB |
 | `adb exec-out cat <apk>`（整包） | — | 视应用 5–100 MB |
+| `pm list packages --user all -f <包名>` | 模拟器 | 98 ms / 一行 |
+| `pm path <包名>` | 模拟器 | 112 ms |
+
+**这张表有一个陷阱，2026-11-17 才查清**：`unzip -p` 那行的 0.13 s 只量了传输，没量解析。
+同一条命令走 `adb shell` 拿回来的字节是被 PTY 改过的（见 §3.2），解析必然失败，
+所以真正的耗时从来不是 0.13 s，而是下面那条整包回退。**量带宽不等于量可用性。**
 
 复测方法（只读，不会改设备）：
 
@@ -154,6 +160,27 @@ GPU 型号来自 `dumpsys SurfaceFlinger` 的 `GLES: <厂商>, <renderer>, <版�
 
 ---
 
+### 2.7 两种视图与筛选
+
+同一份读数两种看法，用 `components.Tabs` 的 `TabsSegmented` 切换（`resourceState.view`）：
+
+| 视图 | 行 | 列 |
+|---|---|---|
+| 应用（`resourceViewApps`） | 一组一行，点开展开组内进程 | 应用 / 进程 / CPU / GPU / 内存 |
+| 进程（`resourceViewProcesses`） | 一进程一行，按 CPU 降序 | 进程（带 PID）/ 应用 / CPU / GPU / 内存 |
+
+两个视图各存一份 `components.TableState`（`tableApps` / `tableProcesses`），列宽与
+展开状态互不串味。进程视图不做展开：它本身就是展开后的形态。
+
+筛选框（`resourceState.filter`，`components.TextBox` + `lucide.Search`）同时服务两个视图：
+
+- 空格分词，**每个词都要命中**；大小写不敏感；逐字符**子序列**匹配（`mp` 命中
+  `com.google.android.apps.maps`）。纯函数 `matchQuery` 在 `internal/app/filter.go`。
+- 应用视图：命中应用名或包名 → 该组保留并列出它的全部进程；只命中某个子进程 →
+  组保留、自动展开、只列出命中的进程（查询期间忽略用户的展开状态，清空后恢复）。
+- 进程视图：命中进程名、应用名或包名即保留。
+- 计数跟着筛选走；空结果显示「没有匹配的应用 / 进程」+「清空筛选即可看到全部」。
+
 ## 3. 应用名称与图标：默认不解析
 
 ### 3.1 为什么默认不解析
@@ -166,17 +193,41 @@ GPU 型号来自 `dumpsys SurfaceFlinger` 的 `GLES: <厂商>, <renderer>, <版�
 - 工具栏的「刷新应用信息」是批量动作，一次请求当前列表里的全部应用；
 - 解析期间该行显示 `components.Spinner`（加载指示器），有名字后按钮自动消失。
 
-### 3.2 三级取数
+### 3.2 三级取数（**二进制条目必须走 `exec-out`**）
 
 | 级别 | 命令 | 何时使用 |
 |---|---|---|
-| 1. 只取条目 | `unzip -p <apk> AndroidManifest.xml` / `resources.arsc` / `<icon 路径>` | 设备有 `unzip`（绝大多数 Android 都有） |
-| 2. 整包回退 | `adb exec-out cat <apk>` → 临时文件 → `apkparser.ParseApk` | 没有 `unzip`，或条目读不出来 |
-| 3. 失败退避 | 同一个包 10 分钟内不再重试 | 包不存在（`system_server` 之类）、APK 损坏、超过 400 MB |
+| 0. 找 APK | `pm list packages --user all -f <包名>`，按 `包名` 精确匹配 | 每次读取 |
+| 1. 只取条目 | `adb exec-out unzip -p <apk> AndroidManifest.xml` / `resources.arsc` / `<icon 路径>` | 设备有 `unzip`（绝大多数 Android 都有） |
+| 2. 整包回退 | `adb exec-out cat <apk>` → 临时文件 → `apkparser.ParseApk`，**只在该包 ≤ 64 MB 时** | 没有 `unzip`，或条目读不出来 |
+| 3. 失败即说明原因 | `Pending` / `Ready` / `Failed{原因, Final}` 三种终态 | 包不存在、APK 过大、通道掉了、APK 损坏 |
 
-第 1 级用 `RunToFile`（二进制安全）把每个条目写进临时文件，再用 `apkparser.ParseXml` +
-`apkparser.ParseResourceTable` 解析——不经过文本捕获，所以不会被 UTF-8 截断污染。
-自适应图标（XML 矢量）拿不到位图，此时只保留名称、图标留空，页面用首字母圆形头像兜底。
+**为什么找 APK 要看所有用户（这一条也是踩出来的）：** 采样脚本读的是整台设备的
+`/proc`，因此能看到**所有用户**（多账户 / 工作资料 / 车载的「司机 / Driver」）的进程；
+而 `pm path <包名>` 只按 **shell 自己的用户**（通常是 user 0）回答。应用装在第二个用户下时，
+`pm path` 直接报「没有这个包」，于是界面对一个真实存在的应用写「无应用包」——而且因为它是
+终态（`Final`），还会一直写下去。实测该模拟器的 `com.niexiawei.lynkcam` 只装在 `UserInfo{10:Driver}`，
+user 0 只有它的 `androidTest` 包 `com.niexiawei.lynkcam.test`。
+`pm list packages --user all -f <包名>` 一次往返列出所有用户，耗时与 `pm path` 相当（98 ms vs 112 ms）；
+它的过滤是**子串**匹配，所以 Go 侧必须按 `包名` 精确比对（`com.foo` 也会返回 `com.foobar`）。
+`pm path` 保留为回退：某些设备的 `pm list packages --user all` 不受支持。
+
+**为什么条目必须走 `exec-out`（这一条是踩出来的，别再改回 `shell`）：**
+`adb shell` 会给远端命令分配一个 PTY，tty 的 `onlcr` 把每个 `LF` 翻成 `CRLF`。
+2026-11-17 在 Android 11 车载模拟器上实测 `com.google.android.gms` 的清单：
+
+| 路径 | 字节数 |
+|---|---|
+| 条目真实大小（`unzip -l`） | 724620 |
+| `adb shell "unzip -p …"` | **739233**（多出的 14613 = 该文件里 LF 的个数） |
+| `adb exec-out unzip -p …` | **724620**（逐字节正确） |
+
+`RunToFile` 只保证「不经过文本捕获」，挡不住**设备侧 PTY** 的改写；于是 `apkparser` 对每个
+APK 都解析失败，第 1 级一直是一段死代码，每次「解析应用信息」都退化成第 2 级整包下载。
+同一台设备实测：gms **14.65 s → 1.78 s**，`car.launcher` **2.63 s → 0.37 s**（图标也回来了）。
+第 1 级拿到的条目写进临时文件后再用 `apkparser.ParseXml` + `ParseResourceTable` 解析，
+不经过文本捕获，所以也不会被 UTF-8 截断污染。自适应图标（XML 矢量）拿不到位图，
+此时只保留名称、图标留空，页面用首字母圆形头像兜底。
 
 ### 3.3 缓存（`internal/appmeta`）
 
@@ -188,6 +239,35 @@ GPU 型号来自 `dumpsys SurfaceFlinger` 的 `GLES: <厂商>, <renderer>, <版�
 - 上限 500 条 / 64 MB，超出按 `FetchedAt` 从旧到新删。
 - 下一版要做缓存管理页：`core.AppMetaCache`（`Entries` / `Invalidate` / `Purge`）已经实现并有测试，
   只是还没有 UI 消费者。
+
+### 3.4 解析的状态：三种终态，没有计时器
+
+`core.AppMetaSource` 除了 `Lookup` / `Request` / `Refresh`，还有 `Status` 与 `Forget`：
+
+| 状态 | 含义 | 行内表现 |
+|---|---|---|
+| `AppMetaUnknown` | 从没问过 | 显示「解析应用信息」按钮 |
+| `AppMetaPending` | 已入队或在读 | `components.Spinner`（无障碍名「正在读取应用信息」） |
+| `AppMetaReady` | 缓存里有名字（可能过期） | 显示名字；过期时补「7 天前更新」 |
+| `AppMetaFailed{Reason, Final}` | 读失败，`Reason` 是用户能读的中文原因 | 「无应用包」/「读取失败」+ Tooltip 全文；`Final` 时不给重试按钮 |
+
+`Final` = **重试无用**：设备上没有这个应用的应用包（`system_server`、`surfaceflinger`、
+`android.hardware.*.service` 之类）。这类行占多数，实测 **96 / 120 个分组**
+（同一台模拟器）。早先数是「102 / 121」，多出来的那些是用只查 user 0 的 `pm path` 误判的
+跨用户应用（见 §3.2），所以这个数字本身也是一个教训：**统计口径错了，结论就会错。**
+这类行必须是终态而不是「10 分钟后再试一次」。
+设备断开时 `Manager.Disconnect` 调 `Forget(deviceKey)`：重连后新装的应用应当重新有机会被解析。
+
+worker 用 `defer` + `recover` 保证**一定**写终态：一次 panic 只丢掉这一个包的名字，
+不会让某一行永远转圈。视图因此**不再持有任何兜底计时器**。
+
+批量刷新（工具栏按钮）按下时记下这批包与起点时刻，每包进入 `Ready`/`Failed` 且时间在起点
+之后才计入「正在读取应用信息 x/n」，全部落地就结束；90 秒只是防「某次读取彻底没回来」的兜底。
+批量刷新会跳过已知 `Final` 的包，因为它们的问题是读不出而不是读得慢；要让这类行重新确认，
+重新连接设备（`Forget`）即可，不必一个个点。
+
+行内的单包请求走 `Store` 的 **urgent 队列**，批量的走普通队列，worker 优先取 urgent：
+用户点的那一行不会排在 121 个包的批量刷新后面。
 
 ---
 
@@ -201,6 +281,9 @@ GPU 型号来自 `dumpsys SurfaceFlinger` 的 `GLES: <厂商>, <renderer>, <版�
 | 圆环中间显示 100% | `chart.Donut` 中间的数字取「切片总和」，指针扫过环再离开（`Index=-1`）就退回总和 | 放弃环形图的选中语义，改圆环进度 + 自绘中间数字（永远是占用率） | `TestUsageRingCenterShowsTheUsedShare` |
 | 圆环太细 | `components.ProgressRing` 线宽固定 `theme.Space(0.75)`，无参数 | 按同样语义自绘，线宽 `直径/9`，保留 `Role(ui.RoleProgress)` + `Range(0,1,值)` | 视图中可见（无像素断言，靠 code review + 组件契约测试） |
 | 日志文本框与上方标题同名，读屏念两遍 | 无 | 文本框无障碍标签改为「通道日志与任务内容」 | `TestLogPageEndsAboveThePageEdge`（依赖该标签） |
+| **「解析应用信息」一直转圈、点了没反应** | ①二进制条目经 `adb shell` 的 PTY 被 CRLF 污染，快路径恒失败 → 每次整包下载（gms 14.65 s）；②解析结果 fire-and-forget，视图只能靠 `resolveTimeout=2min` 盲等；③该设备 102/121 个进程根本没有应用包 | 条目改 `exec-out`；`Store` 上报 `Pending`/`Ready`/`Failed(原因,Final)`；视图只读状态、失败行写明原因且不再给注定失败的重试 | `TestStoreReadsEntriesThroughExecOut`、`TestStoreReportsNoAppPackageAsFinalFailure`、`TestResolvingSpinnerEndsWhenTheReadFails` |
+| 批量刷新按钮灰很久，看不出在读什么 | 结束条件是「30 秒」或「命名数量变了」，而多数行永远不会有名字 | 按终态收敛 + 「正在读取应用信息 x/n」+ 90 秒兜底 | `TestRefreshProgressEndsWhenEveryRowIsSettled`、`TestRefreshSaysHowManyAreDone` |
+| 列表要一行行翻才能找到某个进程 | 只有按应用分组一种形态 | 「应用 / 进程」分段器 + 模糊筛选 | `TestResourceViewSwitchesBetweenAppsAndProcesses`、`TestFilterIgnoresExpandedStateWhileTheQueryIsActive` |
 
 **布局经验（值得背下来）**：在 Column 里，`Fill()` 是「占满父内容」而不是「吃掉剩下的空间」。
 一个页签/面板的内容要占满剩余高度时用 `Grow(1).MinHeight(0)`；只有列里唯一那个元素才适合 `Fill()`。
@@ -223,6 +306,13 @@ attachAppMeta                  (只查 appmeta 缓存，不排队)
       ▼
 m.resources[id] = snapshot; notify()
       ▼
+resourcePage → appMetaAction  (读 Manager.AppMetaStatus：Pending 转圈 / Failed 写原因)
+      │
+      └─ 点击 → Manager.ResolveAppMeta → Store.Refresh（urgent 队列）
+                        ├─ exec-out unzip -p 条目 → apkparser
+                        ├─ 成功：缓存 + Ready
+                        └─ 失败：Failed{原因, Final}；Final 不再重试
+      ▼
 resourcePage                   (每帧读 Manager.Resources)
       ├─ 型号行（等宽 + Tooltip）
       ├─ 三个圆环（自绘，中间写占用率）
@@ -241,9 +331,10 @@ resourcePage                   (每帧读 Manager.Resources)
 | 采样脚本、快照类型、CPU/GPU 计算 | `internal/core/sample.go` |
 | /proc 与 GPU 文本的解析 | `internal/core/procfs.go` |
 | 进程分组与命名 | `internal/core/resources.go` |
-| 应用元数据接口 | `internal/core/appmeta.go` |
+| 应用元数据接口与状态 | `internal/core/appmeta.go`（`AppMetaStatus`）、`internal/core/messages.go`（失败原因文案） |
 | APK 取数、解析、缓存、退避 | `internal/appmeta/store.go`、`internal/appmeta/cache.go` |
-| 资源页视图（型号行、圆环、表格、行内解析） | `internal/app/resources.go` |
+| 资源页视图（型号行、圆环、表格、行内解析、应用/进程两视图） | `internal/app/resources.go` |
+| 模糊筛选的纯函数 | `internal/app/filter.go` |
 | 页签常量与视图状态 | `internal/app/state.go`、`internal/app/detail.go` |
 | 二进制安全地把命令输出写进文件 | `internal/core/command.go`（`FileRunner`）、`internal/core/runner.go` |
 | 演示数据（`--demo`） | `internal/app/demo.go` |
@@ -262,6 +353,12 @@ resourcePage                   (每帧读 Manager.Resources)
 | 元数据 7 天有效期，过期仍显示旧值、不自动重抓 | 应用改名的设备在缓存过期后仍显示旧名，直到用户点刷新 |
 | 占用圆环自绘（组件 `ProgressRing` 线宽不可调） | 上游改进 `ProgressRing` 不会自动惠及这里 |
 | 逐进程 GPU 不做 | 只能看到整机 GPU，看不到哪个应用在用 |
+| 二进制条目走 `exec-out`，不再经过 `adb shell` | `exec-out` 不经过 shell，路径不能有 shell 展开；APK 路径来自 `pm path`、不含空格，逐项传参即可 |
+| 整包回退上限 64 MB | 没有 `unzip` 且 APK > 64 MB 的设备上，这类应用只能显示包名并说明原因 |
+| 「没有应用包」记为终态，断开连接时才清 | 用户新装应用后，旧进程行要等重连或重启才会重新有机会被解析 |
+| 行内单包请求优先于批量 | urgent 队列被连续点击时批量会短暂饿着；点击的人就在现场 |
+| 筛选时忽略用户的展开状态 | 查询期间不能手动折叠/展开（点行无效），清空后恢复原样 |
+| 一个筛选框同时服务两个视图 | 视图之间共享查询，切换视图不会丢问题，也无法为两个视图各存一个查询 |
 
 ---
 
