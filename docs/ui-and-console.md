@@ -344,6 +344,7 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | `ButtonBase` 默认居中 | 行内容居中，不像列表项 | `.Justify(ui.Start)` |
 | 行内 `Text` 不 `SingleLine()` | 长设备名把行撑高 | `.SingleLine()` |
 | 持锁调用 `Recorder` | 磁盘一慢，界面冻住 | 入队，由独立协程写 |
+| 用标签当键的树里出现同名项目 | 控制台刷 `two elements under one parent have the key "Download"`，同名目录共享一个状态 | 树键必须唯一：`components.TreeVirtualized` 用设备路径作键，不要用文件名 |
 | 视图每一帧都给失败的 I/O 发起重试 | 失败原因被自己抹掉，页面永远停在「正在读取」，同时不停发命令（`/cache` 就是这么卡住的） | 失败要粘住：`loadDir` 见到已有失败记录就返回，只有用户点「重试」才清掉 |
 | `ButtonGhost` 用在页面级动作上 | 按钮读成正文（无底色无边框），用户找不到入口 | 页面级动作用 `ButtonOutline`/`Secondary`/`Primary`；ghost 只留给文字里的链接与对话框里的「取消」 |
 | 单行文本被截断却不给全文 | `.SingleLine()` 只画省略号，用户拿不到完整名称/探测详情（如「没有有效连接凭据，请编辑设…」） | 每个可能被截断的 `SingleLine` 都要 `components.Tooltip(c, anchor, 全文)`：在 anchor 之后、同一帧内调用，忽略它的返回值（隐藏时无效）；悬停延迟由 MyGo 管（约 1 秒） |
@@ -415,7 +416,7 @@ vm.Notify("已复制…")   // 成功级：3 秒
 ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(1).
 	Radius(theme.Radius).Border(1, theme.Border).Clip().Children(func() {
 	components.Split(c, &state.treeWidth,
-		func() { vm.folderTree(c, profile, state) },   // 左：components.Tree + TreeItemWithLeading
+		func() { vm.folderTree(c, profile, state) },   // 左：components.TreeVirtualized
 		func() { vm.fileTable(c, profile, state) },    // 右：面包屑 + components.Table
 		components.SplitOptions{FirstMin: 180, SecondMin: 260, Default: 260},
 	).Fill()
@@ -429,8 +430,19 @@ ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(1).
 | 约定 | 原因 |
 |---|---|
 | `Split` 的两个面板都要 `MinWidth(0)`（内部 `ui.Scroll` / `ScrollView` 都要带） | 不加的话长文件名会把左右两栏一起撑过窗口宽度，右侧被裁 |
-| 树节点展开指针来自 `fileState.openAt(path)` | `TreeItemWithLeading` 要 `*bool`，而 **map 的元素不可取址**（`&state.open[path]` 编译不过），所以 map 存 `*bool` |
+| 树用 `components.TreeVirtualized`，**键是设备路径**（`fileState.tree`） | 树的所有行都是同一个 Column 的直接子元素。`components.Tree` 用**标签**当键，于是 `/sdcard/DCIM` 和 `/system/DCIM` 会拿到同一个 key，控制台报 `two elements under one parent have the key "DCIM"`，两行共享一个状态（展开一个另一个也变）。键换成路径后同名目录各走各的，顺便拿到虚拟滚动 |
 | 行式元素 `FillWidth()`，滚动容器 `Grow(1).MinHeight(0)` | `Fill()` 会同时抢高度（见 §10） |
+
+**展开箭头是「里面还有东西」的唯一提示**（`treeChildren`，纯函数，测试直接断言）：
+
+| 该目录读过了吗 | 有子目录吗 | 结果 | 原因 |
+|---|---|---|---|
+| 没读过 | — | 显示箭头 | 还不知道里面有什么，先给箭头；点开才去读 |
+| 读过 | 有 | 显示箭头 | 正常可展开 |
+| 读过 | 没有 | **不显示箭头** | 点开也只会是空的，不要给出一个假承诺 |
+| 读过、而且已经展开 | 没有 | 显示箭头 | 否则用户没法把它收回去 |
+
+组件按 `children(path)` 是否为 `nil` 决定画不画箭头，所以「键为空切片」和「键为 `nil`」是两种意思，别写反。
 
 树的根是固定的五个路径（`/sdcard`、`/storage/emulated/0`、`/data/local/tmp`、`/system`、`/`），**用整条路径当标签**（`RemoteBase("/storage/emulated/0")` 只是 `0`）。根默认全部折叠，右侧默认列出 `/sdcard`。
 
@@ -482,7 +494,7 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 - 点**文件**行：打开 `FileDetailView` —— 属性四行（文件名 / 文件大小 / 最后修改时间 / 文件权限 `%A (八进制)`）+ 主按钮「下载到本地…」+ 次按钮「上传到此文件夹…」。目录行改成「下载此文件夹…」。
 - 弹窗按 §3.6 的固定骨架：右上角一个 `IconButton` 关闭，`if !open` 是唯一收口；**不要在**对话框里用 `components.Tabs`。
 - 错误呈现分两类：读目录失败是**页面状态**（「读取失败：…」+「重试」），不弹提示条；发起下载/上传失败才是事件（`vm.Fail`）。
-- 树里描述节点的行（「正在读取…」「没有子文件夹」「读取失败：…」）都要用 `treeNoteRow(c, depth, …)`：它按层级缩进到**子节点标签**的位置。直接用一层 `Text` 会贴到树的最左边，读起来像整棵树的第一行。
+- 树里不渲染「正在读取…」「没有子文件夹」这类**额外行**：缩进要自己算，而且会让树的行数与目录数对不上。状态直接挂在节点行上——读取中给 `components.Spinner`，失败给红色「读取失败」小字并把原因挂 `Tooltip`。要动手重试就点该目录，右侧那块居中区域会给出完整原因和「重试」。
 
 ### 13.5 测试手法
 
@@ -498,7 +510,9 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 | 失败后不刷命令 | 让读取返回退出码 9，断言出现「读取失败：…」后再 `Frame()` 二十次，同一目录的命令数仍是 1 |
 | 展开箭头也会读 | 直接把 `*state.openAt("/system")` 置真（等价于点箭头），断言发出了 `/system` 的命令 |
 | 面包屑能回退 | 进入 `Download` 后点面屑里的 `sdcard`，断言回到了 `/sdcard` 的内容 |
-| 提示行有缩进 | 展开到空目录后 `Find("没有子文件夹")`，断言它的 `X` 大于根节点的 `X`（即不是贴左边） |
+| 箭头规则 | 纯函数 `treeChildren` 的五个分支：没读过 / 读过有子目录 / 读过没子目录 / 空但已展开 |
+| 同名目录不串状态 | 让 `/sdcard` 与 `/system` 都有 `Download`，展开两者：抓 `log.SetOutput` 断言没有 `have the key`，并断言树里没有重复行 |
+| 树的实际内容 | `treeRows(vm)` 读 `TreeVirtualizedState` 的 `Rows()` / `Item(i)` 得到路径列表，比按标签找元素可靠（同名目录不会歧义） |
 | 上传/下载 | 替换包级变量 `openLocalPaths` / `saveLocalPath`（`files.go` 里的 `mygo.Dialog.Open/Save`），断言 `Manager.Tasks()` 出现对应任务 |
 
 **不要**在测试里直接改 `mygo.Dialog`：它是包级变量，改了会影响同进程其它测试；用自己的两个包装变量并在 `t.Cleanup` 还原。
