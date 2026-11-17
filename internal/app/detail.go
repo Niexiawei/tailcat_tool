@@ -26,6 +26,8 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 	vm.SettingsView(c)
 	vm.ReachabilityView(c)
 	vm.AttentionDialog(c)
+	vm.LogOutputView(c)
+	vm.LogClearView(c)
 }
 
 // routedPage builds the page the router shows.

@@ -224,11 +224,13 @@ func TestLogPageEndsAboveThePageEdge(t *testing.T) {
 // fakeLogReader answers the log page and records what it was asked, so a test
 // can prove the page queries what the user chose.
 type fakeLogReader struct {
-	mu      sync.Mutex
-	queries []core.LogQuery
-	rows    []core.TimelineEntry
-	outputs map[uuid.UUID]string
-	err     error
+	mu        sync.Mutex
+	queries   []core.LogQuery
+	rows      []core.TimelineEntry
+	outputs   map[uuid.UUID]string
+	err       error
+	clearErrs []error
+	clears    []core.LogQuery
 }
 
 func (r *fakeLogReader) Timeline(query core.LogQuery) ([]core.TimelineEntry, error) {
@@ -271,6 +273,44 @@ func (r *fakeLogReader) Timeline(query core.LogQuery) ([]core.TimelineEntry, err
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// ClearLogs deletes the log rows in range and returns how many went; task rows
+// are untouched, which is what the page promises.
+func (r *fakeLogReader) ClearLogs(query core.LogQuery) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.clears = append(r.clears, query)
+	if len(r.clearErrs) > 0 {
+		err := r.clearErrs[0]
+		r.clearErrs = r.clearErrs[1:]
+		return 0, err
+	}
+	kept := r.rows[:0]
+	var removed int64
+	for _, row := range r.rows {
+		if row.Source == core.LogTask {
+			kept = append(kept, row)
+			continue
+		}
+		if query.DeviceID != nil && row.DeviceID != *query.DeviceID {
+			kept = append(kept, row)
+			continue
+		}
+		if !query.Since.IsZero() && row.At.Before(query.Since) {
+			kept = append(kept, row)
+			continue
+		}
+		removed++
+	}
+	r.rows = kept
+	return removed, nil
+}
+
+func (r *fakeLogReader) clearedQueries() []core.LogQuery {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]core.LogQuery(nil), r.clears...)
 }
 
 func (r *fakeLogReader) TaskOutput(id uuid.UUID) (string, error) {
@@ -491,4 +531,91 @@ func logsPageFixture(t *testing.T) (*ViewModel, *fakeLogReader, time.Time) {
 	vm.History = reader
 	vm.OpenLogs()
 	return vm, reader, time.Now()
+}
+
+func TestLogsPageShowsTaskOutput(t *testing.T) {
+	vm, reader, base := logsPageFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	taskID := uuid.New()
+	reader.outputs[taskID] = "adb: error: failed to stat remote object: No such file or directory"
+	reader.add(core.TimelineEntry{
+		At: base.Add(-time.Minute), Level: core.LogInfo, Source: core.LogTask,
+		DeviceID: profile.ID, DeviceName: "E245", TaskID: taskID,
+		Text: "adb pull /sdcard/x · 失败",
+	})
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	waitForText(t, tt, "adb pull /sdcard/x · 失败")
+	if err := tt.Click("adb pull /sdcard/x · 失败"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	waitForText(t, tt, "No such file or directory")
+	if !tt.HasText("任务输出") {
+		t.Fatalf("the output dialog has no title; texts = %v", tt.Texts())
+	}
+}
+
+func TestClearLogsAsksAndKeepsTasks(t *testing.T) {
+	vm, reader, base := logsPageFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	reader.add(
+		core.TimelineEntry{At: base.Add(-time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+			DeviceID: profile.ID, DeviceName: "E245", Text: "通道已就绪"},
+		core.TimelineEntry{At: base.Add(-2 * time.Minute), Level: core.LogInfo, Source: core.LogTask,
+			DeviceID: profile.ID, DeviceName: "E245", TaskID: uuid.New(), Text: "adb pull · 失败"},
+	)
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	tt.Frame()
+
+	if err := tt.Click("清空日志…"); err != nil {
+		t.Fatalf("Click(清空日志…) error: %v", err)
+	}
+	waitForText(t, tt, "任务记录不会被删除")
+	if err := tt.Click("确认清空"); err != nil {
+		t.Fatalf("Click(确认清空) error: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(reader.clearedQueries()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the clear never reached the reader")
+		}
+		tt.Frame()
+		time.Sleep(2 * time.Millisecond)
+	}
+	query := reader.clearedQueries()[0]
+	if query.DeviceID != nil {
+		t.Fatalf("the page cleared only %v, want every device", query.DeviceID)
+	}
+	if query.Since.IsZero() {
+		t.Fatal("the clear ignored the chosen range")
+	}
+	// The task row is not a log row, so it survives.
+	tt.Frame()
+	if !tt.HasText("adb pull · 失败") {
+		t.Fatalf("清空 removed the task rows too; texts = %v", tt.Texts())
+	}
+	if tt.HasText("通道已就绪") {
+		t.Fatalf("the cleared channel line is still on the page; texts = %v", tt.Texts())
+	}
+}
+
+func TestClearFailureIsShownInTheDialog(t *testing.T) {
+	vm, reader, base := logsPageFixture(t)
+	reader.add(core.TimelineEntry{At: base.Add(-time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+		DeviceID: vm.Manager.Profiles()[0].ID, DeviceName: "E245", Text: "通道已就绪"})
+	reader.clearErrs = []error{core.Error("历史库已关闭")}
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	tt.Frame()
+	if err := tt.Click("清空日志…"); err != nil {
+		t.Fatalf("Click(清空日志…) error: %v", err)
+	}
+	if err := tt.Click("确认清空"); err != nil {
+		t.Fatalf("Click(确认清空) error: %v", err)
+	}
+	waitForText(t, tt, "历史库已关闭")
 }

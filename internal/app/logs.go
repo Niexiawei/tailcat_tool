@@ -187,8 +187,9 @@ type logFilter struct {
 	// rows were prepended; the table state belongs to the render thread.
 	jumpToTop bool
 
-	// table lives on the render thread only.
 	table components.TableVirtualizedState
+	// selected is the chosen row; the table writes it and OnChange reads it.
+	selected int
 }
 
 // logViewOptions says how one caller of logView differs from the other: the
@@ -404,6 +405,18 @@ func (vm *ViewModel) logTimeline(c *ui.Context, f *logFilter) {
 	if jump {
 		state.List.ScrollTo(0, ui.Start)
 	}
+	state.List.Selected = &f.selected
+	state.List.OnChange = func() {
+		row := f.selected
+		if row < 0 || row >= len(entries) {
+			return
+		}
+		// A task row is the only row that opens something; a log line has
+		// nothing behind it.
+		if entry := entries[row]; entry.Source == core.LogTask {
+			vm.openLogOutput(entry)
+		}
+	}
 	state.List.Key = func(row int) any {
 		entry := entries[row]
 		return logRowKey{At: entry.At.UnixNano(), Source: entry.Source, TaskID: entry.TaskID, Text: entry.Text}
@@ -442,11 +455,19 @@ func logDeviceCell(entry core.TimelineEntry) string {
 // logFootRow reports a truncated timeline below the table.
 func (vm *ViewModel) logFootRow(c *ui.Context, f *logFilter, opts logViewOptions) {
 	_, _, _, tooMany, _ := vm.logSnapshot(f)
-	if !tooMany {
+	if !tooMany && !opts.AllowClear {
 		return
 	}
 	ui.Row(c).FillWidth().Shrink(0).Gap(8).AlignItems(ui.Center).Children(func() {
-		components.Text(c, "只显示最近 "+itoa(core.DefaultLogLimit)+" 条，请缩小时间范围").FontSize(11)
+		if tooMany {
+			components.Text(c, "只显示最近 "+itoa(core.DefaultLogLimit)+" 条，请缩小时间范围").FontSize(11)
+		}
+		ui.Row(c).Grow(1).Children(func() {})
+		if opts.AllowClear {
+			if components.Button(c, "清空日志…", components.ButtonGhost).Clicked() {
+				vm.openLogClear(f)
+			}
+		}
 	})
 }
 
@@ -640,7 +661,9 @@ func logLevelTone(level core.LogLevel) components.BadgeTone {
 // following, because a page you open to read should not move under you.
 func (vm *ViewModel) pageLogFilter() *logFilter {
 	if vm.PageLogFilter == nil {
-		vm.PageLogFilter = &logFilter{Range: logRangeToday}
+		// selected starts at -1 so the first row is not already chosen: a
+		// click on it must still report the change.
+		vm.PageLogFilter = &logFilter{Range: logRangeToday, selected: -1}
 	}
 	return vm.PageLogFilter
 }
@@ -651,4 +674,194 @@ func (vm *ViewModel) logsPage(c *ui.Context) {
 		components.Text(c, "全部日志").FontSize(18).Bold()
 		vm.logView(c, vm.pageLogFilter(), logViewOptions{ShowDevicePicker: true, AllowClear: true})
 	})
+}
+
+// logOutput is the dialog showing what one task printed.
+type logOutput struct {
+	TaskID  uuid.UUID
+	Text    string
+	Loading bool
+	Err     string
+}
+
+// logClear is the confirmation dialog for deleting a range of log lines.
+type logClear struct {
+	Count  int
+	Range  int
+	Device *uuid.UUID
+	Busy   bool
+	Error  string
+}
+
+// openLogOutput reads a task's output off the render path and shows it.
+func (vm *ViewModel) openLogOutput(entry core.TimelineEntry) {
+	if vm.History == nil || entry.TaskID == uuid.Nil {
+		return
+	}
+	vm.logMu.Lock()
+	vm.LogOutput = &logOutput{TaskID: entry.TaskID, Loading: true}
+	vm.logMu.Unlock()
+	vm.requestFrame()
+	go func() {
+		text, err := vm.History.TaskOutput(entry.TaskID)
+		vm.logMu.Lock()
+		if output := vm.LogOutput; output != nil && output.TaskID == entry.TaskID {
+			output.Loading = false
+			output.Text = text
+			if err != nil {
+				output.Err = err.Error()
+			}
+		}
+		vm.logMu.Unlock()
+		vm.requestFrame()
+	}()
+}
+
+// LogOutputView renders the task output dialog.
+func (vm *ViewModel) LogOutputView(c *ui.Context) {
+	vm.logMu.Lock()
+	output := vm.LogOutput
+	var text, errText string
+	var loading bool
+	if output != nil {
+		text, errText, loading = output.Text, output.Err, output.Loading
+	}
+	vm.logMu.Unlock()
+
+	open := output != nil
+	components.Dialog(c, &open, components.DialogOptions{Label: "任务输出"}, func(panel ui.Element) {
+		panel.Padding(20).Gap(10).Width(760)
+		panel.Children(func() {
+			components.Text(c, "任务输出").FontSize(18).Bold()
+			switch {
+			case loading:
+				components.Spinner(c, components.SpinnerRing).Label("正在读取任务输出")
+			case errText != "":
+				components.Text(c, errText).FontSize(11)
+			case text == "":
+				components.Text(c, "这个任务没有输出").FontSize(11)
+			default:
+				// Scrolled text rather than a text box: the output is long and
+				// read-only, and a label keeps it selectable through the
+				// dialog's own text handling.
+				ui.Scroll(c).FillWidth().Height(360).Children(func() {
+					components.Text(c, text).FontSize(11).Font("monospace")
+				})
+			}
+			ui.Row(c).FillWidth().Gap(8).Children(func() {
+				if components.Button(c, "关闭", components.ButtonSecondary).Clicked() {
+					vm.logMu.Lock()
+					vm.LogOutput = nil
+					vm.logMu.Unlock()
+					open = false
+				}
+			})
+		})
+	})
+	if !open {
+		vm.logMu.Lock()
+		vm.LogOutput = nil
+		vm.logMu.Unlock()
+	}
+}
+
+// openLogClear asks before deleting a range, and says what the range is.
+func (vm *ViewModel) openLogClear(f *logFilter) {
+	entries, _, _, _, _ := vm.logSnapshot(f)
+	vm.logMu.Lock()
+	vm.LogClear = &logClear{Count: len(entries), Range: f.Range, Device: f.Device}
+	vm.logMu.Unlock()
+	vm.requestFrame()
+}
+
+// LogClearView renders the clear confirmation and runs the deletion.
+func (vm *ViewModel) LogClearView(c *ui.Context) {
+	vm.logMu.Lock()
+	dialog := vm.LogClear
+	var count, rng int
+	var busy bool
+	var errText string
+	if dialog != nil {
+		count, rng, busy, errText = dialog.Count, dialog.Range, dialog.Busy, dialog.Error
+	}
+	vm.logMu.Unlock()
+
+	open := dialog != nil
+	components.Dialog(c, &open, components.DialogOptions{Label: "清空日志"}, func(panel ui.Element) {
+		panel.Padding(20).Gap(10).Width(520)
+		panel.Children(func() {
+			components.Text(c, "清空日志").FontSize(18).Bold()
+			components.Text(c, "清空日志（应用与通道日志），共 "+itoa(count)+" 条；任务记录不会被删除。").FontSize(11)
+			components.Text(c, "删除范围是当前的时间段与设备筛选（"+logRangeWord(rng)+"）；级别和关键词不影响删除。").FontSize(11)
+			if errText != "" {
+				components.Text(c, errText).FontSize(11)
+			}
+			ui.Row(c).FillWidth().Gap(8).Children(func() {
+				if components.Button(c, "取消", components.ButtonGhost).Clicked() {
+					vm.logMu.Lock()
+					vm.LogClear = nil
+					vm.logMu.Unlock()
+					open = false
+				}
+				if components.Button(c, "确认清空", components.ButtonPrimary).Disabled(busy).Clicked() {
+					vm.runLogClear()
+				}
+			})
+		})
+	})
+	if !open {
+		vm.logMu.Lock()
+		vm.LogClear = nil
+		vm.logMu.Unlock()
+	}
+}
+
+// runLogClear deletes the range the dialog describes, keeping levels and
+// keywords out of it: those narrow what is shown, not what is swept.
+func (vm *ViewModel) runLogClear() {
+	if vm.History == nil {
+		return
+	}
+	vm.logMu.Lock()
+	dialog := vm.LogClear
+	if dialog == nil || dialog.Busy {
+		vm.logMu.Unlock()
+		return
+	}
+	dialog.Busy = true
+	dialog.Error = ""
+	query := core.LogQuery{DeviceID: dialog.Device, Since: logRangeSince(dialog.Range)}
+	vm.logMu.Unlock()
+
+	go func() {
+		_, err := vm.History.ClearLogs(query)
+		vm.logMu.Lock()
+		if current := vm.LogClear; current != nil {
+			current.Busy = false
+			if err != nil {
+				current.Error = err.Error()
+			} else {
+				vm.LogClear = nil
+			}
+		}
+		vm.logMu.Unlock()
+		// The page re-reads either way: a partial failure still deleted rows.
+		if f := vm.PageLogFilter; f != nil {
+			vm.refreshLogs(f)
+		}
+	}()
+}
+
+// logRangeSince is since() for a bare range index, so the clear dialog can
+// describe the same range without holding a filter.
+func logRangeSince(rng int) time.Time {
+	return (&logFilter{Range: rng}).since()
+}
+
+// logRangeWord names a range for the dialog sentence.
+func logRangeWord(rng int) string {
+	if rng < 0 || rng >= len(logRangeLabels) {
+		return logRangeLabels[logRangeToday]
+	}
+	return logRangeLabels[rng]
 }

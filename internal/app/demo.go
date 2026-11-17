@@ -388,3 +388,28 @@ var (
 	_ core.Recorder      = (*demoHistory)(nil)
 	_ core.HistoryReader = (*demoHistory)(nil)
 )
+
+// ClearLogs drops the demo's app and channel lines in range, like the store.
+func (h *demoHistory) ClearLogs(query core.LogQuery) (int64, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	kept := h.entries[:0]
+	var removed int64
+	for _, entry := range h.entries {
+		if entry.Source == core.LogTask {
+			kept = append(kept, entry)
+			continue
+		}
+		if query.DeviceID != nil && entry.DeviceID != *query.DeviceID {
+			kept = append(kept, entry)
+			continue
+		}
+		if !query.Since.IsZero() && entry.At.Before(query.Since) {
+			kept = append(kept, entry)
+			continue
+		}
+		removed++
+	}
+	h.entries = kept
+	return removed, nil
+}

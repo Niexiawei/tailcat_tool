@@ -99,6 +99,10 @@ type ViewModel struct {
 
 	// PageLogFilter is the log page's filter; nil means it was never opened.
 	PageLogFilter *logFilter
+	// LogOutput is the task whose output dialog is open; nil closes it.
+	LogOutput *logOutput
+	// LogClear is the clear confirmation; nil closes it.
+	LogClear *logClear
 	// logMu guards what the log queries write from their goroutines.
 	logMu sync.Mutex
 

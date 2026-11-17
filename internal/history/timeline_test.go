@@ -413,3 +413,70 @@ func TestStoredLogTextIsRedacted(t *testing.T) {
 		}
 	}
 }
+
+func TestClearLogsDeletesLogsButNotTasks(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	deviceID, other := uuid.New(), uuid.New()
+	base := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	if err := store.RecordTask(core.TaskRecord{
+		ID: uuid.New(), DeviceID: deviceID, DeviceName: "E245", Title: "上传",
+		Started: base, State: core.TaskFailed, Output: "失败原因",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []core.LogRecord{
+		{DeviceID: deviceID, At: base, Text: "这台设备的旧日志"},
+		{DeviceID: other, At: base, Text: "别的设备的日志"},
+		{DeviceID: deviceID, At: time.Now(), Text: "这台设备的新日志"},
+	} {
+		if err := store.RecordLog(line); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.RecordAppLog(core.AppLogRecord{At: base, Level: core.LogWarn, Text: "应用日志"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	// The range is what the page shows: this device, since an hour ago and
+	// later. The app line and the other device stay.
+	removed, err := store.ClearLogs(core.LogQuery{DeviceID: &deviceID, Since: base.Add(30 * time.Minute)})
+	if err != nil {
+		t.Fatalf("ClearLogs() error: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed %d rows, want 1", removed)
+	}
+	entries, err := store.Timeline(core.LogQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	for _, entry := range entries {
+		texts = append(texts, entry.Text)
+	}
+	for _, gone := range []string{"这台设备的新日志"} {
+		for _, text := range texts {
+			if text == gone {
+				t.Fatalf("%q survived the clear: %v", gone, texts)
+			}
+		}
+	}
+	for _, want := range []string{"这台设备的旧日志", "别的设备的日志", "应用日志", "上传 · 失败"} {
+		found := false
+		for _, text := range texts {
+			if text == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%q was deleted by a clear that did not cover it: %v", want, texts)
+		}
+	}
+}

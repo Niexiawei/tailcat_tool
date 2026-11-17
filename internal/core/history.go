@@ -108,6 +108,10 @@ type HistoryReader interface {
 	// TaskOutput returns the recorded output of one task, for the dialog a
 	// task row opens.
 	TaskOutput(uuid.UUID) (string, error)
+	// ClearLogs deletes the app and channel lines inside the query's device and
+	// time range, and returns how many went away. Task history is never
+	// touched: a task's output is what a user digs a failure out of.
+	ClearLogs(LogQuery) (int64, error)
 }
 
 // Recorder persists what would otherwise die with the process. It is optional:

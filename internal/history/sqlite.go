@@ -481,3 +481,50 @@ var (
 	_ core.Recorder      = (*Store)(nil)
 	_ core.HistoryReader = (*Store)(nil)
 )
+
+// clearLogWhere is the deletion range: device and time. Level and keywords are
+// left out on purpose — they narrow what is shown, not what is swept.
+func clearLogWhere(query core.LogQuery) (string, []any) {
+	conditions := []string{"1 = 1"}
+	var args []any
+	switch {
+	case query.DeviceID == nil:
+	case *query.DeviceID == uuid.Nil:
+		conditions = append(conditions, "device_id = ''")
+	default:
+		conditions = append(conditions, "device_id = ?")
+		args = append(args, query.DeviceID.String())
+	}
+	if !query.Since.IsZero() {
+		conditions = append(conditions, "at >= ?")
+		args = append(args, query.Since.UnixMilli())
+	}
+	return strings.Join(conditions, " AND "), args
+}
+
+// ClearLogs deletes the log rows in range. No VACUUM: the file will not shrink,
+// but the space is reused, and a vacuum on a large file would freeze the app.
+func (s *Store) ClearLogs(query core.LogQuery) (int64, error) {
+	type outcome struct {
+		removed int64
+		err     error
+	}
+	done := make(chan outcome, 1)
+	where, args := clearLogWhere(query)
+	submitErr := s.submit(func(db *sql.DB) error {
+		var result outcome
+		res, err := db.Exec(`DELETE FROM logs WHERE `+where, args...)
+		if err == nil {
+			result.removed, result.err = res.RowsAffected()
+		} else {
+			result.err = err
+		}
+		done <- result
+		return nil
+	})
+	if submitErr != nil {
+		return 0, submitErr
+	}
+	result := <-done
+	return result.removed, result.err
+}
