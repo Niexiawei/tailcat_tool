@@ -128,3 +128,113 @@ func TestCachePageSaysWhenTheCacheIsUnavailable(t *testing.T) {
 		t.Fatalf("no unavailable state; texts = %v", tt.Texts())
 	}
 }
+
+// cacheFixture is one device with one cached application, on the page.
+func cacheFixture(t *testing.T) (*ViewModel, *stubAppMetaCache) {
+	t.Helper()
+	cache := &stubAppMetaCache{entries: map[string][]core.AppMetaEntry{}}
+	vm := newCacheViewModel(t, cache)
+	profile := vm.Manager.Profiles()[0]
+	cache.entries[profile.ID.String()] = []core.AppMetaEntry{{
+		Package:   "com.tencent.mm",
+		Label:     "微信",
+		Size:      1258291,
+		FetchedAt: time.Date(2026, 11, 16, 9, 30, 0, 0, time.Local),
+	}}
+	return vm, cache
+}
+
+func TestDeleteAsksBeforeDroppingOneEntry(t *testing.T) {
+	vm, cache := cacheFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	if err := tt.Click("删除"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	tt.Frame()
+	if !tt.HasText("删除「微信」的缓存信息？") {
+		t.Fatalf("the delete confirmation did not open; texts = %v", tt.Texts())
+	}
+	if len(cache.gone) != 0 {
+		t.Fatalf("the entry was dropped before confirmation: %v", cache.gone)
+	}
+	if err := tt.Click("确认删除"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	want := vm.Manager.Profiles()[0].ID.String() + "|com.tencent.mm"
+	if len(cache.gone) != 1 || cache.gone[0] != want {
+		t.Fatalf("dropped = %v, want [%s]", cache.gone, want)
+	}
+	if vm.CacheConfirmOpen {
+		t.Fatal("the confirmation stayed open after the delete")
+	}
+}
+
+func TestPurgeAsksBeforeClearingTheDevice(t *testing.T) {
+	vm, cache := cacheFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	if err := tt.Click("清空这台设备的缓存"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	tt.Frame()
+	if len(cache.purged) != 0 {
+		t.Fatalf("the device was purged before confirmation: %v", cache.purged)
+	}
+	// The confirmation has to say which device, how many entries and how big.
+	for _, want := range []string{"E245", "1 条", "1.2 MB", "资源页下次打开时会重新读取"} {
+		if !tt.HasText(want) {
+			t.Fatalf("the purge confirmation lacks %q; texts = %v", want, tt.Texts())
+		}
+	}
+	if err := tt.Click("确认清空"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if len(cache.purged) != 1 {
+		t.Fatalf("purged = %v, want the device once", cache.purged)
+	}
+	if vm.CacheConfirmOpen {
+		t.Fatal("the confirmation stayed open after the purge")
+	}
+}
+
+func TestPurgeErrorKeepsTheDialogOpen(t *testing.T) {
+	vm, cache := cacheFixture(t)
+	cache.err = core.Error("磁盘只读")
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	if err := tt.Click("清空这台设备的缓存"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	tt.Frame()
+	if err := tt.Click("确认清空"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if !tt.HasText("磁盘只读") {
+		t.Fatalf("the failure is not shown in the dialog; texts = %v", tt.Texts())
+	}
+	if !vm.CacheConfirmOpen {
+		t.Fatal("the dialog closed on a failed purge")
+	}
+}
+
+func TestPurgeClearsTheDecodedIconCache(t *testing.T) {
+	vm, cache := cacheFixture(t)
+	device := vm.Manager.Profiles()[0].ID
+	vm.appIcons = map[string]iconAsset{
+		device.String() + "|com.tencent.mm":  {},
+		uuid.NewString() + "|com.tencent.mm": {},
+	}
+	if err := vm.purgeAppMetaCache(device); err != nil {
+		t.Fatalf("purgeAppMetaCache() error: %v", err)
+	}
+	if _, ok := vm.appIcons[device.String()+"|com.tencent.mm"]; ok {
+		t.Fatal("the decoded icon of a purged device survived")
+	}
+	if _, ok := vm.appIcons[device.String()]; ok {
+		t.Fatal("unexpected key")
+	}
+	if len(vm.appIcons) != 1 {
+		t.Fatalf("appIcons = %v, want the other device's icon untouched", vm.appIcons)
+	}
+	if len(cache.purged) != 1 {
+		t.Fatalf("purged = %v", cache.purged)
+	}
+}

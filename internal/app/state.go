@@ -101,6 +101,11 @@ type ViewModel struct {
 	CacheDevice uuid.UUID
 	// CacheTable keeps the cache page's column layout across frames.
 	CacheTable components.TableState
+	// CacheConfirmOpen asks before dropping cached rows; an empty
+	// CacheConfirmPkg means the whole device.
+	CacheConfirmOpen  bool
+	CacheConfirmPkg   string
+	CacheConfirmError string
 	// DerpTable keeps the DERP list's column layout across frames.
 	DerpTable components.TableState
 	// DerpRegionTable keeps the detail page's region table layout.

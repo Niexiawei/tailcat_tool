@@ -47,6 +47,11 @@ func (vm *ViewModel) cachePage(c *ui.Context) {
 				})
 			}
 		})
+		if components.Button(c, "清空这台设备的缓存", components.ButtonSecondary).Clicked() {
+			vm.CacheConfirmOpen = true
+			vm.CacheConfirmPkg = ""
+			vm.CacheConfirmError = ""
+		}
 	})
 }
 
@@ -128,7 +133,11 @@ func (vm *ViewModel) cacheCell(c *ui.Context, col int, entry core.AppMetaEntry) 
 		}
 		components.Text(c, "有效").FontSize(11).TextColor(theme.TextMuted)
 	default:
-		components.IconButton(c, lucide.Trash(), "删除", components.IconButtonPlain)
+		if components.IconButton(c, lucide.Trash(), "删除", components.IconButtonPlain).Clicked() {
+			vm.CacheConfirmOpen = true
+			vm.CacheConfirmPkg = entry.Package
+			vm.CacheConfirmError = ""
+		}
 	}
 }
 
@@ -155,4 +164,91 @@ func formatBytes(size int64) string {
 		}
 	}
 	return strconv.FormatInt(size, 10) + " B"
+}
+
+// CacheConfirmView asks before one row or a whole device leaves the cache.
+// The confirmation states what disappears and that the resource page will read
+// it again, because "cleared" is not the same as "gone from the device".
+func (vm *ViewModel) CacheConfirmView(c *ui.Context) {
+	if !vm.CacheConfirmOpen {
+		return
+	}
+	theme := c.Theme()
+	open := true
+	components.Dialog(c, &open, components.DialogOptions{Label: "清除应用信息缓存"}, func(panel ui.Element) {
+		panel.Padding(20).Gap(10).Width(440)
+		panel.Children(func() {
+			entries := vm.Manager.AppMetaCacheEntries(vm.CacheDevice)
+			if vm.CacheConfirmPkg == "" {
+				var total int64
+				for _, entry := range entries {
+					total += entry.Size
+				}
+				components.Text(c, "清空「"+vm.cacheDeviceLabel(vm.CacheDevice)+"」的应用信息缓存？").FontSize(18).Bold()
+				components.Text(c, "这台设备、"+itoa(len(entries))+" 条、约 "+formatBytes(total)+"。资源页下次打开时会重新读取。").FontSize(11).TextColor(theme.TextMuted)
+			} else {
+				components.Text(c, "删除「"+vm.cachePackageLabel(entries)+"」的缓存信息？").FontSize(18).Bold()
+				components.Text(c, "删除后下一次读取会重新向设备请求。").FontSize(11).TextColor(theme.TextMuted)
+			}
+			if vm.CacheConfirmError != "" {
+				components.Text(c, vm.CacheConfirmError).FontSize(11).TextColor(theme.Warning)
+			}
+			ui.Row(c).FillWidth().Gap(6).Justify(ui.End).Children(func() {
+				if components.Button(c, "取消", components.ButtonOutline).Clicked() {
+					vm.closeCacheConfirm()
+					open = false
+				}
+				if vm.CacheConfirmPkg == "" {
+					if components.Button(c, "确认清空", components.ButtonSecondary).Clicked() {
+						if err := vm.purgeAppMetaCache(vm.CacheDevice); err != nil {
+							vm.CacheConfirmError = err.Error()
+							return
+						}
+						vm.closeCacheConfirm()
+						open = false
+					}
+				} else {
+					if components.Button(c, "确认删除", components.ButtonSecondary).Clicked() {
+						if err := vm.Manager.InvalidateAppMetaCache(vm.CacheDevice, vm.CacheConfirmPkg); err != nil {
+							vm.CacheConfirmError = err.Error()
+							return
+						}
+						vm.Notify("已删除该应用信息的缓存")
+						vm.closeCacheConfirm()
+						open = false
+					}
+				}
+			})
+		})
+	})
+	if !open {
+		vm.closeCacheConfirm()
+	}
+}
+
+// cachePackageLabel names the row the confirmation is about.
+func (vm *ViewModel) cachePackageLabel(entries []core.AppMetaEntry) string {
+	for _, entry := range entries {
+		if entry.Package == vm.CacheConfirmPkg {
+			return entryLabel(entry)
+		}
+	}
+	return vm.CacheConfirmPkg
+}
+
+// purgeAppMetaCache clears one device and the icons this process decoded from
+// its old entries.
+func (vm *ViewModel) purgeAppMetaCache(device uuid.UUID) error {
+	if err := vm.Manager.PurgeAppMetaCache(device); err != nil {
+		return err
+	}
+	vm.forgetAppIcons(device)
+	vm.Notify("已清空该设备的应用信息缓存")
+	return nil
+}
+
+func (vm *ViewModel) closeCacheConfirm() {
+	vm.CacheConfirmOpen = false
+	vm.CacheConfirmPkg = ""
+	vm.CacheConfirmError = ""
 }

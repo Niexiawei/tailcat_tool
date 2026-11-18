@@ -30,6 +30,7 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 	vm.LogClearView(c)
 	vm.DerpEditorView(c)
 	vm.DerpDeleteView(c)
+	vm.CacheConfirmView(c)
 }
 
 // routedPage builds the page the router shows.

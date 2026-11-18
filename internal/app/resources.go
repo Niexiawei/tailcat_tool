@@ -527,6 +527,17 @@ type iconAsset struct {
 	image     ui.ImageSource
 }
 
+// forgetAppIcons drops one device's decoded icons, so a cleared cache is not
+// contradicted by an image this process still holds.
+func (vm *ViewModel) forgetAppIcons(device uuid.UUID) {
+	prefix := device.String() + "|"
+	for key := range vm.appIcons {
+		if strings.HasPrefix(key, prefix) {
+			delete(vm.appIcons, key)
+		}
+	}
+}
+
 // appIcon decodes one application's icon once per reading and remembers it,
 // including the answer "there is none", which Avatar draws as initials.
 func (vm *ViewModel) appIcon(device uuid.UUID, pkg string) ui.ImageSource {
