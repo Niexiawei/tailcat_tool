@@ -446,3 +446,25 @@ func (s *LogcatStream) noteLocked() bool {
 	s.lastNote = now
 	return true
 }
+
+// attach hands the stream the process that feeds it.
+func (s *LogcatStream) attach(proc *Proc, cancel context.CancelFunc) {
+	s.mu.Lock()
+	s.proc, s.cancel = proc, cancel
+	s.mu.Unlock()
+}
+
+// finish records that the process ended, flushing whatever was left mid-line.
+func (s *LogcatStream) finish(code int) {
+	s.mu.Lock()
+	s.splitter.flush(s.appendLineLocked)
+	s.exited = true
+	if code != 0 {
+		s.err = Errorf("adb logcat 退出码 %d", code).Error()
+	}
+	s.version++
+	s.mu.Unlock()
+	if s.notify != nil {
+		s.notify()
+	}
+}

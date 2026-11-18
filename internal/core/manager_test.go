@@ -17,10 +17,38 @@ type fakeRunner struct {
 	mu      sync.Mutex
 	calls   []Command
 	handler func(ctx context.Context, c Command) (Result, error)
+	// starts records every streaming command; startHandler answers it, so a
+	// test can feed the stream the way a pipe would.
+	starts       []Command
+	startHandler func(ctx context.Context, c Command, onOutput func(string)) (*Proc, error)
 }
 
-func (f *fakeRunner) Start(context.Context, Command, func(string)) (*Proc, error) {
+func (f *fakeRunner) Start(ctx context.Context, c Command, onOutput func(string)) (*Proc, error) {
+	f.mu.Lock()
+	f.starts = append(f.starts, c)
+	handler := f.startHandler
+	f.mu.Unlock()
+	if handler != nil {
+		return handler(ctx, c, onOutput)
+	}
 	return nil, Error("Start is not used by these tests")
+}
+
+// startLog returns the arguments of every streamed command, in order.
+func (f *fakeRunner) startLog() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([][]string, 0, len(f.starts))
+	for _, c := range f.starts {
+		out = append(out, c.Args)
+	}
+	return out
+}
+
+func (f *fakeRunner) setStartHandler(h func(ctx context.Context, c Command, onOutput func(string)) (*Proc, error)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.startHandler = h
 }
 
 func (f *fakeRunner) Run(ctx context.Context, c Command, onOutput func(string)) (Result, error) {

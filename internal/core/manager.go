@@ -43,8 +43,10 @@ type Manager struct {
 	tempCredentials map[uuid.UUID]string
 	// logs carries channel log records to the recorder off the manager lock,
 	// so a slow history store can never freeze the window.
-	logs         chan LogRecord
-	appLogs      chan AppLogRecord
+	logs    chan LogRecord
+	appLogs chan AppLogRecord
+	// logcats holds at most one streaming logcat per device.
+	logcats      map[uuid.UUID]*LogcatStream
 	sessions     map[uuid.UUID]Session
 	tasks        []Task
 	relayPresets []RelayPreset
@@ -143,6 +145,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		changed:             make(chan struct{}, 1),
 		logs:                make(chan LogRecord, 256),
 		appLogs:             make(chan AppLogRecord, 256),
+		logcats:             map[uuid.UUID]*LogcatStream{},
 		config:              opts.Config,
 		credentials:         opts.Credentials,
 		identities:          opts.Identities,
@@ -627,6 +630,9 @@ func (m *Manager) Disconnect(ctx context.Context, id uuid.UUID) {
 
 	jobs := m.cancelDeviceTasks(id)
 	waitDones(jobs)
+	// A log stream reads the channel the disconnect is about to close; it has
+	// to stop before the channel does, and off the manager lock like the tasks.
+	m.StopLogcat(id)
 
 	if runtime != nil {
 		if runtime.conn != nil {
