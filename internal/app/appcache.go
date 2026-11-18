@@ -47,7 +47,7 @@ func (vm *ViewModel) cachePage(c *ui.Context) {
 				})
 			}
 		})
-		if components.Button(c, "清空这台设备的缓存", components.ButtonSecondary).Clicked() {
+		if components.Button(c, "清空这台设备的缓存", components.ButtonSecondary).AlignSelf(ui.Start).Clicked() {
 			vm.CacheConfirmOpen = true
 			vm.CacheConfirmPkg = ""
 			vm.CacheConfirmError = ""
@@ -87,6 +87,16 @@ func (vm *ViewModel) cacheDevicePicker(c *ui.Context, profiles []core.Profile) {
 			item.Children(func() { components.Text(c, vm.cacheDeviceLabel(profile.ID)).SingleLine() })
 		}
 	})
+}
+
+// cacheDeviceName is the bare name, for a sentence that already says 设备.
+func (vm *ViewModel) cacheDeviceName(id uuid.UUID) string {
+	for _, profile := range vm.Manager.AllProfiles() {
+		if profile.ID == id {
+			return profile.Name
+		}
+	}
+	return "这台设备"
 }
 
 func (vm *ViewModel) cacheDeviceLabel(id uuid.UUID) string {
@@ -184,7 +194,7 @@ func (vm *ViewModel) CacheConfirmView(c *ui.Context) {
 				for _, entry := range entries {
 					total += entry.Size
 				}
-				components.Text(c, "清空「"+vm.cacheDeviceLabel(vm.CacheDevice)+"」的应用信息缓存？").FontSize(18).Bold()
+				components.Text(c, "清空「"+vm.cacheDeviceName(vm.CacheDevice)+"」的应用信息缓存？").FontSize(18).Bold()
 				components.Text(c, "这台设备、"+itoa(len(entries))+" 条、约 "+formatBytes(total)+"。资源页下次打开时会重新读取。").FontSize(11).TextColor(theme.TextMuted)
 			} else {
 				components.Text(c, "删除「"+vm.cachePackageLabel(entries)+"」的缓存信息？").FontSize(18).Bold()

@@ -306,6 +306,33 @@ func shotCases() []shotCase {
 			settle: 12,
 		},
 		{
+			name: "22-appmeta-cache",
+			build: func(t *testing.T) *ViewModel {
+				cache := &stubAppMetaCache{entries: map[string][]core.AppMetaEntry{}}
+				vm := newCacheViewModel(t, cache)
+				vm.CacheDevice = vm.Manager.Profiles()[0].ID
+				cache.entries[vm.CacheDevice.String()] = []core.AppMetaEntry{
+					{Package: "com.tencent.mm", Label: "微信", Size: 1258291, FetchedAt: time.Date(2026, 11, 16, 9, 30, 0, 0, time.Local)},
+					{Package: "com.android.settings", Label: "设置", Size: 512, FetchedAt: time.Date(2026, 10, 1, 8, 0, 0, 0, time.Local), Stale: true},
+				}
+				return vm
+			},
+		},
+		{
+			name: "23-appmeta-cache-confirm",
+			build: func(t *testing.T) *ViewModel {
+				cache := &stubAppMetaCache{entries: map[string][]core.AppMetaEntry{}}
+				vm := newCacheViewModel(t, cache)
+				vm.CacheDevice = vm.Manager.Profiles()[0].ID
+				cache.entries[vm.CacheDevice.String()] = []core.AppMetaEntry{
+					{Package: "com.tencent.mm", Label: "微信", Size: 1258291, FetchedAt: time.Date(2026, 11, 16, 9, 30, 0, 0, time.Local)},
+				}
+				vm.CacheConfirmOpen = true
+				return vm
+			},
+			settle: 12,
+		},
+		{
 			name: "21-derp-delete",
 			build: func(t *testing.T) *ViewModel {
 				vm, preset := newDerpViewModel(t)

@@ -96,18 +96,20 @@ func NewDemoEnvironment() Environment {
 	// --demo never opens history.db, but its log page must still have rows:
 	// a screenshot of an empty page proves nothing.
 	demo := newDemoHistory(profiles)
+	demoCache := newDemoAppMetaCache()
 	manager := core.NewManager(core.ManagerOptions{
 		Configuration: core.Configuration{
 			Profiles: profiles,
 			Tools:    core.ToolSettings{ADB: self},
 		},
-		Credentials: creds,
-		Identities:  core.NewIdentityStore(demoIdentityDir()),
-		Runner:      demoRunner{},
-		Forwarder:   &demoOpener{},
-		Locate:      func(string) (string, bool) { return "", false },
-		AppMeta:     demoAppMeta{},
-		Recorder:    demo,
+		Credentials:  creds,
+		Identities:   core.NewIdentityStore(demoIdentityDir()),
+		Runner:       demoRunner{},
+		Forwarder:    &demoOpener{},
+		Locate:       func(string) (string, bool) { return "", false },
+		AppMeta:      demoAppMeta{},
+		AppMetaCache: demoCache,
+		Recorder:     demo,
 	})
 	return Environment{
 		Manager:      manager,
@@ -136,6 +138,51 @@ func repeatChar(r rune, n int) string {
 		out[i] = r
 	}
 	return string(out)
+}
+
+// demoAppMetaCache gives the cache page rows to look at without touching the
+// real cache directory. Purge and Invalidate really empty it, so the demo's
+// clear button behaves like the real one.
+type demoAppMetaCache struct {
+	mu      sync.Mutex
+	entries map[string][]core.AppMetaEntry
+}
+
+func newDemoAppMetaCache() *demoAppMetaCache {
+	return &demoAppMetaCache{entries: map[string][]core.AppMetaEntry{}}
+}
+
+func (d *demoAppMetaCache) Entries(device string) []core.AppMetaEntry {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.entries[device]; !ok {
+		now := time.Now()
+		d.entries[device] = []core.AppMetaEntry{
+			{Package: "com.android.camera", Label: "相机", Size: 20 * 1024, FetchedAt: now.Add(-2 * time.Hour)},
+			{Package: "com.android.gallery", Label: "相册", Size: 15 * 1024, FetchedAt: now.Add(-9 * 24 * time.Hour), Stale: true},
+		}
+	}
+	return append([]core.AppMetaEntry(nil), d.entries[device]...)
+}
+
+func (d *demoAppMetaCache) Invalidate(device, pkg string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	kept := d.entries[device][:0]
+	for _, entry := range d.entries[device] {
+		if entry.Package != pkg {
+			kept = append(kept, entry)
+		}
+	}
+	d.entries[device] = kept
+	return nil
+}
+
+func (d *demoAppMetaCache) Purge(device string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.entries[device] = nil
+	return nil
 }
 
 // demoAppMeta gives the simulated devices names and icons without any adb: the

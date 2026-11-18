@@ -491,9 +491,8 @@ go test ./internal/compat/    # 第三方 API 契约
 3. **`adbServerRestarted` / `listenerLost`** 两种干预尚未实现（需要多设备关联与监听器健康探测）。
 4. **配置读取失败**只打印一条提示，没有独立的启动错误页。
 5. **托盘 Badge**：排队中的干预提示目前只会出现在托盘菜单文本里，没有数字角标。
-6. **应用信息缓存管理页未做**：`core.AppMetaCache`（`Entries`/`Invalidate`/`Purge`）与磁盘缓存已就位，但还没有列出、删除、清空的界面。
-7. **逐进程 GPU 未实现**：`GPUSample.PerProcessAvailable` 恒为 false，只有整机 GPU 使用率。
-8. **文件页只读**：没有删除、重命名、新建目录、文件内容预览与多选批传；超过 2000 项的目录要靠进入子目录查看。
+6. **逐进程 GPU 未实现**：`GPUSample.PerProcessAvailable` 恒为 false，只有整机 GPU 使用率。
+7. **文件页只读**：没有删除、重命名、新建目录、文件内容预览与多选批传；超过 2000 项的目录要靠进入子目录查看。
 
 ---
 
