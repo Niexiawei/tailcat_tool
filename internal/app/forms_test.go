@@ -87,7 +87,7 @@ func TestDetailRows(t *testing.T) {
 	tt := ui.NewTester(vm.ContentView, 900, 700)
 	for _, want := range []string{
 		"本地入口", "远端端口", "DERP 中继", "链路", "设备型号", "设备代号",
-		"Android", "设备序列号", "Shell 权限", "官方默认节点", "未探测",
+		"Android", "设备序列号", "Shell 权限", "默认节点", "未探测",
 		"探测链路", "刷新信息", "设备操作",
 	} {
 		if !tt.HasText(want) {
@@ -393,22 +393,23 @@ func TestEditorRelayTabSwitchesToCustom(t *testing.T) {
 	}
 }
 
-func TestRelayHistoryOptionsListSavedSources(t *testing.T) {
-	entries := []core.RelayHistoryEntry{
-		{Name: "内网中继", Source: "https://relay.example.com/map.json"},
-		{Name: "内联 JSON 4f2a9c1b", Source: `{"Regions":{}}`},
-	}
-	options := relayHistoryOptions(entries)
-	if len(options) != 2 || options[0].Label != "内网中继" || options[0].Value != "https://relay.example.com/map.json" {
-		t.Fatalf("options = %+v", options)
-	}
-}
-
 func TestClosingTheEditorDoesNotPanic(t *testing.T) {
 	vm := newTestViewModel(t)
 	vm.openEditor(&EditorRequest{})
 	tt := ui.NewTester(vm.ContentView, 900, 900)
 	tt.Frame()
+	tt.Frame()
+	// The relay dropdown is an overlay of its own; closing the dialog with it
+	// closed, then with it open, must both survive MyGo's closing animation.
+	if err := tt.Click("自定义"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if err := tt.Click("DERP 节点来源"); err != nil {
+		t.Fatalf("opening the relay menu: %v", err)
+	}
+	tt.Frame()
+	// Esc closes the dropdown first; the dialog's own close comes next.
+	tt.Key(0, ui.KeyEscape)
 	tt.Frame()
 	if err := tt.Click("取消"); err != nil {
 		t.Fatalf("Click() error: %v", err)
@@ -463,5 +464,154 @@ func TestTruncatedDeviceNamesShowATooltip(t *testing.T) {
 		if _, ok := tt.AccessByRole(ui.RoleTooltip, long); !ok {
 			t.Fatalf("%s: hovering the clipped name showed no tooltip", tc.name)
 		}
+	}
+}
+
+func TestRelaySourceOptionsMergePresetsAndHistory(t *testing.T) {
+	presets := []core.RelayPreset{
+		{Name: "公司自建", Source: "https://relay.example.com/map.json"},
+		{Name: "内网", Source: `{"Regions":{}}`},
+	}
+	history := []core.RelayHistoryEntry{
+		// The same source as a preset: listed once, under the user's name.
+		{Name: "relay.example.com", Source: "https://relay.example.com/map.json"},
+		{Name: "evcc.coauto.cc", Source: "https://evcc.coauto.cc/map.json"},
+	}
+	options := relaySourceOptions(presets, history)
+	want := []struct{ label, value string }{
+		{"预设 · 公司自建", "https://relay.example.com/map.json"},
+		{"预设 · 内网", `{"Regions":{}}`},
+		{"历史 · evcc.coauto.cc", "https://evcc.coauto.cc/map.json"},
+	}
+	if len(options) != len(want) {
+		t.Fatalf("options = %+v, want %d", options, len(want))
+	}
+	for i, w := range want {
+		if options[i].Label != w.label || options[i].Value != w.value {
+			t.Fatalf("options[%d] = %+v, want %+v", i, options[i], w)
+		}
+	}
+}
+
+func TestEditorPicksAPresetFromTheMergedMenu(t *testing.T) {
+	vm, preset := newDerpViewModel(t)
+	vm.openEditor(&EditorRequest{})
+	tt := ui.NewTester(vm.ContentView, 900, 1000)
+	if err := tt.Click("自定义"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if !tt.HasText("从预设或历史选择") {
+		t.Fatalf("the merged picker is missing; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("DERP 节点来源"); err != nil {
+		t.Fatalf("opening the menu: %v", err)
+	}
+	if err := tt.Click("预设 · 公司自建"); err != nil {
+		t.Fatalf("choosing the preset: %v", err)
+	}
+	if vm.EditorDraft.RelaySource != preset.Source {
+		t.Fatalf("RelaySource = %q, want the preset's %q", vm.EditorDraft.RelaySource, preset.Source)
+	}
+	if vm.EditorDraft.RelayPick != preset.Source {
+		t.Fatalf("RelayPick = %q", vm.EditorDraft.RelayPick)
+	}
+	// The source belongs to the preset now: the box shows it and takes no edits.
+	box, ok := tt.AccessByRole(ui.RoleTextField, "DERP JSON 链接或内容")
+	if !ok {
+		t.Fatalf("the source box is missing; access = %v", tt.AccessAll())
+	}
+	if !box.ReadOnly {
+		t.Fatal("the source box stays editable after picking a preset")
+	}
+	if box.Multiline {
+		t.Fatal("the locked box is a read-only line, not a text area")
+	}
+	if !strings.HasPrefix(box.Value, "内联 JSON") {
+		t.Fatalf("locked box value = %q, want the inline summary", box.Value)
+	}
+	if !tt.HasText("来源由所选预设提供；要自己填，请在上方选「自定义」") {
+		t.Fatalf("no hint on why the box is locked; texts = %v", tt.Texts())
+	}
+}
+
+func TestEditorRelayCustomRowUnlocksTheBox(t *testing.T) {
+	vm, preset := newDerpViewModel(t)
+	vm.openEditor(&EditorRequest{})
+	tt := ui.NewTester(vm.ContentView, 900, 1000)
+	if err := tt.Click("自定义"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if err := tt.Click("DERP 节点来源"); err != nil {
+		t.Fatalf("opening the menu: %v", err)
+	}
+	if err := tt.Click("预设 · 公司自建"); err != nil {
+		t.Fatalf("choosing the preset: %v", err)
+	}
+	// Clearing the pick is how a preset is abandoned: the box empties and
+	// becomes editable again.
+	if err := tt.Click("DERP 节点来源"); err != nil {
+		t.Fatalf("reopening the menu: %v", err)
+	}
+	if err := tt.Click(relayPickCustom); err != nil {
+		t.Fatalf("choosing custom: %v", err)
+	}
+	if vm.EditorDraft.RelayPick != "" || vm.EditorDraft.RelaySource != "" {
+		t.Fatalf("pick = %q, source = %q; clearing must empty both", vm.EditorDraft.RelayPick, vm.EditorDraft.RelaySource)
+	}
+	box, ok := tt.AccessByRole(ui.RoleTextField, "DERP JSON 链接或内容")
+	if !ok {
+		t.Fatalf("the source box is missing; access = %v", tt.AccessAll())
+	}
+	if box.ReadOnly {
+		t.Fatal("the source box is still locked after clearing the preset")
+	}
+	if !box.Multiline {
+		t.Fatal("the custom source box is not a text area")
+	}
+	focusField(t, tt, "DERP JSON 链接或内容")
+	tt.Type("https://relay.example.com/other.json")
+	if vm.EditorDraft.RelaySource != "https://relay.example.com/other.json" {
+		t.Fatalf("typed source = %q; the cleared box must accept custom content", vm.EditorDraft.RelaySource)
+	}
+	_ = preset
+}
+
+func TestEditorRelayMenuStartsItemsAtTheLeftEdge(t *testing.T) {
+	vm, _ := newDerpViewModel(t)
+	vm.openEditor(&EditorRequest{})
+	tt := ui.NewTester(vm.ContentView, 900, 1000)
+	if err := tt.Click("自定义"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if err := tt.Click("DERP 节点来源"); err != nil {
+		t.Fatalf("opening the menu: %v", err)
+	}
+	var option ui.AccessInfo
+	found := false
+	for _, info := range tt.AccessAll() {
+		if info.Role == ui.RoleOption && info.Name == "预设 · 公司自建" {
+			option, found = info, true
+		}
+	}
+	if !found {
+		t.Fatalf("the option is not in the popup; access = %v", tt.AccessAll())
+	}
+	label, ok := tt.Find("预设 · 公司自建")
+	if !ok {
+		t.Fatal("the option label is not laid out")
+	}
+	// Centered items would start around a third of the popup's width in.
+	if offset := label.X - option.Bounds.X; offset > 30 {
+		t.Fatalf("the option label starts %0.0f px in; items must be left aligned", offset)
+	}
+}
+
+func TestEditorPrefillsThePresetPickerWhenEditingADevice(t *testing.T) {
+	vm, preset := newDerpViewModel(t)
+	profile := vm.Manager.Profiles()[0]
+	profile.RelaySource = preset.Source
+	vm.openEditor(&EditorRequest{Profile: &profile})
+	if vm.EditorDraft.RelayPick != preset.Source {
+		t.Fatalf("RelayPick = %q, want the device's preset", vm.EditorDraft.RelayPick)
 	}
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"image"
 	"image/png"
 	"os"
@@ -265,6 +266,135 @@ func shotCases() []shotCase {
 				profile := vm.Manager.Profiles()[0]
 				vm.Manager.ForceAttentionForTest(profile.ID, core.AttentionSerialDetached,
 					"本应用建立的 ADB 连接已被外部断开（adb disconnect）")
+				return vm
+			},
+			settle: 12,
+		},
+		{
+			name: "18-derp-list",
+			build: func(t *testing.T) *ViewModel {
+				vm, _ := newDerpViewModel(t)
+				if _, err := vm.Manager.SaveRelayPreset(core.SaveRelayPresetRequest{
+					Name: "备用地图", Source: "https://relay2.example.com/map.json",
+				}); err != nil {
+					t.Fatalf("SaveRelayPreset() error: %v", err)
+				}
+				return vm
+			},
+		},
+		{
+			name: "19-derp-detail",
+			build: func(t *testing.T) *ViewModel {
+				vm := newTestViewModel(t)
+				id, err := vm.Manager.SaveRelayPreset(core.SaveRelayPresetRequest{Name: "公司自建", Source: derpTestMap})
+				if err != nil {
+					t.Fatalf("SaveRelayPreset() error: %v", err)
+				}
+				vm.OpenDerpDetail(id)
+				vm.DerpJSONOpen = true
+				return vm
+			},
+			settle: 6,
+		},
+		{
+			name: "20-derp-editor",
+			build: func(t *testing.T) *ViewModel {
+				vm := newTestViewModel(t)
+				vm.OpenDerp()
+				vm.openDerpEditor(&DerpEditorDraft{Name: "公司自建", Kind: "json", Content: derpTestMap})
+				return vm
+			},
+			settle: 12,
+		},
+		{
+			name: "24-device-editor-relay",
+			build: func(t *testing.T) *ViewModel {
+				vm, preset := newDerpViewModel(t)
+				vm.openEditor(&EditorRequest{})
+				vm.EditorDraft.RelayTab = 1
+				vm.EditorDraft.RelayPick = preset.Source
+				vm.EditorDraft.RelaySource = preset.Source
+				return vm
+			},
+			settle: 12,
+		},
+		{
+			name: "25-device-editor-relay-custom",
+			build: func(t *testing.T) *ViewModel {
+				vm, _ := newDerpViewModel(t)
+				vm.openEditor(&EditorRequest{})
+				vm.EditorDraft.RelayTab = 1
+				vm.EditorDraft.RelaySource = `{"Regions":{"901":{"RegionID":901,"RegionCode":"test","Nodes":[{"Name":"901a","RegionID":901,"HostName":"relay.example.com","DERPPort":443}]}}}`
+				return vm
+			},
+			settle: 12,
+		},
+		{
+			name: "22-appmeta-cache",
+			build: func(t *testing.T) *ViewModel {
+				cache := &stubAppMetaCache{entries: map[string][]core.AppMetaEntry{}}
+				vm := newCacheViewModel(t, cache)
+				vm.CacheDevice = vm.Manager.Profiles()[0].ID
+				cache.entries[vm.CacheDevice.String()] = []core.AppMetaEntry{
+					{Package: "com.tencent.mm", Label: "微信", Size: 1258291, FetchedAt: time.Date(2026, 11, 16, 9, 30, 0, 0, time.Local)},
+					{Package: "com.android.settings", Label: "设置", Size: 512, FetchedAt: time.Date(2026, 10, 1, 8, 0, 0, 0, time.Local), Stale: true},
+				}
+				return vm
+			},
+		},
+		{
+			name: "27-resources-app-actions",
+			build: func(t *testing.T) *ViewModel {
+				vm, _ := resourceFixtureWithMeta(t, map[string]core.AppMeta{
+					"com.foo": {Package: "com.foo", Label: "微信"},
+				})
+				return vm
+			},
+			settle: 4,
+		},
+		{
+			name: "26-appmeta-cache-long",
+			build: func(t *testing.T) *ViewModel {
+				cache := &stubAppMetaCache{entries: map[string][]core.AppMetaEntry{}}
+				vm := newCacheViewModel(t, cache)
+				profile := vm.Manager.Profiles()[0]
+				for i := 0; i < 25; i++ {
+					cache.entries[profile.ID.String()] = append(cache.entries[profile.ID.String()], core.AppMetaEntry{
+						Package:   fmt.Sprintf("com.example.app%02d", i),
+						Label:     fmt.Sprintf("示例应用 %02d", i),
+						Size:      int64(1024 * (i + 1)),
+						FetchedAt: time.Date(2026, 11, 16, 9, 30, 0, 0, time.Local),
+					})
+				}
+				return vm
+			},
+			width: 900, height: 700,
+		},
+		{
+			name: "23-appmeta-cache-confirm",
+			build: func(t *testing.T) *ViewModel {
+				cache := &stubAppMetaCache{entries: map[string][]core.AppMetaEntry{}}
+				vm := newCacheViewModel(t, cache)
+				vm.CacheDevice = vm.Manager.Profiles()[0].ID
+				cache.entries[vm.CacheDevice.String()] = []core.AppMetaEntry{
+					{Package: "com.tencent.mm", Label: "微信", Size: 1258291, FetchedAt: time.Date(2026, 11, 16, 9, 30, 0, 0, time.Local)},
+				}
+				vm.CacheConfirmOpen = true
+				return vm
+			},
+			settle: 12,
+		},
+		{
+			name: "21-derp-delete",
+			build: func(t *testing.T) *ViewModel {
+				vm, preset := newDerpViewModel(t)
+				if _, err := vm.Manager.SaveDevice(core.SaveDeviceRequest{
+					Name: "客厅", Address: testAddress, RemotePort: 5555, RelaySource: preset.Source,
+				}); err != nil {
+					t.Fatalf("SaveDevice() error: %v", err)
+				}
+				wanted := preset
+				vm.DerpConfirmDelete = &wanted
 				return vm
 			},
 			settle: 12,

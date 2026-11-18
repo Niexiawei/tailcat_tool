@@ -30,6 +30,14 @@ type cache struct {
 	now  func() time.Time
 	mu   sync.Mutex
 	rows map[string]cacheEntry
+	// epochs invalidates reads that were already running when a device's cache
+	// was purged: a write whose epoch is stale is dropped instead of putting the
+	// name back the user just cleared.
+	epochs map[string]uint64
+	// versions invalidates one package's read across a 删除. It is per row:
+	// deleting one entry must not throw away the device's other reads the way
+	// a device epoch would.
+	versions map[string]uint64
 	// limit is maxCacheEntries, unless a test lowers it.
 	limit int
 }
@@ -56,7 +64,7 @@ func newCache(dir string, now func() time.Time) (*cache, error) {
 	if now == nil {
 		now = time.Now
 	}
-	c := &cache{dir: dir, now: now, rows: map[string]cacheEntry{}, limit: maxCacheEntries}
+	c := &cache{dir: dir, now: now, rows: map[string]cacheEntry{}, epochs: map[string]uint64{}, versions: map[string]uint64{}, limit: maxCacheEntries}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, core.Errorf("无法读取应用信息缓存：%v", err)
@@ -108,10 +116,39 @@ func (c *cache) freshAt(device, pkg, key string, now time.Time) bool {
 }
 
 func (c *cache) put(device, pkg, key, label string, icon []byte) error {
-	return c.putAt(device, pkg, key, label, icon, c.now())
+	stored, err := c.putAt(device, pkg, key, label, icon, c.now(), c.epochOf(device), c.versionOf(device, pkg))
+	if err != nil {
+		return err
+	}
+	if !stored {
+		return core.Error("应用信息缓存已被清空或删除，本次读取被丢弃")
+	}
+	return nil
 }
 
-func (c *cache) putAt(device, pkg, key, label string, icon []byte, now time.Time) error {
+// epochOf reads the device's current purge epoch. A reader takes it before it
+// starts and hands it back to putAt, which drops the result if the cache was
+// cleared in between.
+func (c *cache) epochOf(device string) uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.epochs[device]
+}
+
+// versionOf reads the row's delete version. A reader takes it before it starts
+// and hands it back to putAt, which drops the result if that entry was deleted
+// in between.
+func (c *cache) versionOf(device, pkg string) uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.versions[entryKey(device, pkg)]
+}
+
+// putAt stores one entry unless the device's cache was purged since epoch or
+// that row was deleted since version, and reports whether it was stored. The
+// checks and the write share the lock, so a purge or a delete either wins and
+// the write is dropped, or waits and then removes what was just written.
+func (c *cache) putAt(device, pkg, key, label string, icon []byte, now time.Time, epoch, version uint64) (bool, error) {
 	entry := cacheEntry{
 		Device:    device,
 		Package:   pkg,
@@ -122,17 +159,22 @@ func (c *cache) putAt(device, pkg, key, label string, icon []byte, now time.Time
 	}
 	data, err := json.Marshal(entry)
 	if err != nil {
-		return core.Errorf("无法编码应用信息缓存：%v", err)
+		return false, core.Errorf("无法编码应用信息缓存：%v", err)
 	}
 	path := c.path(device, pkg)
-	if err := writeFileAtomic(path, data); err != nil {
-		return err
-	}
 	c.mu.Lock()
+	if c.epochs[device] != epoch || c.versions[entryKey(device, pkg)] != version {
+		c.mu.Unlock()
+		return false, nil
+	}
+	if err := writeFileAtomic(path, data); err != nil {
+		c.mu.Unlock()
+		return false, err
+	}
 	c.rows[entryKey(device, pkg)] = entry
 	c.mu.Unlock()
 	c.prune()
-	return nil
+	return true, nil
 }
 
 func (c *cache) entries(device string) []core.AppMetaEntry {
@@ -165,6 +207,9 @@ func (c *cache) entriesAt(device string, now time.Time) []core.AppMetaEntry {
 
 func (c *cache) invalidate(device, pkg string) error {
 	c.mu.Lock()
+	// Bump before removing: a read that already holds the lock finishes and is
+	// deleted right below, while one that arrives later sees the new version.
+	c.versions[entryKey(device, pkg)]++
 	delete(c.rows, entryKey(device, pkg))
 	c.mu.Unlock()
 	if err := os.Remove(c.path(device, pkg)); err != nil && !os.IsNotExist(err) {
@@ -175,6 +220,9 @@ func (c *cache) invalidate(device, pkg string) error {
 
 func (c *cache) purge(device string) error {
 	c.mu.Lock()
+	// Invalidating running reads comes first: a write that already holds the
+	// lock finishes before this bump and is then deleted right below.
+	c.epochs[device]++
 	var stale []string
 	for key, entry := range c.rows {
 		if entry.Device == device {

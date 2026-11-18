@@ -95,6 +95,9 @@ ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
 | `/devices` | 设备列表页 | 卡片式列表（状态点 / 名称 / 连接方式与地址 / 状态），空态给出"添加设备"；页面标题在窗口标题栏里，正文不再重复 |
 | `/devices/{id}` | 设备页 | 面包屑 + 标题行（编辑 / 连接 / 断开）+ 页签（概览 / 资源 / 终端 / 文件 / 日志） |
 | `/logs` | 日志页 | 应用错误 / 通道日志 / 任务的统一时间线，四个筛选项（见 §14）；面包屑「我的设备 › 日志」；入口在侧栏设备列表之下 |
+| `/manage/appmeta` | 缓存管理页 | 按设备列出已缓存的应用名称与图标（包名、大小、读取时间、是否过期），可删除单条或清空这台设备；面包屑「我的设备 › 缓存管理」 |
+| `/manage/derp` | DERP 节点页 | 默认节点 / 预设 / 最近用过的来源集中一页，可新建、编辑、删除（在用不可删）；入口在侧栏设备列表之下 |
+| `/manage/derp/{id}` | DERP 节点详情页 | 区域与节点表、原始 JSON、使用设备；面包屑「我的设备 › DERP 节点 › 名称」，点中间一级回到列表；URL 型可强制重新获取 |
 | 其他 | 列表页 | 兜底 |
 | `/devices/{无效 id}` | "设备不存在"页 | 附带"返回我的设备" |
 
@@ -179,10 +182,14 @@ if !open {
 
 ```go
 ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), Space(2), 0, Space(2)).Children(func() {
-	ui.Scroll(c).FillWidth().Grow(1).Children(func() { vm.deviceGroups(c) })
+	ui.Scroll(c).FillWidth().Grow(1).Children(func() {
+		vm.deviceGroups(c)
+		ui.Column(c).Padding(0, 4).Gap(2).Children(func() { vm.manageEntries(c) })
+	})
 })
 ```
 
+- **管理入口**：设备两组之后是三行页面入口——缓存管理（`lucide.Database`）、DERP 节点（`lucide.Server`）、日志（`lucide.ScrollText`）。它们是页面不是窗口动作，因此放在滚动区里、设备列表之下，而不是底栏；每行与设备行同样的内边距、左对齐与选中底色，读起来是同一份「去哪里」的列表。
 - **分组**：`components.Accordion` 两个 `group.Item`，标题带数量（`我的设备 (3)` / `临时设备 (空)`），展开状态在 `ViewModel.SavedOpen / TemporaryOpen`，默认都展开。空组给一句说明而不是空白。
 - **设备行**：`ui.ButtonBase(c).FillWidth().Shrink(0).Justify(ui.Start).AlignItems(ui.Center).Radius(t.Radius)`，选中时 `Background(t.Selection)`。`ButtonBase` 内部是 `coreRow(c).Center()`，**必须显式 `Justify(Start)`**，否则内容居中。
 - **提示**：设备行的名称与状态行都挂了 `components.Tooltip`，侧栏只有 220 宽，长名字必然被截断。
@@ -419,7 +426,7 @@ TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v
 | 路由、页面、概览、页签 | `internal/app/detail.go` |
 | 日志页与设备日志标签（共享 `logView`、筛选、跟随、输出、清空） | `internal/app/logs.go` |
 | 内嵌终端、`lineConsole` | `internal/app/terminal.go` |
-| 表单（连接方式单选、中继分段与历史） | `internal/app/editor.go` |
+| 表单（连接方式单选、中继分段与「预设 + 历史」合并选择；选中预设后来源框锁定，选「自定义」解锁为多行输入） | `internal/app/editor.go` |
 | 上传/下载表单 | `internal/app/transfer.go` |
 | 连通测试表（`components.Table`、状态图标） | `internal/app/reachability.go` |
 | 错误回流（连接、探测、终端） | `internal/app/detail.go`、`internal/app/actions.go`、`internal/app/app.go` |

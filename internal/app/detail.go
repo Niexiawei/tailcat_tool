@@ -28,6 +28,9 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 	vm.AttentionDialog(c)
 	vm.LogOutputView(c)
 	vm.LogClearView(c)
+	vm.DerpEditorView(c)
+	vm.DerpDeleteView(c)
+	vm.CacheConfirmView(c)
 }
 
 // routedPage builds the page the router shows.
@@ -44,9 +47,24 @@ func (vm *ViewModel) routedPage(c *ui.Context) {
 		return
 	}
 	vm.Router.View(c, func(r *ui.Route) {
-		if name, isManage := managePageTitle(r.Path()); isManage {
-			r.Title(name)
+		switch {
+		case r.Match(CacheRoute):
+			r.Title("缓存管理")
+			vm.cachePage(c)
+			return
+		case r.Match(LogsRoute):
+			r.Title("日志")
 			vm.logsPage(c)
+			return
+		case r.Match(DerpRoute):
+			r.Title("DERP 节点")
+			vm.derpListPage(c)
+			return
+		case r.Match(DerpRoute + "/{id}"):
+			if trail, isManage := vm.managePageTrail(r.Path()); isManage {
+				r.Title(trail[len(trail)-1])
+			}
+			vm.derpDetailPage(c, r.Param("id"))
 			return
 		}
 		if r.Match("/devices/{id}") {
@@ -299,7 +317,7 @@ func orPlaceholder(value, fallback string) string {
 
 func relayLabel(vm *ViewModel, profile core.Profile) string {
 	if profile.RelaySource == "" {
-		return "官方默认节点"
+		return "默认节点"
 	}
 	for _, preset := range vm.Manager.RelayPresets() {
 		if preset.Source == profile.RelaySource {

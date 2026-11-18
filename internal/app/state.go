@@ -97,6 +97,45 @@ type ViewModel struct {
 	toastsMu sync.Mutex
 	toasts   []ui.Toast
 
+	// CacheDevice is the device whose cached app metadata the page shows.
+	CacheDevice uuid.UUID
+	// CacheTable keeps the cache page's column layout across frames.
+	CacheTable components.TableState
+	// CacheConfirmOpen asks before dropping cached rows; an empty
+	// CacheConfirmPkg means the whole device.
+	CacheConfirmOpen  bool
+	CacheConfirmPkg   string
+	CacheConfirmError string
+	// DerpTable keeps the DERP list's column layout across frames.
+	DerpTable components.TableState
+	// DerpRegionTable keeps the detail page's region table layout.
+	DerpRegionTable components.TableState
+	// DerpEditor is the DERP editor's draft; nil closes the dialog.
+	DerpEditor *DerpEditorDraft
+	// DerpConfirmDelete asks before removing this preset; nil closes it.
+	DerpConfirmDelete *core.RelayPreset
+	// DerpDeleteError is why the delete was refused; shown in the dialog.
+	DerpDeleteError string
+	// DerpPreview is the map the detail page shows; nil while loading.
+	DerpPreview *core.RelayMapPreview
+	// DerpPreviewErr is why the last preview attempt failed.
+	DerpPreviewErr string
+	// DerpPreviewTried is the source a fetch was started for. Without it a
+	// failed fetch would restart on every frame and its error would never stay
+	// on screen long enough to click 重试.
+	DerpPreviewTried string
+	// DerpPreviewLoading is true while a preview fetch is in flight.
+	DerpPreviewLoading bool
+	// DerpJSONOpen is the detail page's raw JSON disclosure.
+	DerpJSONOpen bool
+	// derpPreviewMu guards what preview goroutines write.
+	derpPreviewMu sync.Mutex
+	// derpPreviews keeps the last preview of each source, so a frame never
+	// re-parses a 128 KiB inline map.
+	derpPreviews map[string]core.RelayMapPreview
+	// derpInfo caches what the list shows about a source, for the same reason.
+	derpInfo map[string]derpSourceInfo
+
 	// PageLogFilter is the log page's filter; nil means it was never opened.
 	PageLogFilter *logFilter
 	// LogOutput is the task whose output dialog is open; nil closes it.
@@ -237,6 +276,15 @@ const DeviceIndexRoute = "/devices"
 // every task into one searchable timeline.
 const LogsRoute = "/logs"
 
+// CacheRoute is the management page for cached application names and icons.
+const CacheRoute = "/manage/appmeta"
+
+// DerpRoute lists every DERP map source; DerpDetailRoute shows one preset.
+const DerpRoute = "/manage/derp"
+
+// DerpDetailRoute is the page of one saved DERP preset.
+func DerpDetailRoute(id uuid.UUID) string { return DerpRoute + "/" + id.String() }
+
 // DeviceRoute is the page of one device.
 func DeviceRoute(id uuid.UUID) string { return DeviceIndexRoute + "/" + id.String() }
 
@@ -250,6 +298,30 @@ func (vm *ViewModel) OpenDevice(id uuid.UUID) {
 		return
 	}
 	if target := DeviceRoute(id); vm.Router.Path() != target {
+		vm.Router.Push(target)
+	}
+}
+
+// OpenCache shows the application metadata cache page.
+func (vm *ViewModel) OpenCache() {
+	if vm.Router != nil && vm.Router.Path() != CacheRoute {
+		vm.Router.Push(CacheRoute)
+	}
+}
+
+// OpenDerp shows the DERP list.
+func (vm *ViewModel) OpenDerp() {
+	if vm.Router != nil && vm.Router.Path() != DerpRoute {
+		vm.Router.Push(DerpRoute)
+	}
+}
+
+// OpenDerpDetail shows one preset.
+func (vm *ViewModel) OpenDerpDetail(id uuid.UUID) {
+	if vm.Router == nil {
+		return
+	}
+	if target := DerpDetailRoute(id); vm.Router.Path() != target {
 		vm.Router.Push(target)
 	}
 }
@@ -307,11 +379,17 @@ func (vm *ViewModel) ContentTitle(c *ui.Context) {
 	}
 	id, ok := deviceIDFromPath(vm.Router.Path())
 	if !ok {
-		if name, isManage := managePageTitle(vm.Router.Path()); isManage {
+		if trail, isManage := vm.managePageTrail(vm.Router.Path()); isManage {
 			vm.CrumbChoice = -1
-			crumbs := components.Breadcrumbs(c, []string{pageName, name}, &vm.CrumbChoice)
-			if crumbs.Changed() && vm.CrumbChoice == 0 {
-				vm.OpenDevices()
+			crumbs := components.Breadcrumbs(c, append([]string{pageName}, trail...), &vm.CrumbChoice)
+			if crumbs.Changed() {
+				switch {
+				case vm.CrumbChoice == 0:
+					vm.OpenDevices()
+				case vm.CrumbChoice == 1 && len(trail) > 1:
+					// The intermediate crumb of a detail page is its list.
+					vm.OpenDerp()
+				}
 			}
 			return
 		}

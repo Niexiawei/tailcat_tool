@@ -24,6 +24,10 @@ func TestDialogsCloseWithoutPanic(t *testing.T) {
 		{"settings", func(vm *ViewModel) { vm.openSettings() }, func(vm *ViewModel) { vm.SettingsOpen = false }},
 		{"reachability", func(vm *ViewModel) { vm.ReachabilityOpen = true }, func(vm *ViewModel) { vm.ReachabilityOpen = false }},
 		{"attention", func(vm *ViewModel) { vm.AttentionOpen = true }, func(vm *ViewModel) { vm.AttentionOpen = false }},
+		{"cache confirm", func(vm *ViewModel) {
+			vm.CacheConfirmOpen = true
+			vm.CacheConfirmPkg = "com.tencent.mm"
+		}, func(vm *ViewModel) { vm.closeCacheConfirm() }},
 		{"file detail", func(vm *ViewModel) {
 			vm.FileDetail = &FileDetail{Device: vm.Selection, Entry: core.RemoteEntry{Name: "log.txt", Path: "/sdcard/log.txt", Size: 2048}}
 		}, func(vm *ViewModel) { vm.FileDetail = nil }},

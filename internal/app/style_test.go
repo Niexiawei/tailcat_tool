@@ -1,6 +1,9 @@
 package app
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"math"
 	"os"
 	"path/filepath"
@@ -84,5 +87,87 @@ func TestLogFiltersShareOneLine(t *testing.T) {
 	}
 	if math.Abs(float64(level.Y-rng.Y)) > 1 {
 		t.Fatalf("级别 and 时间 are on different rows (%0.0f vs %0.0f); they must share one", level.Y, rng.Y)
+	}
+}
+
+// TestNoTabsInsideDialogs enforces the trap in docs/ui-and-console.md §10: the
+// segmented Tabs control keeps the chosen tab as an Element in its paint
+// callback, and MyGo paints a closing dialog without rebuilding it, so a dialog
+// that contains one panics with "element from pass N used in pass M" the moment
+// the user cancels. Unit granularity, not file: a file may hold both a page and
+// a dialog.
+func TestNoTabsInsideDialogs(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("Glob() error: %v", err)
+	}
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", path, err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			var hasDialog, hasTabs bool
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				pkg, ok := sel.X.(*ast.Ident)
+				if !ok || pkg.Name != "components" {
+					return true
+				}
+				switch sel.Sel.Name {
+				case "Dialog":
+					hasDialog = true
+				case "Tabs":
+					hasTabs = true
+				}
+				return true
+			})
+			if hasDialog && hasTabs {
+				t.Fatalf("%s: %s builds components.Tabs inside components.Dialog; use segmentedChoice instead (docs/ui-and-console.md §10)", path, fn.Name.Name)
+			}
+		}
+	}
+}
+
+// TestNoOfficialOrMapWording pins the vocabulary the user asked for: this app
+// manages DERP nodes, so nothing user-visible calls itself 官方 (the default
+// nodes are tailcat's, not an authority this app speaks for) and a derpmap is a
+// JSON format, not a 地图.
+func TestNoOfficialOrMapWording(t *testing.T) {
+	forbidden := []string{"官方", "DERP 地图"}
+	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, word := range forbidden {
+			if strings.Contains(string(source), word) {
+				t.Errorf("%s still says %q; call it 默认节点 or DERP 节点", path, word)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Walk() error: %v", err)
 	}
 }

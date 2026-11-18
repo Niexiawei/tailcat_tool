@@ -407,7 +407,9 @@ func (m *Manager) SaveRelayPreset(req SaveRelayPresetRequest) (uuid.UUID, error)
 	}
 	relay, err := NormalizeRelay(req.Source)
 	if err != nil {
-		return uuid.Nil, Error("请填写预设的 JSON 链接或内容")
+		// Keep the specific reason: "the region ID does not match its key" is
+		// what the user needs, not a generic "invalid JSON".
+		return uuid.Nil, err
 	}
 	if relay.IsOfficial() {
 		return uuid.Nil, Error("请填写预设的 JSON 链接或内容")

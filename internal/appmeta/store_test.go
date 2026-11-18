@@ -652,3 +652,78 @@ func TestStoreFallsBackToPMPathWhenTheListingFails(t *testing.T) {
 		t.Fatalf("pm path fallback calls = %d, want 1", got)
 	}
 }
+
+// TestInvalidateDiscardsAnInFlightFetch pins the per-row rule: a read that was
+// already running when the user deleted that one entry must not write it back.
+// Deleting is per package, so the guard cannot be the device epoch — that would
+// throw away the device's other in-flight reads.
+func TestInvalidateDiscardsAnInFlightFetch(t *testing.T) {
+	apk := buildTestAPK(t, "微信", "res/mipmap-xxhdpi/ic.png", testPNG)
+	runner := apkRunner(apk, "4096 1700000000")
+	s := newTestStore(t, runner)
+
+	// Seed the row the user is about to delete, and let that read finish.
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
+	s.waitIdle()
+	if _, ok := s.Lookup("dev", "com.foo"); !ok {
+		t.Fatal("setup: the first read did not store the entry")
+	}
+
+	// A refresh of that row is now in flight when the delete lands.
+	runner.holdOn = "-f com.foo"
+	runner.gate = make(chan struct{})
+	runner.held = make(chan struct{})
+	s.Refresh("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
+	<-runner.held
+	if err := s.Invalidate("dev", "com.foo"); err != nil {
+		t.Fatalf("Invalidate() error: %v", err)
+	}
+	close(runner.gate)
+	s.waitIdle()
+	// The gate is single-use; the follow-up read below must run normally.
+	runner.holdOn, runner.gate = "", nil
+
+	if entries := s.Entries("dev"); len(entries) != 0 {
+		t.Fatalf("entries = %+v; a fetch in flight at delete time must be discarded", entries)
+	}
+	if _, ok := s.Lookup("dev", "com.foo"); ok {
+		t.Fatal("the discarded fetch left a cached name behind")
+	}
+	if _, ok := s.Status("dev", "com.foo"); ok {
+		t.Fatal("the discarded fetch left a status behind; its row would spin as Pending")
+	}
+
+	// The dropped job must not wedge the package: the next request asks again.
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
+	s.waitIdle()
+	if entries := s.Entries("dev"); len(entries) != 1 {
+		t.Fatalf("entries = %+v; a deleted row must be readable again", entries)
+	}
+}
+
+// TestPurgeDiscardsAnInFlightFetch pins the epoch rule: a read that was already
+// running when the user cleared the cache must not write its result back, or the
+// resource page shows the same name again right after clearing.
+func TestPurgeDiscardsAnInFlightFetch(t *testing.T) {
+	apk := buildTestAPK(t, "微信", "res/mipmap-xxhdpi/ic.png", testPNG)
+	runner := apkRunner(apk, "4096 1700000000")
+	runner.holdOn = "-f com.foo"
+	runner.gate = make(chan struct{})
+	runner.held = make(chan struct{})
+	s := newTestStore(t, runner)
+
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
+	<-runner.held
+	if err := s.Purge("dev"); err != nil {
+		t.Fatalf("Purge() error: %v", err)
+	}
+	close(runner.gate)
+	s.waitIdle()
+
+	if entries := s.Entries("dev"); len(entries) != 0 {
+		t.Fatalf("entries = %+v; a fetch in flight at purge time must be discarded", entries)
+	}
+	if _, ok := s.Lookup("dev", "com.foo"); ok {
+		t.Fatal("the discarded fetch left a cached name behind")
+	}
+}

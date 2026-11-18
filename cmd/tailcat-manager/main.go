@@ -105,12 +105,16 @@ func buildEnvironment() app.Environment {
 	// week under the configuration directory. A cache that will not open costs
 	// the names, not the app.
 	var appMeta core.AppMetaSource
+	var appMetaCache core.AppMetaCache
 	if store, err := appmeta.New(filepath.Join(configDir, "appmeta"), runner, 2); err != nil {
 		if notice == "" {
 			notice = "应用信息缓存不可用，资源页只显示包名：" + err.Error()
 		}
 	} else {
+		// One store, two narrow interfaces: the resource page reads names, the
+		// cache page lists and clears them.
 		appMeta = store
+		appMetaCache = store
 	}
 	manager := core.NewManager(core.ManagerOptions{
 		Config:        store,
@@ -121,6 +125,7 @@ func buildEnvironment() app.Environment {
 		Locate:        platform.FindTool,
 		Recorder:      recorder,
 		AppMeta:       appMeta,
+		AppMetaCache:  appMetaCache,
 	})
 	if recorder != nil {
 		if recent, err := recorder.RecentTasks(50); err == nil {

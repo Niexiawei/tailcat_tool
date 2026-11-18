@@ -1,7 +1,10 @@
 package app
 
 import (
+	"strings"
+
 	"github.com/egoist/mygo/ui"
+	"github.com/google/uuid"
 	"github.com/oneo-me/onevra/source/components"
 	"github.com/oneo-me/onevra/source/icons/lucide"
 )
@@ -9,9 +12,11 @@ import (
 // manageEntries is the browsing group under the device list: pages, not window
 // actions, so they live inside the scrolling sidebar and scroll with it.
 //
-// The cache and DERP pages add their own rows here once they exist; today the
-// group holds the log page only.
+// The three management pages (cache, DERP, logs) add their rows here; the
+// device groups come first because the user asked for these below them.
 func (vm *ViewModel) manageEntries(c *ui.Context) {
+	vm.manageEntry(c, lucide.Database, "缓存管理", CacheRoute)
+	vm.manageEntry(c, lucide.Server, "DERP 节点", DerpRoute)
 	vm.manageEntry(c, lucide.ScrollText, "日志", LogsRoute)
 }
 
@@ -36,12 +41,28 @@ func (vm *ViewModel) manageEntry(c *ui.Context, icon func() *ui.SVG, label, rout
 	}
 }
 
-// managePageTitle returns the breadcrumb name of a management page, and false
-// for every other route. ContentTitle falls back to 我的设备 when it is false.
-func managePageTitle(path string) (string, bool) {
+// managePageTrail returns the breadcrumb names below 我的设备 for a management
+// page, and false for every other route. A detail page keeps its list in the
+// trail, so the title bar always offers the way back to it. The preset's name
+// is read every frame, so a rename shows up without the route changing.
+func (vm *ViewModel) managePageTrail(path string) ([]string, bool) {
 	switch path {
+	case CacheRoute:
+		return []string{"缓存管理"}, true
 	case LogsRoute:
-		return "日志", true
+		return []string{"日志"}, true
+	case DerpRoute:
+		return []string{"DERP 节点"}, true
 	}
-	return "", false
+	if rest, ok := strings.CutPrefix(path, DerpRoute+"/"); ok {
+		if id, err := uuid.Parse(rest); err == nil && vm.Manager != nil {
+			for _, preset := range vm.Manager.RelayPresets() {
+				if preset.ID == id {
+					return []string{"DERP 节点", preset.Name}, true
+				}
+			}
+		}
+		return []string{"DERP 节点"}, true
+	}
+	return nil, false
 }

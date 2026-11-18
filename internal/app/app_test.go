@@ -816,6 +816,23 @@ func TestAppLogTextIsRedacted(t *testing.T) {
 	}
 }
 
+func TestDemoEnvironmentHasCacheRows(t *testing.T) {
+	env := NewDemoEnvironment()
+	if !env.Manager.AppMetaCacheAvailable() {
+		t.Fatal("the demo has no app-metadata cache, so its cache page only says unavailable")
+	}
+	device := env.Manager.Profiles()[0].ID
+	if entries := env.Manager.AppMetaCacheEntries(device); len(entries) == 0 {
+		t.Fatal("the demo cache page would be empty")
+	}
+	if err := env.Manager.PurgeAppMetaCache(device); err != nil {
+		t.Fatalf("PurgeAppMetaCache() error: %v", err)
+	}
+	if entries := env.Manager.AppMetaCacheEntries(device); len(entries) != 0 {
+		t.Fatalf("entries = %+v after a purge", entries)
+	}
+}
+
 func TestDemoEnvironmentHasLogRows(t *testing.T) {
 	env := NewDemoEnvironment()
 	if env.History == nil {

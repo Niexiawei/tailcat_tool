@@ -430,9 +430,7 @@ func (vm *ViewModel) appCell(c *ui.Context, col int, state *resourceState, devic
 			if app.MetaStale {
 				components.Text(c, "7 天前更新").FontSize(10).TextColor(theme.TextMuted)
 			}
-			if app.Label == "" {
-				vm.appMetaAction(c, device, app.Package)
-			}
+			vm.appMetaAction(c, device, app)
 		})
 	case 1:
 		components.Text(c, itoa(len(app.Processes))+" 个进程").FontSize(11).TextColor(theme.TextMuted)
@@ -470,17 +468,32 @@ func appLabel(app core.AppUsage) string {
 	return app.Package
 }
 
-// appMetaAction is the end of an unnamed row: a spinner while the store says a
-// read is running, the reason it failed, or the button that asks for one. The
-// state comes from the store, never from a timer here: a blind two-minute wait
-// is why a row whose package does not exist looked busy forever.
-func (vm *ViewModel) appMetaAction(c *ui.Context, device uuid.UUID, pkg string) {
+// appMetaAction is the end of every row's name cell: a spinner while the store
+// says a read is running, the reason an unnamed row failed, or the button that
+// asks for a read. The state comes from the store, never from a timer here: a
+// blind two-minute wait is why a row whose package does not exist looked busy
+// forever.
+//
+// The button survives the first read. An application that renamed or re-iconed
+// itself leaves a cached name that looks right, so the only way to notice is to
+// read it again; the row offers that without going through 缓存管理.
+func (vm *ViewModel) appMetaAction(c *ui.Context, device uuid.UUID, app core.AppUsage) {
 	theme := c.Theme()
+	pkg := app.Package
 	status, known := vm.Manager.AppMetaStatus(device, pkg)
-	switch {
-	case known && status.State == core.AppMetaPending:
+	if known && status.State == core.AppMetaPending {
 		components.Spinner(c, components.SpinnerRing).Width(14).Height(14).Label("正在读取应用信息")
-	case known && status.State == core.AppMetaFailed:
+		return
+	}
+	if app.Label != "" {
+		// The cached name is still what we show; a failed refresh keeps it and
+		// leaves the button in place to try again.
+		if components.IconButton(c, lucide.RefreshCw(), "重新读取应用信息", components.IconButtonCompact).Clicked() {
+			vm.askAppMeta(c, device, pkg)
+		}
+		return
+	}
+	if known && status.State == core.AppMetaFailed {
 		label := core.LabelReadFailed
 		if status.Final {
 			label = core.LabelNoAppPackage
@@ -493,10 +506,10 @@ func (vm *ViewModel) appMetaAction(c *ui.Context, device uuid.UUID, pkg string) 
 		if components.IconButton(c, lucide.RefreshCw(), "重试读取应用信息", components.IconButtonCompact).Clicked() {
 			vm.askAppMeta(c, device, pkg)
 		}
-	default:
-		if components.IconButton(c, lucide.PackageSearch(), "解析应用信息", components.IconButtonCompact).Clicked() {
-			vm.askAppMeta(c, device, pkg)
-		}
+		return
+	}
+	if components.IconButton(c, lucide.PackageSearch(), "解析应用信息", components.IconButtonCompact).Clicked() {
+		vm.askAppMeta(c, device, pkg)
 	}
 }
 
@@ -525,6 +538,17 @@ func percent1Text(v float64) string {
 type iconAsset struct {
 	fetchedAt time.Time
 	image     ui.ImageSource
+}
+
+// forgetAppIcons drops one device's decoded icons, so a cleared cache is not
+// contradicted by an image this process still holds.
+func (vm *ViewModel) forgetAppIcons(device uuid.UUID) {
+	prefix := device.String() + "|"
+	for key := range vm.appIcons {
+		if strings.HasPrefix(key, prefix) {
+			delete(vm.appIcons, key)
+		}
+	}
 }
 
 // appIcon decodes one application's icon once per reading and remembers it,
