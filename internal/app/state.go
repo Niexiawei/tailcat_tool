@@ -99,8 +99,8 @@ type ViewModel struct {
 
 	// CacheDevice is the device whose cached app metadata the page shows.
 	CacheDevice uuid.UUID
-	// CacheTable keeps the cache page's column layout across frames.
-	CacheTable components.TableState
+	// CacheTable keeps the cache page's column layout and scroll across frames.
+	CacheTable ui.ListState
 	// CacheConfirmOpen asks before dropping cached rows; an empty
 	// CacheConfirmPkg means the whole device.
 	CacheConfirmOpen  bool

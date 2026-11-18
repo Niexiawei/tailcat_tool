@@ -38,21 +38,15 @@ func (vm *ViewModel) cachePage(c *ui.Context) {
 		for _, entry := range entries {
 			total += entry.Size
 		}
-		// The list scrolls inside the page: 25 entries on a small window would
-		// otherwise push the clear action and the last rows past the bottom
-		// edge, where neither the wheel nor the scroll bar can reach them.
-		ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
-			ui.Column(c).FillWidth().Gap(12).Children(func() {
-				components.Text(c, itoa(len(entries))+" 条 · 约 "+formatBytes(total)).FontSize(11).TextColor(theme.TextMuted)
-				components.Table(c, &vm.CacheTable, cacheColumns(), func() {
-					for _, entry := range entries {
-						entry := entry
-						components.TableRow(c, entry.Package, entryLabel(entry), false, func(col int) {
-							vm.cacheCell(c, col, entry)
-						})
-					}
-				})
-			})
+		components.Text(c, itoa(len(entries))+" 条 · 约 "+formatBytes(total)).FontSize(11).TextColor(theme.TextMuted)
+		// The table takes the room left and scrolls its own rows: 40 entries on
+		// a small window would otherwise push the clear action and the last rows
+		// past the bottom edge, where neither the wheel nor the bar can reach
+		// them.
+		tableCard(c, &vm.CacheTable, cacheColumns(), len(entries), tableOptions{
+			Label: "应用信息缓存列表", Grow: true,
+		}, func(row, col int) {
+			vm.cacheCell(c, col, entries[row])
 		})
 		if components.Button(c, "清空这台设备的缓存", components.ButtonSecondary).AlignSelf(ui.Start).Shrink(0).Clicked() {
 			vm.CacheConfirmOpen = true

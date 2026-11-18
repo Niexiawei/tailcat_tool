@@ -113,10 +113,10 @@ func TestCachePageListsEntriesOfChosenDevice(t *testing.T) {
 	}
 }
 
-// TestCachePageScrollsLongLists pins the layout of a device with more entries
-// than fit: the list scrolls inside the page and the 清空 action stays on
-// screen, instead of the table pushing both past the window's bottom edge.
-func TestCachePageScrollsLongLists(t *testing.T) {
+// TestCacheTableKeepsTheClearActionInView pins the page's layout: the table
+// takes the room left, scrolls its own rows, and the 清空 action stays on screen
+// instead of being pushed past the window's bottom edge.
+func TestCacheTableKeepsTheClearActionInView(t *testing.T) {
 	cache := &stubAppMetaCache{entries: map[string][]core.AppMetaEntry{}}
 	vm := newCacheViewModel(t, cache)
 	profile := vm.Manager.Profiles()[0]
@@ -138,28 +138,24 @@ func TestCachePageScrollsLongLists(t *testing.T) {
 		t.Fatal("the clear action is not laid out")
 	}
 	if footer.Y+footer.H > height {
-		t.Fatalf("the clear action at %+v is below the %d px page; the list must scroll instead", footer, height)
+		t.Fatalf("the clear action at %+v is below the %d px page; the table must scroll instead", footer, height)
 	}
-
-	last, ok := tt.Find("应用 39")
-	if !ok {
-		t.Fatal("the last row is not laid out")
+	// A virtualized table builds only the rows it shows.
+	if tt.HasText("应用 39") {
+		t.Fatal("the table built a row it does not show")
+	}
+	if err := tt.Click("应用 00"); err != nil {
+		t.Fatalf("the first row is missing: %v", err)
 	}
 	tt.Scroll(450, 350, 0, 3000)
 	tt.Advance(500 * time.Millisecond)
 	tt.Frame()
-	moved, ok := tt.Find("应用 39")
-	if !ok {
-		t.Fatal("the last row vanished after scrolling")
-	}
-	if moved.Y >= last.Y {
-		t.Fatalf("the last row stays at y=%0.0f after a wheel scroll; the list does not scroll", moved.Y)
-	}
-	if moved.Y < height {
-		// Scrolled into view, which is the point of the wheel.
-		return
-	}
-	t.Fatalf("the last row is still at y=%0.0f, outside the %d px page", moved.Y, height)
+	waitForText(t, tt, "应用 39")
+}
+
+// TestCachePageUsesNoOnevraTable keeps the cache list on the one table card.
+func TestCachePageUsesNoOnevraTable(t *testing.T) {
+	assertNoOnevraTable(t, "appcache.go")
 }
 
 func TestCachePageExplainsAnEmptyCache(t *testing.T) {
