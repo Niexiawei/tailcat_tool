@@ -121,6 +121,11 @@ type ViewModel struct {
 	DerpJSONOpen bool
 	// derpPreviewMu guards what preview goroutines write.
 	derpPreviewMu sync.Mutex
+	// derpPreviews keeps the last preview of each source, so a frame never
+	// re-parses a 128 KiB inline map.
+	derpPreviews map[string]core.RelayMapPreview
+	// derpInfo caches what the list shows about a source, for the same reason.
+	derpInfo map[string]derpSourceInfo
 
 	// PageLogFilter is the log page's filter; nil means it was never opened.
 	PageLogFilter *logFilter

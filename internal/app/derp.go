@@ -25,6 +25,26 @@ type DerpEditorDraft struct {
 	Error   string
 }
 
+// derpSourceInfo is what the list shows about one source, computed once.
+type derpSourceInfo struct {
+	kind    core.RelayKind
+	summary string
+}
+
+// derpInfoFor returns the cached description of a source. Parsing belongs to
+// the first frame that shows a source, not to every frame.
+func (vm *ViewModel) derpInfoFor(source string) derpSourceInfo {
+	if info, ok := vm.derpInfo[source]; ok {
+		return info
+	}
+	info := derpSourceInfo{kind: kindOfRelay(source), summary: derpSourceSummary(source)}
+	if vm.derpInfo == nil {
+		vm.derpInfo = map[string]derpSourceInfo{}
+	}
+	vm.derpInfo[source] = info
+	return info
+}
+
 // derpListPage collects every DERP source in one place: the official map,
 // the presets, and the sources devices have used. Navigation goes through
 // OpenDerpDetail so Back returns to the list.
@@ -108,8 +128,8 @@ func (vm *ViewModel) derpHistorySection(c *ui.Context) {
 					// A URL is worth reading in full here; an inline map is not,
 					// so it keeps the region/node summary.
 					line := entry.Source
-					if kindOfRelay(entry.Source) != core.RelayURL {
-						line = derpSourceSummary(entry.Source)
+					if vm.derpInfoFor(entry.Source).kind != core.RelayURL {
+						line = vm.derpInfoFor(entry.Source).summary
 					}
 					components.Tooltip(c, components.Text(c, line).FontSize(11).SingleLine(), entry.Source)
 				})
@@ -140,12 +160,12 @@ func (vm *ViewModel) derpPresetCell(c *ui.Context, col int, preset core.RelayPre
 		components.Tooltip(c, name, preset.Name)
 	case 1:
 		kind := "JSON"
-		if kindOfRelay(preset.Source) == core.RelayURL {
+		if vm.derpInfoFor(preset.Source).kind == core.RelayURL {
 			kind = "链接"
 		}
 		components.Badge(c, kind, components.BadgeOptions{Tone: components.BadgeNeutral})
 	case 2:
-		source := derpSourceSummary(preset.Source)
+		source := vm.derpInfoFor(preset.Source).summary
 		components.Tooltip(c, components.Text(c, source).FontSize(11).SingleLine(), preset.Source)
 	case 3:
 		usage := derpUsageLabel(len(vm.Manager.RelayPresetUsage(preset.ID)))
@@ -245,7 +265,7 @@ func (vm *ViewModel) derpDetailPage(c *ui.Context, rawID string) {
 	ui.Column(c).Fill().Padding(20).Gap(12).Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			components.Text(c, preset.Name).FontSize(18).Bold()
-			components.Badge(c, derpKindLabel(preset.Source), components.BadgeOptions{Tone: components.BadgeNeutral})
+			components.Badge(c, derpKindLabelFromInfo(vm.derpInfoFor(preset.Source)), components.BadgeOptions{Tone: components.BadgeNeutral})
 			if len(usage) > 0 {
 				if components.Button(c, derpUsageLabel(len(usage))+"在用", components.ButtonLink).Clicked() {
 					if profile := firstRelayUser(vm.Manager.AllProfiles(), preset.Source); profile != nil {
@@ -259,7 +279,7 @@ func (vm *ViewModel) derpDetailPage(c *ui.Context, rawID string) {
 		}
 
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-			if kindOfRelay(preset.Source) == core.RelayURL {
+			if vm.derpInfoFor(preset.Source).kind == core.RelayURL {
 				source := preset.Source
 				components.TextBox(c, &source, components.TextBoxOptions{ReadOnly: true}).FillWidth().Grow(1).Lines(1, 1)
 				if components.Button(c, "复制", components.ButtonOutline).Clicked() {
@@ -428,23 +448,37 @@ func (vm *ViewModel) derpPreset(id uuid.UUID) (core.RelayPreset, bool) {
 // ensureDerpPreview shows the cached copy when there is one and starts a fetch
 // otherwise. It is safe to call every frame.
 func (vm *ViewModel) ensureDerpPreview(preset core.RelayPreset) {
-	if cached, ok := vm.Manager.CachedRelayMapPreview(preset.Source); ok {
-		vm.derpPreviewMu.Lock()
-		if vm.DerpPreview == nil || vm.DerpPreview.Source != cached.Source {
-			shown := cached
-			vm.DerpPreview = &shown
-		}
+	vm.derpPreviewMu.Lock()
+	if cached, ok := vm.derpPreviews[preset.Source]; ok {
+		shown := cached
+		vm.DerpPreview = &shown
 		vm.derpPreviewMu.Unlock()
 		return
 	}
-	vm.derpPreviewMu.Lock()
 	loading := vm.DerpPreviewLoading
 	haveCurrent := vm.DerpPreview != nil && vm.DerpPreview.Source == preset.Source
 	tried := vm.DerpPreviewTried == preset.Source
 	vm.derpPreviewMu.Unlock()
-	if !loading && !haveCurrent && !tried {
-		vm.startDerpPreview(preset)
+	if loading || haveCurrent || tried {
+		return
 	}
+	if cached, ok := vm.Manager.CachedRelayMapPreview(preset.Source); ok {
+		vm.rememberDerpPreview(cached)
+		return
+	}
+	vm.startDerpPreview(preset)
+}
+
+// rememberDerpPreview stores one fetched copy, replacing the one shown.
+func (vm *ViewModel) rememberDerpPreview(preview core.RelayMapPreview) {
+	vm.derpPreviewMu.Lock()
+	defer vm.derpPreviewMu.Unlock()
+	if vm.derpPreviews == nil {
+		vm.derpPreviews = map[string]core.RelayMapPreview{}
+	}
+	vm.derpPreviews[preview.Source] = preview
+	shown := preview
+	vm.DerpPreview = &shown
 }
 
 // startDerpPreview always asks the manager again: that is what 重新获取 means.
@@ -464,12 +498,12 @@ func (vm *ViewModel) startDerpPreview(preset core.RelayPreset) {
 		vm.DerpPreviewLoading = false
 		if err != nil {
 			vm.DerpPreviewErr = err.Error()
+			vm.derpPreviewMu.Unlock()
 		} else {
-			shown := preview
-			vm.DerpPreview = &shown
 			vm.DerpPreviewErr = ""
+			vm.derpPreviewMu.Unlock()
+			vm.rememberDerpPreview(preview)
 		}
-		vm.derpPreviewMu.Unlock()
 		if vm.Invalidate != nil {
 			vm.Invalidate()
 		}
@@ -509,8 +543,10 @@ func firstRelayUser(profiles []core.Profile, source string) *core.Profile {
 	return nil
 }
 
-func derpKindLabel(source string) string {
-	if kindOfRelay(source) == core.RelayURL {
+// derpKindLabelFromInfo keeps the detail badge in step with the list's cached
+// reading.
+func derpKindLabelFromInfo(info derpSourceInfo) string {
+	if info.kind == core.RelayURL {
 		return "链接"
 	}
 	return "JSON"

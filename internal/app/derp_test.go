@@ -428,3 +428,34 @@ func TestDerpDeleteRefusalIsShownInTheDialog(t *testing.T) {
 		t.Fatalf("presets = %+v, want the used one kept", vm.Manager.RelayPresets())
 	}
 }
+
+// TestDerpSourceInfoIsParsedOnce pins the list's cache: a 128 KiB inline map
+// must not be parsed and re-marshalled on every frame.
+func TestDerpSourceInfoIsParsedOnce(t *testing.T) {
+	vm := newTestViewModel(t)
+	if info := vm.derpInfoFor(derpTestMap); info.summary != "1 个区域 · 1 个节点" {
+		t.Fatalf("summary = %q", info.summary)
+	}
+	// Replacing the entry proves the second call read the cache, not the map.
+	vm.derpInfo[derpTestMap] = derpSourceInfo{kind: core.RelayURL, summary: "sentinel"}
+	if info := vm.derpInfoFor(derpTestMap); info.summary != "sentinel" {
+		t.Fatalf("info = %+v, want the cached entry", info)
+	}
+}
+
+// TestEnsureDerpPreviewReusesTheCachedCopy pins that a frame does not ask core
+// to parse the same inline map again.
+func TestEnsureDerpPreviewReusesTheCachedCopy(t *testing.T) {
+	vm := newTestViewModel(t)
+	fetched := time.Unix(1700000000, 0)
+	vm.derpPreviews = map[string]core.RelayMapPreview{
+		derpTestMap: {Source: derpTestMap, Kind: core.RelayInline, FetchedAt: fetched},
+	}
+	vm.ensureDerpPreview(core.RelayPreset{Name: "公司自建", Source: derpTestMap})
+	if vm.DerpPreview == nil || !vm.DerpPreview.FetchedAt.Equal(fetched) {
+		t.Fatalf("preview = %+v, want the cached copy without a new fetch", vm.DerpPreview)
+	}
+	if vm.DerpPreviewLoading {
+		t.Fatal("a cached copy started a fetch")
+	}
+}
