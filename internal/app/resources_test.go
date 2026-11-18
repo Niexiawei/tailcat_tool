@@ -765,3 +765,25 @@ func TestRowStillOffersResolveWhenNothingIsKnown(t *testing.T) {
 		t.Fatalf("a row nobody asked about lost its button; texts = %v", tt.Texts())
 	}
 }
+
+// TestProcessViewScrollsItsOwnTable pins the process view's layout: the table
+// takes the room the page leaves it and scrolls its own rows, instead of
+// spilling past the window's bottom edge.
+func TestProcessViewScrollsItsOwnTable(t *testing.T) {
+	vm := manyAppsViewModel(t, 40)
+	profile := vm.Manager.Profiles()[0]
+	vm.resourceStateFor(profile.ID).view = resourceViewProcesses
+	const window = 700
+	tt := ui.NewTester(vm.ContentView, 900, window)
+	tt.Frame()
+	rect, ok := tt.Find("按进程列出的进程表")
+	if !ok {
+		t.Fatalf("the process view has no table; texts = %v", tt.Texts())
+	}
+	if bottom := rect.Y + rect.H; bottom > window-20 {
+		t.Fatalf("the process table ends at %v, past the page's bottom padding", bottom)
+	}
+	if tt.HasText("PID 1039") {
+		t.Fatal("the table built a row past the ones it shows")
+	}
+}
