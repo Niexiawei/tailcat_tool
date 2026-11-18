@@ -52,7 +52,7 @@ func (vm *ViewModel) TransferView(c *ui.Context) {
 				components.Text(c, vm.TransferError).FontSize(11)
 			}
 			ui.Row(c).FillWidth().Gap(8).Children(func() {
-				if components.Button(c, "取消", components.ButtonGhost).Clicked() {
+				if components.Button(c, "取消", components.ButtonOutline).Clicked() {
 					vm.TransferOpen = false
 					open = false
 				}

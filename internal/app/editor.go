@@ -201,7 +201,7 @@ func (vm *ViewModel) EditorView(c *ui.Context) {
 				components.Text(c, vm.EditorError).FontSize(11)
 			}
 			ui.Row(c).FillWidth().Gap(8).Children(func() {
-				if components.Button(c, "取消", components.ButtonGhost).Clicked() {
+				if components.Button(c, "取消", components.ButtonOutline).Clicked() {
 					vm.PendingEditor = nil
 					open = false
 				}

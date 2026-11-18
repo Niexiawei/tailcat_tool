@@ -363,7 +363,7 @@ func (vm *ViewModel) deviceRow(c *ui.Context, profile core.Profile, temporary bo
 	row.FillWidth().Shrink(0).Padding(theme.Space(1), theme.Space(1.5)).Gap(theme.Space(1.5)).
 		Justify(ui.Start).AlignItems(ui.Center).Radius(theme.Radius)
 	if selected {
-		row.Background(theme.Selection)
+		row.Background(selectedRowTint(theme))
 	}
 	line := session.State.Label()
 	switch {
@@ -425,10 +425,14 @@ func (vm *ViewModel) SidebarView(c *ui.Context) {
 	theme := c.Theme()
 	ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), theme.Space(2), 0, theme.Space(2)).Children(func() {
 		ui.Scroll(c).FillWidth().Grow(1).Children(func() {
-			vm.deviceGroups(c)
-			// Pages, not window actions: they belong under the device list,
-			// inside the scrolling area, rather than in the fixed footer.
-			ui.Column(c).Padding(0, 4).Gap(2).Children(func() { vm.manageEntries(c) })
+			// The gap keeps the browsing group apart from the device panels:
+			// without it the entry reads as one more device row.
+			ui.Column(c).FillWidth().Gap(theme.Space(2)).Children(func() {
+				vm.deviceGroups(c)
+				// Pages, not window actions: they belong under the device list,
+				// inside the scrolling area, rather than in the fixed footer.
+				ui.Column(c).FillWidth().Padding(0, 4).Gap(2).Children(func() { vm.manageEntries(c) })
+			})
 		})
 	})
 }

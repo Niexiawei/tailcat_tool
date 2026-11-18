@@ -353,7 +353,7 @@ func (vm *ViewModel) fileTable(c *ui.Context, profile core.Profile, state *fileS
 					vm.showDir(profile, state, remoteTrailPath(trail, state.crumb))
 				}
 			})
-			if actionButton(c, lucide.RefreshCw, "刷新", components.ButtonGhost).Clicked() {
+			if actionButton(c, lucide.RefreshCw, "刷新", components.ButtonSecondary).Clicked() {
 				vm.reloadDir(profile, state.path)
 			}
 			if actionButton(c, lucide.Upload, "上传到此文件夹…", components.ButtonSecondary).Clicked() {

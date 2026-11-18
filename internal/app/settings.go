@@ -32,7 +32,7 @@ func (vm *ViewModel) SettingsView(c *ui.Context) {
 				components.Text(c, vm.SettingsError).FontSize(11)
 			}
 			ui.Row(c).FillWidth().Gap(8).Children(func() {
-				if components.Button(c, "关闭", components.ButtonGhost).Clicked() {
+				if components.Button(c, "关闭", components.ButtonOutline).Clicked() {
 					vm.SettingsOpen = false
 					open = false
 				}

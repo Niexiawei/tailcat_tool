@@ -15,14 +15,17 @@ func (vm *ViewModel) manageEntries(c *ui.Context) {
 	vm.manageEntry(c, lucide.ScrollText, "日志", LogsRoute)
 }
 
-// manageEntry is one row of that group. It is a ghost button so the label
-// lines up with the device rows above and the whole row is the target.
+// manageEntry is one row of that group. It is built like a device row rather
+// than like a button: same padding, same left edge, same selected tint, so the
+// two groups read as one list of places to go.
 func (vm *ViewModel) manageEntry(c *ui.Context, icon func() *ui.SVG, label, route string) {
 	theme := c.Theme()
-	row := components.Button(c, "", components.ButtonGhost).Label(label)
-	row.FillWidth().Shrink(0).Gap(theme.Space(1.5)).Justify(ui.Start)
-	if vm.Router != nil && vm.Router.Path() == route {
-		row.Background(theme.Selection)
+	selected := vm.Router != nil && vm.Router.Path() == route
+	row := ui.ButtonBase(c)
+	row.FillWidth().Shrink(0).Padding(theme.Space(1), theme.Space(1.5)).Gap(theme.Space(1.5)).
+		Justify(ui.Start).AlignItems(ui.Center).Radius(theme.Radius)
+	if selected {
+		row.Background(selectedRowTint(theme))
 	}
 	row.Children(func() {
 		components.Icon(c, icon).Width(14).Height(14)

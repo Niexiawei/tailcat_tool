@@ -87,7 +87,7 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 | 开关 | `components.Switch` |
 | 复选 | `components.Checkbox` |
 | 分段切换 | `components.Tabs` + `TabsSegmented` |
-| 按钮 | `components.Button`（`ButtonPrimary`/`ButtonSecondary`/`ButtonOutline`/`ButtonGhost`） |
+| 按钮 | `components.Button`（`ButtonPrimary`/`ButtonSecondary`/`ButtonOutline`） |
 | 图标按钮 | `components.IconButton` |
 | 表格 | `components.Table` / `TableVirtualized` |
 | 下拉选择 | `components.Select` / `NativeSelect` / `Picker` |
@@ -107,6 +107,10 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 3. 用到的新组件同时加进 `internal/compat/compat_test.go` 的编译期断言，否则上游改签名 CI 不会红。
 
 **反例（已发生过，不要重复）**：用两个 ghost 按钮加 `●`/`○` 冒充 radio；用手写 `sectionHeader` 文字冒充分组；把 footer 塞进列表末尾而不是用 `shell.LeftToolbar`。
+
+**不要用 `ButtonGhost`。** 无底色按钮在页面里读成正文，用户找不到入口。层级只有三档：`ButtonPrimary`（这一屏的主操作）、`ButtonSecondary`（次要动作）、`ButtonOutline`（安静的动作与对话框的「取消 / 关闭」）。文字里的链接用 `components.Button(..., ButtonLink)`。`TestNoGhostButtonsAnywhere`（`internal/app/style_test.go`）会扫源码，出现 `components.ButtonGhost` 直接红。
+
+**配色只从 `internal/app/theme.go` 取。** 强调色 `accentHex`、警告色 `warningHex`（`#e37318`，同时是 `theme.Warning`，警告徽标与删除类按钮共用）都在那里定义，视图里不要再写字面量十六进制。
 
 **布局约定**：`shells/sidebar` 的 `Left` / `Content` 必须用 `sidebar.HeaderHeight(c)` 作上内边距（否则被浮动标题栏压住）；固定底栏用 `LeftToolbar`，不要让列表和 footer 抢高度；行式元素用 `FillWidth()`，**`Fill()` 会同时占满高度**，行高失控通常就是它。
 

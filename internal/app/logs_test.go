@@ -314,13 +314,13 @@ func TestLogsPageFiltersCallReaderWithChosenValues(t *testing.T) {
 		t.Fatalf("device query = %v, want %v", fourth.DeviceID, profile.ID)
 	}
 
-	if err := tt.Click("全部"); err != nil {
-		t.Fatalf("Click(全部) error: %v", err)
+	if err := tt.Click("全部时间"); err != nil {
+		t.Fatalf("Click(全部时间) error: %v", err)
 	}
 	tt.Frame()
 	fifth := waitForQuery(t, reader, 5)
-	if fifth.Since.IsZero() {
-		t.Fatal("choosing 全部 must lift the time lower bound")
+	if !fifth.Since.IsZero() {
+		t.Fatalf("choosing 全部时间 still bounds the query from %v", fifth.Since)
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/shells/sidebar"
-	"github.com/oneo-me/onevra/source/theme"
 )
 
 // AppName is what the window, the tray and the app menu show.
@@ -24,13 +23,7 @@ func (vm *ViewModel) OpenMainWindow() *sidebar.Shell {
 		Content: func(c *ui.Context) {
 			vm.ContentView(c)
 		},
-		Theme: func(context *ui.Context) *ui.Theme {
-			t := theme.Onevra(context)
-			t.Accent = ui.Hex("#0052d9")
-			t.AccentHover = ui.Hex("#618dff")
-			t.AccentPressed = ui.Hex("#003cab")
-			return t
-		},
+		Theme: appTheme,
 	})
 	window := shell.Window()
 	vm.Invalidate = window.Invalidate

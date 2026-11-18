@@ -129,6 +129,8 @@ var (
 	_                                                                                                                       = (*components.SelectParts[string]).Popup
 	_                                                                                                                       = (*components.SelectParts[string]).Item
 	_ func() *ui.SVG                                                                                                        = lucide.ScrollText
+	_ func() *ui.SVG                                                                                                        = lucide.Trash
+	_ func() *ui.SVG                                                                                                        = lucide.RefreshCw
 	_                                                                                                                       = components.TreeItemWithLeading
 	_                                                                                                                       = components.FileIcon
 	_                                                                                                                       = mygo.Dialog.Save

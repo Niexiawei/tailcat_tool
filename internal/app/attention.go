@@ -54,7 +54,7 @@ func (vm *ViewModel) AttentionDialog(c *ui.Context) {
 					open = false
 					go func() { _ = vm.Manager.SwitchPort(context.Background(), deviceID, 0, true) }()
 				}
-				if components.Button(c, "稍后处理", components.ButtonGhost).Clicked() {
+				if components.Button(c, "稍后处理", components.ButtonOutline).Clicked() {
 					vm.Manager.AckAttention(attention.DeviceID)
 					vm.AttentionOpen = false
 					open = false

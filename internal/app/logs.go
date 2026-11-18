@@ -7,6 +7,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/google/uuid"
 	"github.com/oneo-me/onevra/source/components"
+	"github.com/oneo-me/onevra/source/icons/lucide"
 )
 
 // runningTasks keeps the tasks of one device that are still running.
@@ -68,7 +69,7 @@ const (
 
 // logRangeLabels is what the range tabs say; the report at the bottom of the
 // page repeats the chosen one, so one list keeps them in step.
-var logRangeLabels = []string{"今日", "7 天", "30 天", "全部"}
+var logRangeLabels = []string{"今日", "7 天", "30 天", "全部时间"}
 
 // logFollowInterval is how often a following page asks for new rows. The query
 // is incremental (Since = the last row), so this stays cheap on a large file.
@@ -167,22 +168,35 @@ func (vm *ViewModel) logView(c *ui.Context, f *logFilter, opts logViewOptions) {
 	})
 }
 
-// logFiltersRow is the four control rows: device, level, range and the search
-// plus follow switch.
+// logFiltersRow is three rows: the device picker with 刷新, the level and range
+// tabs together, then the search box with the follow switch. The tabs share a
+// row because they are the two smallest controls on the page.
 func (vm *ViewModel) logFiltersRow(c *ui.Context, f *logFilter, opts logViewOptions) {
-	ui.Column(c).FillWidth().Shrink(0).Gap(6).Children(func() {
-		if opts.ShowDevicePicker {
-			vm.logDeviceSelect(c, f)
-		}
-		level := logLevelIndex(f.Level)
-		if components.Tabs(c, &level, components.TabsSegmented, "全部", "错误", "警告", "信息").List.Changed() {
-			f.Level = logLevelAt(level)
-		}
-		rng := f.Range
-		if components.Tabs(c, &rng, components.TabsSegmented, logRangeLabels...).List.Changed() {
-			f.Range = rng
-		}
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+	theme := c.Theme()
+	ui.Column(c).FillWidth().Shrink(0).Gap(theme.Space(1.5)).Children(func() {
+		ui.Row(c).FillWidth().Gap(theme.Space(2)).AlignItems(ui.Center).Children(func() {
+			if opts.ShowDevicePicker {
+				ui.Column(c).Grow(1).MinWidth(0).Children(func() { vm.logDeviceSelect(c, f) })
+			}
+			if actionButton(c, lucide.RefreshCw, "刷新", components.ButtonPrimary).Clicked() {
+				vm.refreshLogs(f)
+			}
+		})
+		ui.Row(c).FillWidth().Gap(theme.Space(2)).AlignItems(ui.Center).Children(func() {
+			// Each group carries its name: two tabs in a row both starting
+			// with 全部 would otherwise be a guess.
+			components.Text(c, "级别").FontSize(11).TextColor(theme.TextMuted).Shrink(0)
+			level := logLevelIndex(f.Level)
+			if components.Tabs(c, &level, components.TabsSegmented, "全部", "错误", "警告", "信息").List.Changed() {
+				f.Level = logLevelAt(level)
+			}
+			components.Text(c, "时间").FontSize(11).TextColor(theme.TextMuted).Shrink(0)
+			rng := f.Range
+			if components.Tabs(c, &rng, components.TabsSegmented, logRangeLabels...).List.Changed() {
+				f.Range = rng
+			}
+		})
+		ui.Row(c).FillWidth().Gap(theme.Space(2)).AlignItems(ui.Center).Children(func() {
 			components.TextBox(c, &f.Search, components.TextBoxOptions{}).
 				FillWidth().Grow(1).Placeholder("搜索日志：空格分隔的多个关键词都要匹配")
 			// The follow goroutine reads the switch under logMu, so the
@@ -193,9 +207,6 @@ func (vm *ViewModel) logFiltersRow(c *ui.Context, f *logFilter, opts logViewOpti
 				f.Follow = follow
 				vm.logMu.Unlock()
 				vm.ensureLogFollow(f)
-			}
-			if components.Button(c, "刷新", components.ButtonGhost).Clicked() {
-				vm.refreshLogs(f)
 			}
 		})
 	})
@@ -381,7 +392,7 @@ func (vm *ViewModel) logFootRow(c *ui.Context, f *logFilter, opts logViewOptions
 		}
 		ui.Row(c).Grow(1).Children(func() {})
 		if opts.AllowClear {
-			if components.Button(c, "清空日志…", components.ButtonGhost).Clicked() {
+			if warningButton(c, lucide.Trash, "清空日志…").Clicked() {
 				vm.openLogClear(f)
 			}
 		}
@@ -695,7 +706,7 @@ func (vm *ViewModel) LogOutputView(c *ui.Context) {
 				})
 			}
 			ui.Row(c).FillWidth().Gap(8).Children(func() {
-				if components.Button(c, "关闭", components.ButtonSecondary).Clicked() {
+				if components.Button(c, "关闭", components.ButtonOutline).Clicked() {
 					vm.logMu.Lock()
 					vm.LogOutput = nil
 					vm.logMu.Unlock()
@@ -743,7 +754,7 @@ func (vm *ViewModel) LogClearView(c *ui.Context) {
 				components.Text(c, errText).FontSize(11)
 			}
 			ui.Row(c).FillWidth().Gap(8).Children(func() {
-				if components.Button(c, "取消", components.ButtonGhost).Clicked() {
+				if components.Button(c, "取消", components.ButtonOutline).Clicked() {
 					vm.logMu.Lock()
 					vm.LogClear = nil
 					vm.logMu.Unlock()
