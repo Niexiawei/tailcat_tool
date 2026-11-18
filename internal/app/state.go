@@ -97,6 +97,10 @@ type ViewModel struct {
 	toastsMu sync.Mutex
 	toasts   []ui.Toast
 
+	// CacheDevice is the device whose cached app metadata the page shows.
+	CacheDevice uuid.UUID
+	// CacheTable keeps the cache page's column layout across frames.
+	CacheTable components.TableState
 	// DerpTable keeps the DERP list's column layout across frames.
 	DerpTable components.TableState
 	// DerpRegionTable keeps the detail page's region table layout.

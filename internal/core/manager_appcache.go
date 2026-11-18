@@ -2,6 +2,14 @@ package core
 
 import "github.com/google/uuid"
 
+// AppMetaCacheAvailable reports whether a cache is wired at all, so the page can
+// say "unavailable" instead of "empty": those are different answers.
+func (m *Manager) AppMetaCacheAvailable() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.appMetaCache != nil
+}
+
 // AppMetaCacheEntries lists what the cache holds for one device, sorted by
 // package name. A missing cache answers nil rather than failing: the page shows
 // that it is unavailable, which is not an error the user can act on.
