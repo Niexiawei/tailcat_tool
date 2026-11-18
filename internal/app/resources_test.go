@@ -239,19 +239,35 @@ func TestProcessTableMarksStaleMeta(t *testing.T) {
 	}
 }
 
-func TestProcessTableExpandsOnClick(t *testing.T) {
+// TestProcessGroupExpandsFromItsChevron pins the row's own affordance: the
+// group opens and closes from the arrow at the start of its row, which leaves
+// the table's keyboard navigation to the table itself.
+func TestProcessGroupExpandsFromItsChevron(t *testing.T) {
 	vm, _ := resourceFixture(t)
 	tt := ui.NewTester(vm.ContentView, 900, 900)
 	if tt.HasText("PID 100") {
 		t.Fatal("the process rows are visible before expanding the group")
 	}
-	if err := tt.Click("com.foo"); err != nil {
-		t.Fatalf("clicking the group row: %v", err)
+	if err := tt.Click("展开 com.foo"); err != nil {
+		t.Fatalf("the group row has no chevron: %v", err)
 	}
 	tt = ui.NewTester(vm.ContentView, 900, 900)
 	if !tt.HasText("PID 100") || !tt.HasText("com.foo:remote") {
 		t.Fatalf("the expanded group does not show its processes; texts = %v", tt.Texts())
 	}
+	if err := tt.Click("收起 com.foo"); err != nil {
+		t.Fatalf("the expanded group offers no way back: %v", err)
+	}
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if tt.HasText("PID 100") {
+		t.Fatal("the group did not collapse")
+	}
+}
+
+// TestResourcesPageUsesNoOnevraTable keeps this page on the one table card:
+// the onevra table's header does not scroll with its columns.
+func TestResourcesPageUsesNoOnevraTable(t *testing.T) {
+	assertNoOnevraTable(t, "resources.go")
 }
 
 func TestProcessTableSaysGPUUnavailable(t *testing.T) {

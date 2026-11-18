@@ -21,8 +21,8 @@ type resourceState struct {
 	// view is which of the two tables the page shows; each keeps its own table
 	// state so columns and scroll do not carry over.
 	view           int
-	tableApps      components.TableState
-	tableProcesses components.TableState
+	tableApps      ui.ListState
+	tableProcesses ui.ListState
 	expanded       map[string]bool
 	// batch is what a manual refresh is reading, and batchAt is when it
 	// started: a package counts as done once its status changed after that, so
@@ -337,40 +337,52 @@ const batchGiveUpAfter = 90 * time.Second
 func (vm *ViewModel) processTable(c *ui.Context, state *resourceState, device uuid.UUID, snapshot core.ResourceSnapshot) {
 	filtering := filtering(state)
 	kept := filterApps(snapshot.Apps, state.filter)
-	components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).MinHeight(0).Label("按应用分组的进程表").Children(func() {
-		if filtering && len(kept) == 0 {
-			vm.noFilterMatch(c, "没有匹配的应用")
+	if filtering && len(kept) == 0 {
+		vm.noFilterMatch(c, "没有匹配的应用")
+		return
+	}
+	rows := visibleRows(kept, filtering, state.expanded)
+	tableCard(c, &state.tableApps, processColumns(), len(rows), tableOptions{
+		Label: "按应用分组的进程表", Grow: true,
+	}, func(row, col int) {
+		line := rows[row]
+		if line.process == nil {
+			vm.appCell(c, col, state, device, line.app, appLabel(line.app), line.expanded)
 			return
 		}
-		components.Table(c, &state.tableApps, processColumns(), func() {
-			for _, item := range kept {
-				app := item.app
-				label := appLabel(app)
-				// A query opens every group it kept: the row that matched is
-				// a process underneath it, or the whole application the user
-				// asked for.
-				expanded := filtering || state.expanded[app.Package]
-				row := components.TableRow(c, app.Package, label, expanded, func(col int) {
-					vm.appCell(c, col, state, device, app, label)
-				})
-				if row.Clicked() {
-					state.expanded[app.Package] = !state.expanded[app.Package]
-				}
-				if !expanded {
-					continue
-				}
-				processes := item.app.Processes
-				if filtering && !item.full {
-					processes = item.processes
-				}
-				for _, process := range processes {
-					components.TableRow(c, app.Package+"#"+itoa(process.PID), "  "+process.Name, false, func(col int) {
-						vm.processCell(c, col, process)
-					})
-				}
-			}
-		})
+		vm.processCell(c, col, *line.process)
 	})
+}
+
+// appRow is one row of the grouped table: an application, or one of its
+// processes when the group is open.
+type appRow struct {
+	app      core.AppUsage
+	process  *core.ProcessUsage
+	expanded bool
+}
+
+// visibleRows flattens the kept applications into the table's rows. A query
+// opens every group it kept: the row that matched is a process underneath it,
+// or the whole application the user asked for.
+func visibleRows(kept []filteredApp, filtering bool, expanded map[string]bool) []appRow {
+	rows := make([]appRow, 0, len(kept))
+	for _, item := range kept {
+		app := item.app
+		open := filtering || expanded[app.Package]
+		rows = append(rows, appRow{app: app, expanded: open})
+		if !open {
+			continue
+		}
+		processes := app.Processes
+		if filtering && !item.full {
+			processes = item.processes
+		}
+		for i := range processes {
+			rows = append(rows, appRow{app: app, process: &processes[i], expanded: open})
+		}
+	}
+	return rows
 }
 
 // filtering reports whether the box holds a question, as opposed to blanks the
@@ -420,11 +432,18 @@ func processColumns() []ui.TableColumn {
 	}
 }
 
-func (vm *ViewModel) appCell(c *ui.Context, col int, state *resourceState, device uuid.UUID, app core.AppUsage, label string) {
+func (vm *ViewModel) appCell(c *ui.Context, col int, state *resourceState, device uuid.UUID, app core.AppUsage, label string, expanded bool) {
 	theme := c.Theme()
 	switch col {
 	case 0:
 		ui.Row(c).FillWidth().MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
+			icon, action := lucide.ChevronRight(), "展开 "+label
+			if expanded {
+				icon, action = lucide.ChevronDown(), "收起 "+label
+			}
+			if components.IconButton(c, icon, action, components.IconButtonCompact).Clicked() {
+				state.expanded[app.Package] = !expanded
+			}
 			components.Avatar(c, label, components.AvatarOptions{Image: vm.appIcon(device, app.Package), Size: 20})
 			components.Text(c, label).FontSize(12).SingleLine()
 			if app.MetaStale {
@@ -580,18 +599,14 @@ func (vm *ViewModel) appIcon(device uuid.UUID, pkg string) ui.ImageSource {
 // without folding them under the application.
 func (vm *ViewModel) processList(c *ui.Context, state *resourceState, snapshot core.ResourceSnapshot) {
 	rows := filterProcessRows(processRows(snapshot), state.filter)
-	components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).MinHeight(0).Label("按进程列出的进程表").Children(func() {
-		if filtering(state) && len(rows) == 0 {
-			vm.noFilterMatch(c, "没有匹配的进程")
-			return
-		}
-		components.Table(c, &state.tableProcesses, processViewColumns(), func() {
-			for _, row := range rows {
-				components.TableRow(c, row.id, row.process.Name, false, func(col int) {
-					vm.processRowCell(c, col, row)
-				})
-			}
-		})
+	if filtering(state) && len(rows) == 0 {
+		vm.noFilterMatch(c, "没有匹配的进程")
+		return
+	}
+	tableCard(c, &state.tableProcesses, processViewColumns(), len(rows), tableOptions{
+		Label: "按进程列出的进程表", Grow: true,
+	}, func(row, col int) {
+		vm.processRowCell(c, col, rows[row])
 	})
 }
 
