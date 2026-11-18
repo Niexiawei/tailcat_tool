@@ -60,6 +60,12 @@ type job struct {
 	// epoch is the device's purge epoch when the job was queued. A job whose
 	// epoch is stale ran across a 清空 and must not write its result back.
 	epoch uint64
+	// version is that row's delete version when the job was queued. A job
+	// whose version is stale ran across a 删除 of that entry.
+	version uint64
+	// at is when the job set its Pending status, so a dropped job only clears
+	// the status it published itself.
+	at time.Time
 }
 
 // New opens the store over dir, which it creates when missing. workers bounds
@@ -189,7 +195,16 @@ func (s *Store) enqueue(device, adbPath, serial string, pkgs []string, force boo
 			}
 		}
 		s.status[key] = core.AppMetaStatus{State: core.AppMetaPending, At: now}
-		jobs = append(jobs, job{device: device, adb: adbPath, serial: serial, pkg: pkg, force: force, epoch: epoch})
+		jobs = append(jobs, job{
+			device:  device,
+			adb:     adbPath,
+			serial:  serial,
+			pkg:     pkg,
+			force:   force,
+			epoch:   epoch,
+			version: s.cache.versionOf(device, pkg),
+			at:      now,
+		})
 	}
 	s.wg.Add(len(jobs))
 	s.mu.Unlock()
@@ -225,10 +240,11 @@ func (s *Store) work() {
 func (s *Store) handle(queued job) {
 	key := entryKey(queued.device, queued.pkg)
 	stored, failure := s.fetchSafely(queued)
-	if s.cache.epochOf(queued.device) != queued.epoch {
-		// The user cleared this device's cache while the read ran; Purge has
-		// already forgotten its statuses, so publishing this one would put a
-		// name (or a spinner) back that the user just removed.
+	if s.cache.epochOf(queued.device) != queued.epoch || s.cache.versionOf(queued.device, queued.pkg) != queued.version {
+		// The user cleared this device's cache, or deleted this one entry,
+		// while the read ran; publishing this status would put a name (or a
+		// spinner) back that the user just removed.
+		s.discard(queued)
 		s.wg.Done()
 		return
 	}
@@ -238,6 +254,18 @@ func (s *Store) handle(queued job) {
 	}
 	s.setStatus(key, status)
 	s.wg.Done()
+}
+
+// discard forgets the Pending status a dropped job published: the entry it
+// would describe is gone, and a row left Pending would spin until the page is
+// reopened. A newer request for the same package keeps its own Pending state.
+func (s *Store) discard(queued job) {
+	key := entryKey(queued.device, queued.pkg)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if current, ok := s.status[key]; ok && current.State == core.AppMetaPending && current.At.Equal(queued.at) {
+		delete(s.status, key)
+	}
 }
 
 // fetchFailure says why a read produced nothing, in the user's words, and
@@ -275,7 +303,7 @@ func (s *Store) fetch(queued job) (bool, fetchFailure) {
 	if failure.reason != "" {
 		return false, failure
 	}
-	stored, err := s.cache.putAt(queued.device, queued.pkg, key, label, icon, s.now(), queued.epoch)
+	stored, err := s.cache.putAt(queued.device, queued.pkg, key, label, icon, s.now(), queued.epoch, queued.version)
 	if err != nil {
 		return false, fetchFailure{reason: core.ReasonAPKUnreadable}
 	}
