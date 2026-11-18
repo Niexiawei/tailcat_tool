@@ -57,7 +57,7 @@ func (vm *ViewModel) derpListPage(c *ui.Context) {
 			}
 			components.Text(c, "预设只影响之后选择它的设备").FontSize(11).TextColor(theme.TextMuted)
 		})
-		ui.Scroll(c).FillWidth().Grow(1).Children(func() {
+		ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).FillWidth().Gap(16).Children(func() {
 				vm.derpOfficialSection(c)
 				vm.derpPresetSection(c)
@@ -263,62 +263,68 @@ func (vm *ViewModel) derpDetailPage(c *ui.Context, rawID string) {
 	usage := derivedRelayUsers(vm.Manager.AllProfiles(), preset.Source)
 
 	ui.Column(c).Fill().Padding(20).Gap(12).Children(func() {
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			components.Text(c, preset.Name).FontSize(18).Bold()
-			components.Badge(c, derpKindLabelFromInfo(vm.derpInfoFor(preset.Source)), components.BadgeOptions{Tone: components.BadgeNeutral})
-			if len(usage) > 0 {
-				if components.Button(c, derpUsageLabel(len(usage))+"在用", components.ButtonLink).Clicked() {
-					if profile := firstRelayUser(vm.Manager.AllProfiles(), preset.Source); profile != nil {
-						vm.OpenDevice(profile.ID)
+		// A map can hold 128 regions, so the whole page scrolls rather than
+		// spilling past the window.
+		ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
+			ui.Column(c).FillWidth().Gap(12).Children(func() {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+					components.Text(c, preset.Name).FontSize(18).Bold()
+					components.Badge(c, derpKindLabelFromInfo(vm.derpInfoFor(preset.Source)), components.BadgeOptions{Tone: components.BadgeNeutral})
+					if len(usage) > 0 {
+						if components.Button(c, derpUsageLabel(len(usage))+"在用", components.ButtonLink).Clicked() {
+							if profile := firstRelayUser(vm.Manager.AllProfiles(), preset.Source); profile != nil {
+								vm.OpenDevice(profile.ID)
+							}
+						}
 					}
+				})
+				if len(usage) > 0 {
+					components.Text(c, "正在使用："+strings.Join(usage, "、")).FontSize(11).TextColor(theme.TextMuted)
 				}
-			}
-		})
-		if len(usage) > 0 {
-			components.Text(c, "正在使用："+strings.Join(usage, "、")).FontSize(11).TextColor(theme.TextMuted)
-		}
 
-		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-			if vm.derpInfoFor(preset.Source).kind == core.RelayURL {
-				source := preset.Source
-				components.TextBox(c, &source, components.TextBoxOptions{ReadOnly: true}).FillWidth().Grow(1).Lines(1, 1)
-				if components.Button(c, "复制", components.ButtonOutline).Clicked() {
-					vm.copyText(preset.Source)
+				ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+					if vm.derpInfoFor(preset.Source).kind == core.RelayURL {
+						source := preset.Source
+						components.TextBox(c, &source, components.TextBoxOptions{ReadOnly: true}).FillWidth().Grow(1).Lines(1, 1)
+						if components.Button(c, "复制", components.ButtonOutline).Clicked() {
+							vm.copyText(preset.Source)
+						}
+					} else {
+						components.Text(c, "内联 JSON").FontSize(11).TextColor(theme.TextMuted)
+					}
+				})
+
+				components.Text(c, "以下内容是刚刚下载/解析的一份；设备连接时由 tailcat 自行获取，可能已变化。").FontSize(11).TextColor(theme.TextMuted)
+
+				ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+					if actionButton(c, lucide.RefreshCw, "重新获取", components.ButtonSecondary).Clicked() {
+						vm.startDerpPreview(preset)
+					}
+					if loading {
+						components.Spinner(c, components.SpinnerRing)
+					}
+					if !preview.FetchedAt.IsZero() {
+						components.Text(c, "上次获取："+preview.FetchedAt.Format("2006-01-02 15:04:05")).FontSize(11).TextColor(theme.TextMuted)
+					}
+				})
+
+				if previewErr != "" {
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+						components.Text(c, previewErr).FontSize(11).TextColor(theme.Warning)
+						if components.Button(c, "重试", components.ButtonOutline).Clicked() {
+							vm.startDerpPreview(preset)
+						}
+					})
 				}
-			} else {
-				components.Text(c, "内联 JSON").FontSize(11).TextColor(theme.TextMuted)
-			}
-		})
 
-		components.Text(c, "以下内容是刚刚下载/解析的一份；设备连接时由 tailcat 自行获取，可能已变化。").FontSize(11).TextColor(theme.TextMuted)
-
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			if actionButton(c, lucide.RefreshCw, "重新获取", components.ButtonSecondary).Clicked() {
-				vm.startDerpPreview(preset)
-			}
-			if loading {
-				components.Spinner(c, components.SpinnerRing)
-			}
-			if !preview.FetchedAt.IsZero() {
-				components.Text(c, "上次获取："+preview.FetchedAt.Format("2006-01-02 15:04:05")).FontSize(11).TextColor(theme.TextMuted)
-			}
-		})
-
-		if previewErr != "" {
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				components.Text(c, previewErr).FontSize(11).TextColor(theme.Warning)
-				if components.Button(c, "重试", components.ButtonOutline).Clicked() {
-					vm.startDerpPreview(preset)
+				if preview.Map != nil {
+					vm.derpRegionTable(c, preview)
+					components.Collapsible(c, "原始 JSON", &vm.DerpJSONOpen, components.CollapsibleOptions{}, func() {
+						vm.derpRawJSON(c, preview.JSON)
+					})
 				}
 			})
-		}
-
-		if preview.Map != nil {
-			vm.derpRegionTable(c, preview)
-			components.Collapsible(c, "原始 JSON", &vm.DerpJSONOpen, components.CollapsibleOptions{}, func() {
-				vm.derpRawJSON(c, preview.JSON)
-			})
-		}
+		})
 	})
 }
 
@@ -352,9 +358,9 @@ func (vm *ViewModel) derpRegionCell(c *ui.Context, col int, region *tailcfg.DERP
 	case 0:
 		components.Text(c, itoa(int(region.RegionID))).FontSize(11)
 	case 1:
-		components.Text(c, region.RegionCode).FontSize(11).SingleLine()
+		components.Text(c, orPlaceholder(region.RegionCode, "—")).FontSize(11).SingleLine()
 	case 2:
-		components.Text(c, region.RegionName).FontSize(11).SingleLine()
+		components.Text(c, orPlaceholder(region.RegionName, "—")).FontSize(11).SingleLine()
 	case 3:
 		components.Text(c, derpNodeLabel(region)).FontSize(11).SingleLine()
 	case 4:

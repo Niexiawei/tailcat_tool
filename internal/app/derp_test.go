@@ -1,10 +1,12 @@
 package app
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -457,5 +459,41 @@ func TestEnsureDerpPreviewReusesTheCachedCopy(t *testing.T) {
 	}
 	if vm.DerpPreviewLoading {
 		t.Fatal("a cached copy started a fetch")
+	}
+}
+
+// manyRegionMap builds a valid map with count regions, for the long-page case.
+func manyRegionMap(count int) string {
+	var b strings.Builder
+	b.WriteString(`{"Regions":{`)
+	for i := 1; i <= count; i++ {
+		if i > 1 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, `"%d":{"RegionID":%d,"RegionCode":"r%d","Nodes":[{"Name":"n%d","RegionID":%d,"HostName":"relay%d.example.com","DERPPort":443}]}`, i, i, i, i, i, i)
+	}
+	b.WriteString(`}}`)
+	return b.String()
+}
+
+// TestDerpDetailScrollsLongMaps pins that a 60-region map is reachable: the
+// page content has to scroll, not spill past the window.
+func TestDerpDetailScrollsLongMaps(t *testing.T) {
+	vm := newTestViewModel(t)
+	id, err := vm.Manager.SaveRelayPreset(core.SaveRelayPresetRequest{Name: "大国", Source: manyRegionMap(60)})
+	if err != nil {
+		t.Fatalf("SaveRelayPreset() error: %v", err)
+	}
+	vm.OpenDerpDetail(id)
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	waitForText(t, tt, "relay60.example.com")
+	scrolled := false
+	for _, info := range tt.AccessAll() {
+		if info.Role == ui.RoleScroll {
+			scrolled = true
+		}
+	}
+	if !scrolled {
+		t.Fatalf("the detail page has no scroll area; access = %v", tt.AccessAll())
 	}
 }
