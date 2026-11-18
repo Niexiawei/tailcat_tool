@@ -175,7 +175,10 @@ if !open {
 - **`if !open` 是唯一的关闭出口**：Esc、遮罩、✕ 都会把它置为 false，收尾（中止后台批次、丢弃草稿）只写这一处。
 - **慢的、批量的、耗网络的事情由用户点按钮发起**，打开对话框不自动跑；关闭时中止它——看不见的结果不值得继续探测。
 - **结果要一眼看懂**：成功/失败同时给文字和图标，颜色取 `theme.Success` / `theme.Danger`（映射集中在一个纯函数 `reachStatus` 里，测试直接断言颜色）。
-- **表格用 `components.Table` + `TableRow`**，不要手拼行：列宽拖动、表头、上下键移动焦点都是组件给的。
+- **表格一律用 `internal/app/table.go` 的 `tableCard`**：它调用 `ui.Table` 并加 1 DIP 圆角边框、按需要定高或 `Grow(1)`、给表一个标签。页面**不要**直接写 `ui.Table`，也不要再用 onevra 的 `components.Table` / `TableVirtualized`（`TestNoOnevraTableComponentsAnywhere` 会红）。
+- **不要把表格塞进 `components.ScrollView` / `ui.Scroll`**：`ui.Table` 自己就是滚动区，表头与内容在同一个横向滚动容器里；外面再套一层竖滚容器，列一调宽，调整抓手就会被裁到可视区外（这正是换组件的原因）。
+- **行级点击走 `ListState.Selected` + `Table(...).Changed()`**：`ui.Table` 没有 `TableRow.Clicked()`；`Selected` 初始给 -1，否则点第一行"没变化"。
+- **排序由页面算，不由组件算**：把 `&state.Sort` 交给表，建表前用 `Sort` 里的列自己排好行序（资源页 `sortApps` / `sortProcessRows`）。
 - **可能被截断的单行文本**都要挂 `components.Tooltip` 给全文（见 §10）。
 
 ## 4. 侧栏
@@ -356,15 +359,15 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 视图每一帧都给失败的 I/O 发起重试 | 失败原因被自己抹掉，页面永远停在「正在读取」，同时不停发命令（`/cache` 就是这么卡住的） | 失败要粘住：`loadDir` 见到已有失败记录就返回，只有用户点「重试」才清掉 |
 | 用 `ButtonGhost` 做页面动作 | 按钮读成正文（无底色无边框），用户找不到入口；对话框里也会与正文混在一起 | **一律不用 ghost**：主操作 `Primary`、次要 `Secondary`、安静动作与对话框「取消 / 关闭」`Outline`，文字链接用 `ButtonLink`。`TestNoGhostButtonsAnywhere` 扫源码钉住 |
 | 就地写十六进制颜色 | 同一个"警告橙"在三个文件里各写一遍，改一次漏两处 | 颜色只在 `internal/app/theme.go`（`accentHex` / `warningHex`）定义，视图取 `c.Theme()` 的字段 |
-| 用内容（时间 + 来源 + 文本）拼表格行键 | 两行完全相同的日志让 `TableVirtualized` 报 `two elements under one parent have the key ...`，控制台被刷屏，跟随新日志还会把重复的一行当成"已存在"丢掉 | 行键用数据库自己的标识：`TimelineEntry.Key`（`log:<行号>` / `task:<uuid>`），没有内容能唯一区分两行 |
+| 用内容（时间 + 来源 + 文本）拼表格行键 | 两行完全相同的日志在同一个父节点下撞 key，控制台被刷屏，跟随新日志还会把重复的一行当成"已存在"丢掉 | 行键用数据库自己的标识：`TimelineEntry.Key`（`log:<行号>` / `task:<uuid>`），没有内容能唯一区分两行；它经 `ui.ListState.Key` 交给表 |
 | 用 `Changed()` 判断 `components.Switch` / `Tabs` 的切换 | 开关的 write-back 可能落在比 `Changed()` 早一帧的绘制里（`Click` 的按下与抬起分属两帧），于是界面上开关动了、状态却没保存——「跟随最新」关不掉就是这么来的 | 把控件写回的**值**和已保存的值比：`follow != f.Follow` 就落盘，不依赖 `Changed()` |
 | 两个 `components.Tabs` 并排且首项同名 | 用户与测试都分不清点的是哪一组 | 每组前加灰字标签（「级别」「时间」），末档换名（「全部时间」）错开 |
 | 单行文本被截断却不给全文 | `.SingleLine()` 只画省略号，用户拿不到完整名称/探测详情（如「没有有效连接凭据，请编辑设…」） | 每个可能被截断的 `SingleLine` 都要 `components.Tooltip(c, anchor, 全文)`：在 anchor 之后、同一帧内调用，忽略它的返回值（隐藏时无效）；悬停延迟由 MyGo 管（约 1 秒） |
 | 对话框一打开就自动跑批量作业（如「全部设备连通测试」） | 用户没同意就花掉每台 8 秒的探测，设备多时打开即卡；而且结果没人等 | 打开只展示、由「开始测试」发起；关闭对话框时 `Checker.Cancel()` 中止在跑的批次——看不见的结果不值得继续探测 |
 | 用内嵌横幅报一次性结果 | 同一句提示出现在两个槽位、不会消失，用户看不见也关不掉 | 事件走 `vm.Notify` / `vm.Fail`，页面只留状态 |
-| 每帧 `ui.TextBuffer.Set` | 选区与 caret 被重置，正在复制的日志跳走 | 只在渲染文本变化时写（`internal/app/logs.go` 不再有缓冲，日志表格用 `TableVirtualized`） |
+| 每帧 `ui.TextBuffer.Set` | 选区与 caret 被重置，正在复制的日志跳走 | 只在渲染文本变化时写（`internal/app/logs.go` 不再有缓冲，日志时间线用 `tableCard` 的 `ui.Table`） |
 | 在渲染函数里直接查日志库 | 库大时每帧一次读，界面跟着磁盘抖 | 筛选变化时起 goroutine 读，落地后再 `Invalidate` 一帧（`ensureLogQuery`） |
-| `TableVirtualized` 的 `List.Selected` 从 0 开始 | 点第一行时"没变化"，`OnChange` 不触发，任务行打不开输出 | 初始值给 -1（`logFilter.selected`） |
+| `ui.ListState.Selected` 从 0 开始 | 点第一行时"没变化"，`Changed()` 不触发，任务行打不开输出 | 初始值给 -1（`logFilter.selected`） |
 | 倒序时间线上"跟随最新"当成滚到底 | 新行前插把内容往下顶，读者被推离最新一行 | 跟随＝`ScrollTo(0)`；"尾部"在倒序列表里是顶部 |
 | 页面切走后跟随协程还在跑 | 看不见的视图每 2 秒查一次库 | `markLogVisible` 在切换视图时把上一个的 `following` 关掉 |
 | 在 `components.Dialog` 的内容里放 `components.Tabs(..., TabsSegmented, ...)` | 关闭对话框时崩 `ui: element from pass N used in pass M`：分段控件的 `Draw` 回调闭包住了"选中的那个 tab"元素，而 MyGo 的 overlay 关闭动画会在**不重建**的情况下继续绘制旧面板 | 对话框内用 `segmentedChoice`（`internal/app/editor.go`：`ui.SegmentedBase` + 组件库的凹槽/浮起取色）或 `components.Radio`；`components.Tabs` 只用在常驻页面上（如设备页的三个页签） |
@@ -428,7 +431,7 @@ TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v
 | 内嵌终端、`lineConsole` | `internal/app/terminal.go` |
 | 表单（连接方式单选、中继分段与「预设 + 历史」合并选择；选中预设后来源框锁定，选「自定义」解锁为多行输入） | `internal/app/editor.go` |
 | 上传/下载表单 | `internal/app/transfer.go` |
-| 连通测试表（`components.Table`、状态图标） | `internal/app/reachability.go` |
+| 连通测试表（`tableCard`、状态图标） | `internal/app/reachability.go` |
 | 错误回流（连接、探测、终端） | `internal/app/detail.go`、`internal/app/actions.go`、`internal/app/app.go` |
 | 日志时间线查询、迁移、清理、清空 | `internal/history/sqlite.go` |
 | 应用级日志入队（`RecordAppLog`） | `internal/core/manager.go` |
@@ -454,7 +457,7 @@ ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(1).
 	Radius(theme.Radius).Border(1, theme.Border).Clip().Children(func() {
 	components.Split(c, &state.treeWidth,
 		func() { vm.folderTree(c, profile, state) },   // 左：components.TreeVirtualized
-		func() { vm.fileTable(c, profile, state) },    // 右：面包屑 + components.Table
+		func() { vm.fileTable(c, profile, state) },    // 右：面包屑 + tableCard
 		components.SplitOptions{FirstMin: 180, SecondMin: 260, Default: 260},
 	).Fill()
 })
@@ -590,7 +593,7 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 
 **跟随最新**：打开时每 2 秒用 `Since = 最新一行的时间` 只查增量，结果前插（时间线是倒序），并把列表滚回第 0 行——倒序列表里"尾部"就是顶部。关掉跟随，页面保持静止，新行不会把读者顶走。
 
-**查询不在渲染路径上**：`ensureLogQuery` 只在"筛选与上次查询不一致"时起一个 goroutine，落地后 `Invalidate` 一帧；同一时间只允许一次在飞（`loading`）。`logMu` 保护查询协程写的那部分（`entries` / `query` / `loading` / `follow` / `lastAt`），`table`（`components.TableVirtualizedState`）与 `selected` 只由渲染线程碰。
+**查询不在渲染路径上**：`ensureLogQuery` 只在"筛选与上次查询不一致"时起一个 goroutine，落地后 `Invalidate` 一帧；同一时间只允许一次在飞（`loading`）。`logMu` 保护查询协程写的那部分（`entries` / `query` / `loading` / `follow` / `lastAt`），`table`（`ui.ListState`）与 `selected` 只由渲染线程碰。
 
 **任务行可点**：点任务行 → `TaskOutput(id)`（goroutine）→ 对话框里滚动显示输出。清空只删 `logs`：任务记录保留，对话框里写明"任务记录不会被删除"；删除范围＝当前时间段 + 设备，级别与关键词不算。
 

@@ -89,7 +89,7 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 | 分段切换 | `components.Tabs` + `TabsSegmented` |
 | 按钮 | `components.Button`（`ButtonPrimary`/`ButtonSecondary`/`ButtonOutline`） |
 | 图标按钮 | `components.IconButton` |
-| 表格 | `components.Table` / `TableVirtualized` |
+| 表格 | `ui.Table`，经 `internal/app/table.go` 的 `tableCard` |
 | 下拉选择 | `components.Select` / `NativeSelect` / `Picker` |
 | 数值 | `components.NumberInput` / `Stepper` / `Slider` |
 | 文本输入 | `components.TextBox` |
@@ -106,7 +106,7 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 2. 在 `examples/gallery` 里搜同名 `control_*.go`，照官方用法写；
 3. 用到的新组件同时加进 `internal/compat/compat_test.go` 的编译期断言，否则上游改签名 CI 不会红。
 
-**反例（已发生过，不要重复）**：用两个 ghost 按钮加 `●`/`○` 冒充 radio；用手写 `sectionHeader` 文字冒充分组；把 footer 塞进列表末尾而不是用 `shell.LeftToolbar`。
+**反例（已发生过，不要重复）**：用两个 ghost 按钮加 `●`/`○` 冒充 radio；用手写 `sectionHeader` 文字冒充分组；把 footer 塞进列表末尾而不是用 `shell.LeftToolbar`；再用 onevra 的 `components.Table` / `TableVirtualized`——它自己不滚动、要套 `ScrollView`，而我们套的是竖滚容器，列一调宽，调整抓手就裁在可视区外抓不到（`TestNoOnevraTableComponentsAnywhere`）。
 
 **不要用 `ButtonGhost`。** 无底色按钮在页面里读成正文，用户找不到入口。层级只有三档：`ButtonPrimary`（这一屏的主操作）、`ButtonSecondary`（次要动作）、`ButtonOutline`（安静的动作与对话框的「取消 / 关闭」）。文字里的链接用 `components.Button(..., ButtonLink)`。`TestNoGhostButtonsAnywhere`（`internal/app/style_test.go`）会扫源码，出现 `components.ButtonGhost` 直接红。
 
