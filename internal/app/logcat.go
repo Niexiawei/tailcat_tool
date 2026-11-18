@@ -7,7 +7,21 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/google/uuid"
 	"github.com/oneo-me/onevra/source/components"
+	"github.com/oneo-me/onevra/source/icons/lucide"
 )
+
+// logcatLevelTabs are the level floors the page offers: 全部 keeps every level,
+// the rest keep that level and above, the way logcat's own spec reads.
+var logcatLevelTabs = []struct {
+	Label string
+	Level core.LogcatLevel
+}{
+	{"全部", ""},
+	{"调试", core.LogcatDebug},
+	{"信息", core.LogcatInfo},
+	{"警告", core.LogcatWarn},
+	{"错误", core.LogcatError},
+}
 
 // logcatState is the one streaming log view: what the user chose, what the
 // stream kept, and the table state that holds the column layout and the scroll.
@@ -20,6 +34,7 @@ type logcatState struct {
 	Filter core.LogcatFilter
 	// Follow is the 跟随最新 switch; ListState.FollowEnd mirrors it.
 	Follow bool
+	// Paused freezes what the table shows while the stream keeps filling.
 	Paused bool
 	// stream is the running logcat, nil when there is none.
 	stream *core.LogcatStream
@@ -32,6 +47,8 @@ type logcatState struct {
 	dropped   uint64
 	exited    bool
 	err       string
+	// table keeps the column layout and the scroll between frames.
+	table ui.ListState
 }
 
 // logcatState returns the page's state, creating it on first use. It lives on
@@ -92,15 +109,21 @@ func (vm *ViewModel) logcatPage(c *ui.Context) {
 	vm.ensureLogcatDevice(f)
 	vm.ensureLogcatStream(f)
 	vm.refreshLogcatRows(f)
+	// The follow switch owns the table's follow flag, and it is set here rather
+	// than in logcatTable: an empty table is not built at all, and the switch
+	// has to mean the same thing whether or not there is a row to scroll.
+	f.table.FollowEnd = f.Follow
+	online := vm.onlineDevices()
 	theme := c.Theme()
 	ui.Column(c).Fill().Padding(20).Gap(theme.Space(2)).Children(func() {
-		online := vm.onlineDevices()
 		if len(online) == 0 {
 			placeholder(c, "没有已连接的设备，先到设备页连接一台。", 16)
 			return
 		}
 		vm.logcatDeviceSelect(c, f, online)
-		vm.logcatStatus(c, f)
+		vm.logcatFiltersRow(c, f)
+		vm.logcatBox(c, f)
+		vm.logcatFootRow(c, f)
 	})
 }
 
@@ -142,16 +165,15 @@ func (vm *ViewModel) ensureLogcatStream(f *logcatState) {
 	f.stream = stream
 }
 
-// refreshLogcatRows copies what the stream holds into the page's state.
+// refreshLogcatRows copies what the stream holds into the page's state. A
+// paused page keeps the rows it shows: the point of pausing is that the reader
+// does not move.
 func (vm *ViewModel) refreshLogcatRows(f *logcatState) {
-	if f.stream == nil {
+	if f.stream == nil || f.Paused {
 		return
 	}
 	filterKey := string(f.Filter.MinLevel) + "\x00" + f.Filter.Tags + "\x00" + f.Filter.Terms
-	if f.Paused && f.version != 0 && f.filterKey == filterKey {
-		return
-	}
-	if f.stream.Version() == f.version && f.filterKey == filterKey && f.version != 0 {
+	if f.version != 0 && f.stream.Version() == f.version && f.filterKey == filterKey {
 		return
 	}
 	snap := f.stream.Snapshot(f.Filter)
@@ -178,21 +200,30 @@ func (vm *ViewModel) logcatDeviceSelect(c *ui.Context, f *logcatState, online []
 	sel.Popup(func(ui.Element) {
 		for _, profile := range online {
 			item := sel.Item(profile.ID.String())
-			item.Children(func() { components.Text(c, profile.Name+" · "+vm.Manager.Session(profile.ID).Serial).SingleLine() })
+			item.Children(func() {
+				label := profile.Name + " · " + vm.Manager.Session(profile.ID).Serial
+				components.Text(c, label).SingleLine()
+			})
 		}
 	})
 	if sel.Trigger.Changed() {
 		if id, err := uuid.Parse(choice); err == nil && (f.Device == nil || *f.Device != id) {
-			vm.stopLogcatStream(f)
-			f.Device = &id
-			f.rows = nil
-			f.version = 0
-			f.filterKey = ""
-			f.err = ""
-			f.exited = false
-			f.received, f.dropped = 0, 0
+			vm.switchLogcatDevice(f, id)
 		}
 	}
+}
+
+// switchLogcatDevice restarts the stream on another device and forgets what the
+// previous one printed: two devices' lines in one table would be unreadable.
+func (vm *ViewModel) switchLogcatDevice(f *logcatState, id uuid.UUID) {
+	vm.stopLogcatStream(f)
+	f.Device = &id
+	f.rows = nil
+	f.version = 0
+	f.filterKey = ""
+	f.err = ""
+	f.exited = false
+	f.received, f.dropped = 0, 0
 }
 
 // logcatDeviceLabel is what the picker's trigger shows.
@@ -209,19 +240,174 @@ func (vm *ViewModel) logcatDeviceLabel(choice string, online []core.Profile) str
 	return "选择设备"
 }
 
-// logcatStatus is the line under the picker: what the stream is doing.
-func (vm *ViewModel) logcatStatus(c *ui.Context, f *logcatState) {
+// logcatFiltersRow is the level tabs with the two text boxes, the follow switch
+// and the pause button.
+func (vm *ViewModel) logcatFiltersRow(c *ui.Context, f *logcatState) {
 	theme := c.Theme()
+	ui.Column(c).FillWidth().Shrink(0).Gap(theme.Space(1.5)).Children(func() {
+		ui.Row(c).FillWidth().Gap(theme.Space(2)).AlignItems(ui.Center).Children(func() {
+			// The group carries its name: five segments starting with 全部
+			// would otherwise be a guess.
+			components.Text(c, "级别").FontSize(11).TextColor(theme.TextMuted).Shrink(0)
+			// The chosen value is read back from the widget rather than from
+			// Changed(): a toggle can land a frame before the flag does.
+			level := logcatLevelIndex(f.Filter.MinLevel)
+			components.Tabs(c, &level, components.TabsSegmented, "全部", "调试", "信息", "警告", "错误")
+			if picked := logcatLevelAt(level); picked != f.Filter.MinLevel {
+				f.Filter.MinLevel = picked
+			}
+			ui.Row(c).Grow(1).Justify(ui.End).AlignItems(ui.Center).Gap(theme.Space(2)).Children(func() {
+				follow := f.Follow
+				components.Switch(c, &follow, "跟随最新")
+				if follow != f.Follow {
+					f.Follow = follow
+				}
+				vm.logcatPauseButton(c, f)
+			})
+		})
+		ui.Row(c).FillWidth().Gap(theme.Space(2)).AlignItems(ui.Center).Children(func() {
+			components.TextBox(c, &f.Filter.Tags, components.TextBoxOptions{}).
+				FillWidth().Grow(1).Placeholder("标签筛选：如 ActivityManager，空格分隔多个")
+			components.TextBox(c, &f.Filter.Terms, components.TextBoxOptions{}).
+				FillWidth().Grow(1).Placeholder("内容筛选：空格分隔的多个关键词都要匹配")
+		})
+	})
+}
+
+// logcatPauseButton freezes and resumes what the table shows.
+func (vm *ViewModel) logcatPauseButton(c *ui.Context, f *logcatState) {
+	label, icon := "暂停", lucide.Pause
+	if f.Paused {
+		label, icon = "继续", lucide.Play
+	}
+	theme := c.Theme()
+	size := max(float32(12), theme.Rem(.875))
+	button := components.Button(c, "", components.ButtonSecondary).Label(label)
+	button.Gap(theme.Space(1)).Shrink(0).Children(func() {
+		components.Icon(c, icon).Size(size, size)
+		components.Text(c, label).SingleLine()
+	})
+	if button.Clicked() {
+		f.Paused = !f.Paused
+	}
+}
+
+// logcatBox is the rows, inside a box the page keeps for them whether or not
+// there is anything to show.
+func (vm *ViewModel) logcatBox(c *ui.Context, f *logcatState) {
+	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
+		switch {
+		case len(f.rows) > 0:
+			vm.logcatTable(c, f)
+		case f.received > 0 && !f.Paused:
+			placeholder(c, "没有符合筛选条件的日志", 16)
+		case f.exited:
+			placeholder(c, "日志流已结束，没有可显示的行", 16)
+		default:
+			placeholder(c, "正在接收日志…", 16)
+		}
+	})
+}
+
+// logcatColumns is the table's column layout: the timestamp and the tag need
+// the most room, the level and the pid the least.
+func logcatColumns() []ui.TableColumn {
+	return []ui.TableColumn{
+		{ID: "at", Title: "时间", Width: 150},
+		{ID: "level", Title: "级别", Width: 64},
+		{ID: "pid", Title: "PID", Width: 64},
+		{ID: "tag", Title: "标签", Width: 160},
+		{ID: "text", Title: "内容"},
+	}
+}
+
+// logcatTable fills the box with the rows, oldest first, so following the end
+// is following the newest line.
+func (vm *ViewModel) logcatTable(c *ui.Context, f *logcatState) {
+	rows := f.rows
+	state := &f.table
+	// Seq is the row's identity: two log lines can be identical, and a table
+	// keyed on the text would lose its place on every burst.
+	state.Key = func(row int) any { return rows[row].Seq }
+	tableCard(c, state, logcatColumns(), len(rows), tableOptions{
+		Label: "Logcat 表", Grow: true,
+	}, func(row, col int) {
+		entry := rows[row]
+		ui.Row(c).FillWidth().MinWidth(0).Children(func() {
+			switch col {
+			case 0:
+				components.Text(c, entry.At.Format("01-02 15:04:05.000")).FontSize(11).SingleLine()
+			case 1:
+				components.Badge(c, entry.Level.Label(), components.BadgeOptions{Tone: logcatTone(entry.Level)})
+			case 2:
+				components.Text(c, itoa(entry.PID)).FontSize(11).SingleLine()
+			case 3:
+				components.Tooltip(c, components.Text(c, entry.Tag).FontSize(11).SingleLine(), entry.Tag)
+			default:
+				components.Tooltip(c, components.Text(c, entry.Text).FontSize(11).SingleLine(), entry.Text)
+			}
+		})
+	})
+}
+
+// logcatTone is the badge colour: errors and fatals red, warnings yellow.
+func logcatTone(level core.LogcatLevel) components.BadgeTone {
+	switch level {
+	case core.LogcatError, core.LogcatFatal:
+		return components.BadgeDanger
+	case core.LogcatWarn:
+		return components.BadgeWarning
+	default:
+		return components.BadgeNeutral
+	}
+}
+
+// logcatFootRow says what the stream is doing: how much came, how much is shown
+// and whether the ring had to drop lines.
+func (vm *ViewModel) logcatFootRow(c *ui.Context, f *logcatState) {
+	theme := c.Theme()
+	ui.Row(c).FillWidth().Shrink(0).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+		components.Text(c, logcatStatusText(f)).FontSize(11).TextColor(theme.TextMuted)
+	})
+}
+
+// logcatStatusText is the foot row's sentence; tests assert it verbatim.
+func logcatStatusText(f *logcatState) string {
 	switch {
 	case f.err != "" && f.exited:
-		components.Text(c, "日志流已结束："+f.err).FontSize(13).TextColor(theme.Warning)
+		return "日志流已结束：" + f.err
 	case f.exited:
-		components.Text(c, "日志流已结束").FontSize(13).TextColor(theme.TextMuted)
+		return "日志流已结束"
 	case f.err != "":
-		components.Text(c, "日志流无法启动："+f.err).FontSize(13).TextColor(theme.Danger)
-	default:
-		components.Text(c, "正在接收日志…").FontSize(13).TextColor(theme.TextMuted)
+		return "日志流无法启动：" + f.err
 	}
+	text := "已接收 " + itoa(int(f.received)) + " 行 · 显示 " + itoa(len(f.rows)) + " 行"
+	if f.dropped > 0 {
+		text += " · 缓冲已满，丢弃 " + itoa(int(f.dropped)) + " 行"
+	}
+	if f.Paused {
+		text += " · 已暂停"
+	}
+	return text
+}
+
+// logcatLevelIndex and logcatLevelAt convert between the filter's floor and the
+// tab the user sees.
+func logcatLevelIndex(level core.LogcatLevel) int {
+	for i, tab := range logcatLevelTabs {
+		if tab.Level == level {
+			return i
+		}
+	}
+	return 0
+}
+
+// logcatLevelAt is the inverse of logcatLevelIndex.
+func logcatLevelAt(index int) core.LogcatLevel {
+	if index < 0 || index >= len(logcatLevelTabs) {
+		return ""
+	}
+	return logcatLevelTabs[index].Level
 }
 
 // placeholder centres a message in the box the page keeps for its content.

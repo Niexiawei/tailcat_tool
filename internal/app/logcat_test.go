@@ -174,3 +174,146 @@ func TestLogcatPageShowsTheEndedStream(t *testing.T) {
 	runner.end(0)
 	waitForText(t, tt, "日志流已结束")
 }
+
+func TestLogcatPageShowsParsedEntries(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.123  1234  1250 W ActivityManager: Started proc\n")
+	waitForText(t, tt, "Started proc")
+	for _, want := range []string{"09:30:01.123", "警告", "1234", "ActivityManager", "已接收 1 行"} {
+		if !tt.HasText(want) {
+			t.Fatalf("the page has no %q; texts = %v", want, tt.Texts())
+		}
+	}
+}
+
+func TestLogcatLevelTabsKeepThatLevelAndAbove(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.123  1  1 I Tag: info line\n" +
+		"11-18 09:30:02.000  1  1 W Tag: warn line\n" +
+		"11-18 09:30:03.000  1  1 E Tag: error line\n")
+	waitForText(t, tt, "error line")
+	if err := tt.Click("错误"); err != nil {
+		t.Fatalf("Click(错误) error: %v", err)
+	}
+	waitForText(t, tt, "error line")
+	tt.Frame()
+	for _, unwanted := range []string{"info line", "warn line"} {
+		if tt.HasText(unwanted) {
+			t.Fatalf("%q passed a 错误 floor; texts = %v", unwanted, tt.Texts())
+		}
+	}
+}
+
+func TestLogcatTagAndKeywordBoxesFilterTheBuffer(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.123  1  1 I ActivityManager: started proc\n" +
+		"11-18 09:30:02.000  1  1 I OpenGLRenderer: draw frame\n")
+	waitForText(t, tt, "draw frame")
+
+	vm.Logcat.Filter.Tags = "activity"
+	tt.Frame()
+	if tt.HasText("draw frame") || !tt.HasText("started proc") {
+		t.Fatalf("the tag box did not narrow the rows; texts = %v", tt.Texts())
+	}
+
+	vm.Logcat.Filter.Tags = ""
+	vm.Logcat.Filter.Terms = "draw"
+	tt.Frame()
+	if tt.HasText("started proc") || !tt.HasText("draw frame") {
+		t.Fatalf("the keyword box did not narrow the rows; texts = %v", tt.Texts())
+	}
+}
+
+func TestLogcatFilterChangeKeepsTheBuffer(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.123  1  1 I Tag: info line\n")
+	waitForText(t, tt, "info line")
+	if err := tt.Click("错误"); err != nil {
+		t.Fatalf("Click(错误) error: %v", err)
+	}
+	if tt.HasText("info line") {
+		t.Fatalf("a 错误 floor kept an information line; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("全部"); err != nil {
+		t.Fatalf("Click(全部) error: %v", err)
+	}
+	waitForText(t, tt, "info line")
+}
+
+func TestLogcatPauseFreezesTheRows(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.123  1  1 I Tag: before pause\n")
+	waitForText(t, tt, "before pause")
+	if err := tt.Click("暂停"); err != nil {
+		t.Fatalf("Click(暂停) error: %v", err)
+	}
+	feedAfterPause := func() {
+		runner.feed("11-18 09:30:02.000  1  1 I Tag: after pause\n")
+		for i := 0; i < 5; i++ {
+			tt.Frame()
+		}
+	}
+	feedAfterPause()
+	if tt.HasText("after pause") {
+		t.Fatalf("a paused page moved under the reader; texts = %v", tt.Texts())
+	}
+	if !tt.HasText("已暂停") {
+		t.Fatalf("a paused page does not say so; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("继续"); err != nil {
+		t.Fatalf("Click(继续) error: %v", err)
+	}
+	waitForText(t, tt, "after pause")
+}
+
+func TestLogcatFollowKeepsTheNewestLineInView(t *testing.T) {
+	vm, _ := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	if !vm.Logcat.Follow || !vm.Logcat.table.FollowEnd {
+		t.Fatalf("a fresh page does not follow the newest line (Follow = %v)", vm.Logcat.Follow)
+	}
+	if err := tt.Click("跟随最新"); err != nil {
+		t.Fatalf("Click(跟随最新) error: %v", err)
+	}
+	tt.Frame()
+	if vm.Logcat.Follow || vm.Logcat.table.FollowEnd {
+		t.Fatal("turning 跟随最新 off did not stop the table following its end")
+	}
+}
+
+func TestLogcatFootRowCountsReceivedAndDropped(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.123  1  1 I Tag: one\n")
+	waitForText(t, tt, "已接收 1 行 · 显示 1 行")
+
+	// One line more than the ring holds: the page has to say what it lost.
+	burst := strings.Builder{}
+	for i := 0; i < core.LogcatMaxLines+1; i++ {
+		burst.WriteString("11-18 09:30:01.123  1  1 I Tag: line\n")
+	}
+	runner.feed(burst.String())
+	waitForText(t, tt, "丢弃 2 行")
+}
+
+func TestLogcatPageExplainsAnEmptyFilter(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.123  1  1 I Tag: something\n")
+	waitForText(t, tt, "something")
+	vm.Logcat.Filter.Terms = "nothing-matches-this"
+	waitForText(t, tt, "没有符合筛选条件的日志")
+}
