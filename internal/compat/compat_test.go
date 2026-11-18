@@ -66,6 +66,22 @@ var (
 	_ = ui.Element.TrackScroll
 )
 
+// mygo/ui tables: every page frames its table with internal/app/table.go.
+var (
+	_ func(*ui.Context, *ui.ListState, []ui.TableColumn, int, func(int, int)) ui.Element = ui.Table
+	_                                                                                    = ui.SortOrder{}.Column
+	_                                                                                    = ui.SortOrder{}.Descending
+	_                                                                                    = ui.TableColumn{}.Sortable
+	_                                                                                    = ui.TableLayout{}.Widths
+	_                                                                                    = ui.ListState{}.Sort
+	_                                                                                    = ui.ListState{}.SortBy
+	_                                                                                    = ui.ListState{}.Columns
+	_                                                                                    = ui.ListState{}.Selected
+	_                                                                                    = ui.ListState{}.Key
+	_                                                                                    = ui.Element.Changed
+	_                                                                                    = ui.Element.Submitted
+)
+
 // onevra: shells, theme, components and icons.
 var (
 	_                                                                                                                       = sidebar.NewShell
