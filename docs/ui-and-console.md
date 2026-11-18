@@ -176,6 +176,7 @@ if !open {
 - **慢的、批量的、耗网络的事情由用户点按钮发起**，打开对话框不自动跑；关闭时中止它——看不见的结果不值得继续探测。
 - **结果要一眼看懂**：成功/失败同时给文字和图标，颜色取 `theme.Success` / `theme.Danger`（映射集中在一个纯函数 `reachStatus` 里，测试直接断言颜色）。
 - **表格一律用 `internal/app/table.go` 的 `tableCard`**：它调用 `ui.Table` 并加 1 DIP 圆角边框、按需要定高或 `Grow(1)`、给表一个标签。页面**不要**直接写 `ui.Table`，也不要再用 onevra 的 `components.Table` / `TableVirtualized`（`TestNoOnevraTableComponentsAnywhere` 会红）。
+- **每个表格都有边框**：`tableCard` 默认画 1 DIP 圆角框。唯一例外是文件页右栏——整页浏览区已经是一个框，那里传 `tableOptions{Unframed: true}`（`TestOnlyFilesLeavesTheTableUnframed` 钉住）。
 - **不要把表格塞进 `components.ScrollView` / `ui.Scroll`**：`ui.Table` 自己就是滚动区，表头与内容在同一个横向滚动容器里；外面再套一层竖滚容器，列一调宽，调整抓手就会被裁到可视区外（这正是换组件的原因）。
 - **行级点击走 `ListState.Selected` + `Table(...).Changed()`**：`ui.Table` 没有 `TableRow.Clicked()`；`Selected` 初始给 -1，否则点第一行"没变化"。
 - **排序由页面算，不由组件算**：把 `&state.Sort` 交给表，建表前用 `Sort` 里的列自己排好行序（资源页 `sortApps` / `sortProcessRows`）。
