@@ -216,6 +216,9 @@ type demoHistory struct {
 	mu      sync.Mutex
 	entries []core.TimelineEntry
 	outputs map[uuid.UUID]string
+	// next numbers the rows so each has a key of its own, the way the store's
+	// row ids do.
+	next int
 }
 
 // newDemoHistory seeds the timeline the demo page shows: the app's own
@@ -248,7 +251,16 @@ func newDemoHistory(profiles []core.Profile) *demoHistory {
 		})
 	}
 	sort.SliceStable(h.entries, func(i, j int) bool { return h.entries[i].At.After(h.entries[j].At) })
+	h.rekeyLocked()
 	return h
+}
+
+// rekeyLocked gives every row a key of its own, in timeline order.
+func (h *demoHistory) rekeyLocked() {
+	for i := range h.entries {
+		h.next++
+		h.entries[i].Key = "demo:" + itoa(h.next)
+	}
 }
 
 // RecordTask, RecordLog and RecordAppLog keep what the demo produces while it
@@ -257,7 +269,8 @@ func (h *demoHistory) RecordTask(record core.TaskRecord) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	entry := core.TimelineEntry{
-		At: record.Started, Level: core.LogInfo, Source: core.LogTask,
+		Key: "task:" + record.ID.String(),
+		At:  record.Started, Level: core.LogInfo, Source: core.LogTask,
 		DeviceID: record.DeviceID, DeviceName: record.DeviceName, TaskID: record.ID,
 		Text: record.Title + " · " + record.State.Label(),
 	}
@@ -295,6 +308,8 @@ func (h *demoHistory) Close() error { return nil }
 
 // insert keeps the newest-first order without a sort on every write.
 func (h *demoHistory) insert(entry core.TimelineEntry) {
+	h.next++
+	entry.Key = "demo:" + itoa(h.next)
 	if entry.DeviceName == "" && entry.DeviceID != uuid.Nil {
 		for _, existing := range h.entries {
 			if existing.DeviceID == entry.DeviceID && existing.DeviceName != "" {

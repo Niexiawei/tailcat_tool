@@ -290,13 +290,14 @@ func (vm *ViewModel) deviceChoiceLabel(key string) string {
 	return "全部设备与应用"
 }
 
-// logRowKey identifies a row across re-queries, so selection follows its row
-// rather than its index when newer rows arrive at the top.
-type logRowKey struct {
-	At     int64
-	Source core.LogSource
-	TaskID uuid.UUID
-	Text   string
+// logRowKey keeps selection on its row when newer rows arrive at the top. It is
+// the store's own key: two log lines can share time, source and text, so no
+// combination of those can tell them apart.
+func logRowKey(entry core.TimelineEntry, index int) any {
+	if entry.Key != "" {
+		return entry.Key
+	}
+	return itoa(index) + "@" + entry.At.Format("20060102150405.000")
 }
 
 // logColumns is the timeline's column layout.
@@ -345,10 +346,7 @@ func (vm *ViewModel) logTimeline(c *ui.Context, f *logFilter) {
 			vm.openLogOutput(entry)
 		}
 	}
-	state.List.Key = func(row int) any {
-		entry := entries[row]
-		return logRowKey{At: entry.At.UnixNano(), Source: entry.Source, TaskID: entry.TaskID, Text: entry.Text}
-	}
+	state.List.Key = func(row int) any { return logRowKey(entries[row], row) }
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
 		components.TableVirtualized(c, state, logColumns(), len(entries), func(row, col int) {
 			entry := entries[row]
@@ -499,9 +497,17 @@ func (vm *ViewModel) followLogs(f *logFilter) {
 	vm.requestFrame()
 }
 
-// hasLocked reports whether entry is already in the timeline.
+// hasLocked reports whether entry is already in the timeline. Rows are matched
+// by their store key when they have one: two channel lines can be identical, and
+// comparing their text would drop a line that just arrived.
 func (f *logFilter) hasLocked(entry core.TimelineEntry) bool {
 	for _, shown := range f.entries {
+		if entry.Key != "" && shown.Key != "" {
+			if shown.Key == entry.Key {
+				return true
+			}
+			continue
+		}
 		if shown.At.Equal(entry.At) && shown.Source == entry.Source &&
 			shown.TaskID == entry.TaskID && shown.Text == entry.Text {
 			return true

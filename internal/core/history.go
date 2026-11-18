@@ -80,6 +80,10 @@ type AppLogRecord struct {
 // TimelineEntry is one row of the log page: an app line, a channel line or a
 // task, merged by time.
 type TimelineEntry struct {
+	// Key identifies the row across queries ("log:12", "task:<uuid>"). Two log
+	// lines can have the same time, source and text, so nothing else can tell
+	// them apart for the table's selection.
+	Key        string
 	At         time.Time
 	Level      LogLevel
 	Source     LogSource

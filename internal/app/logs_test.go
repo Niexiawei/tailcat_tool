@@ -655,3 +655,48 @@ func TestLogFollowStopsWhenAnotherViewDraws(t *testing.T) {
 		t.Fatal("a log view that is no longer drawn still wants to follow")
 	}
 }
+
+func TestLogsPageKeepsTwoIdenticalLinesApart(t *testing.T) {
+	vm, reader, base := logsPageFixture(t)
+	at := base.Add(-time.Minute).Truncate(time.Millisecond)
+	const text = "wg: [v2] Routine: receive incoming mkReceiveFunc - started"
+	reader.add(
+		core.TimelineEntry{Key: "log:1", At: at, Level: core.LogInfo, Source: core.LogChannel,
+			DeviceID: vm.Manager.Profiles()[0].ID, DeviceName: "E245", Text: text},
+		core.TimelineEntry{Key: "log:2", At: at, Level: core.LogInfo, Source: core.LogChannel,
+			DeviceID: vm.Manager.Profiles()[0].ID, DeviceName: "E245", Text: text},
+	)
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	waitForText(t, tt, text)
+	// Two rows that differ only by their key must both render: the table's
+	// row keys are the store's, not a guess from the content.
+	if got := len(vm.pageLogFilter().entries); got != 2 {
+		t.Fatalf("the page kept %d rows, want both identical lines", got)
+	}
+	rows, _ := tt.Find(text)
+	if rows.Y == 0 {
+		t.Fatal("the identical lines did not render")
+	}
+}
+
+func TestFollowKeepsAnIdenticalNewLine(t *testing.T) {
+	vm, reader, base := logsPageFixture(t)
+	at := base.Add(-time.Minute).Truncate(time.Millisecond)
+	const text = "重复一行"
+	reader.add(core.TimelineEntry{Key: "log:1", At: at, Level: core.LogInfo, Source: core.LogApp, Text: text})
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+
+	filter := vm.pageLogFilter()
+	filter.Follow = true
+	// The same text at the same instant, one row later: a follow must not
+	// mistake it for the row already on screen.
+	reader.add(core.TimelineEntry{Key: "log:2", At: at, Level: core.LogInfo, Source: core.LogApp, Text: text})
+	vm.followLogs(filter)
+	if got := len(filter.entries); got != 2 {
+		t.Fatalf("after following the page shows %d rows, want 2", got)
+	}
+}

@@ -279,7 +279,7 @@ func logSelection(query core.LogQuery) (string, []any) {
        COALESCE(NULLIF(l.device_name, ''),
                 (SELECT t.device_name FROM tasks t WHERE t.device_id = l.device_id
                  ORDER BY t.started_at DESC LIMIT 1), '') AS device_name,
-       l.text AS text, '' AS ref
+       l.text AS text, '' AS ref, 'log:' || l.id AS row_key
   FROM logs l WHERE ` + strings.Join(conditions, " AND "), args
 }
 
@@ -317,7 +317,7 @@ func taskSelection(query core.LogQuery) (string, []any) {
          WHEN 'running' THEN '执行中' WHEN 'succeeded' THEN '已完成'
          WHEN 'failed' THEN '失败' WHEN 'cancelled' THEN '已取消'
          ELSE t.state END AS text,
-       t.id AS ref
+       t.id AS ref, 'task:' || t.id AS row_key
   FROM tasks t WHERE ` + strings.Join(conditions, " AND "), args
 }
 
@@ -331,11 +331,11 @@ func (s *Store) Timeline(query core.LogQuery) ([]core.TimelineEntry, error) {
 	logs, logArgs := logSelection(query)
 	tasks, taskArgs := taskSelection(query)
 	args := append(append(logArgs, taskArgs...), limit)
-	rows, err := s.db.Query(`SELECT at, level, source, device_id, device_name, text, ref FROM (
+	rows, err := s.db.Query(`SELECT at, level, source, device_id, device_name, text, ref, row_key FROM (
 `+logs+`
   UNION ALL
 `+tasks+`
-) ORDER BY at DESC, ref DESC LIMIT ?`, args...)
+) ORDER BY at DESC, ref DESC, row_key DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -343,14 +343,15 @@ func (s *Store) Timeline(query core.LogQuery) ([]core.TimelineEntry, error) {
 	var out []core.TimelineEntry
 	for rows.Next() {
 		var (
-			at                     int64
-			level, source, name    string
-			deviceID, text, taskID string
+			at                             int64
+			level, source, name            string
+			deviceID, text, taskID, rowKey string
 		)
-		if err := rows.Scan(&at, &level, &source, &deviceID, &name, &text, &taskID); err != nil {
+		if err := rows.Scan(&at, &level, &source, &deviceID, &name, &text, &taskID, &rowKey); err != nil {
 			return nil, err
 		}
 		entry := core.TimelineEntry{
+			Key:        rowKey,
 			At:         time.UnixMilli(at),
 			Level:      core.LogLevel(level),
 			Source:     core.LogSource(source),

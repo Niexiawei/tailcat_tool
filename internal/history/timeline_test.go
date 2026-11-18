@@ -512,3 +512,46 @@ func TestTimelineSearchTreatsWildcardsLiterally(t *testing.T) {
 		t.Fatalf("search 另一_日志 = %+v; _ must not match any character", underscore)
 	}
 }
+
+func TestTimelineRowsCarryTheirOwnKey(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	deviceID, taskID := uuid.New(), uuid.New()
+	// The same channel line twice in the same millisecond: the manager writes
+	// exactly this when a routine logs the same text twice in one tick.
+	at := time.Now().Add(-time.Minute).Truncate(time.Millisecond)
+	for i := 0; i < 2; i++ {
+		if err := store.RecordLog(core.LogRecord{DeviceID: deviceID, At: at, Text: "重复一行"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.RecordTask(core.TaskRecord{
+		ID: taskID, DeviceID: deviceID, DeviceName: "E245", Title: "上传",
+		Started: at, State: core.TaskSucceeded,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := store.Timeline(core.LogQuery{})
+	if err != nil {
+		t.Fatalf("Timeline() error: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		if entry.Key == "" {
+			t.Fatalf("row %+v has no key; the table cannot tell equal rows apart", entry)
+		}
+		if seen[entry.Key] {
+			t.Fatalf("two rows share the key %q", entry.Key)
+		}
+		seen[entry.Key] = true
+	}
+	if !seen["task:"+taskID.String()] {
+		t.Fatalf("task row key missing; keys = %v", seen)
+	}
+}
