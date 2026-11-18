@@ -1,6 +1,12 @@
 package core
 
-import "github.com/google/uuid"
+import (
+	"context"
+	"time"
+
+	"github.com/google/uuid"
+	"tailscale.com/tailcfg"
+)
 
 // RelayPresetUsage names the devices that use a preset. Temporary devices count:
 // they hold a Source like any other device while the app runs.
@@ -66,4 +72,64 @@ func (m *Manager) DeleteRelayPreset(id uuid.UUID) error {
 	}
 	m.notify()
 	return nil
+}
+
+// RelayMapPreview is one DERP source as the detail page shows it.
+type RelayMapPreview struct {
+	Source string
+	Kind   RelayKind
+	// JSON is the canonical map text: parsed locally for an inline source and
+	// downloaded for a URL.
+	JSON      string
+	Map       *tailcfg.DERPMap
+	FetchedAt time.Time
+}
+
+// RelayMapPreview loads one source now: inline sources parse locally, URLs are
+// downloaded. The result is kept in memory only, because a map changes and a
+// stale copy would look current.
+func (m *Manager) RelayMapPreview(ctx context.Context, source string) (RelayMapPreview, error) {
+	cfg, err := NormalizeRelay(source)
+	if err != nil {
+		return RelayMapPreview{}, err
+	}
+	if cfg.IsOfficial() {
+		return RelayMapPreview{}, Error("官方默认地图由 tailcat 提供，这里没有可预览的副本")
+	}
+	sourceKey, kind := cfg.Source, cfg.Kind
+	if cfg.Kind == RelayURL {
+		// The network call happens before the lock: a slow server must not
+		// stall every other manager call.
+		cfg, err = fetchRelayMap(ctx, cfg.URL)
+		if err != nil {
+			return RelayMapPreview{}, err
+		}
+	}
+	preview := RelayMapPreview{
+		Source:    sourceKey,
+		Kind:      kind,
+		JSON:      cfg.Source,
+		Map:       cfg.Map,
+		FetchedAt: time.Now(),
+	}
+	m.mu.Lock()
+	if m.relayPreviews == nil {
+		m.relayPreviews = map[string]RelayMapPreview{}
+	}
+	m.relayPreviews[sourceKey] = preview
+	m.mu.Unlock()
+	return preview, nil
+}
+
+// CachedRelayMapPreview answers without the network. A failed fetch stores
+// nothing, so the detail page's retry really retries.
+func (m *Manager) CachedRelayMapPreview(source string) (RelayMapPreview, bool) {
+	cfg, err := NormalizeRelay(source)
+	if err != nil || cfg.Source == "" {
+		return RelayMapPreview{}, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	preview, ok := m.relayPreviews[cfg.Source]
+	return preview, ok
 }

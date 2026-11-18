@@ -1,7 +1,14 @@
 package core
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -111,5 +118,127 @@ func TestDeleteRelayPresetRemovesAnUnusedOne(t *testing.T) {
 
 	if err := f.m.DeleteRelayPreset(uuid.New()); err == nil {
 		t.Fatal("deleting an unknown preset reported success")
+	}
+}
+
+// relayTestServer serves one body and counts the requests it answered.
+func relayTestServer(t *testing.T, status int, body string) (*httptest.Server, *int32) {
+	t.Helper()
+	var hits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(server.Close)
+	return server, &hits
+}
+
+func TestRelayPreviewParsesInlineMapWithoutNetwork(t *testing.T) {
+	f := newManagerFixture(t)
+	preview, err := f.m.RelayMapPreview(context.Background(), minimalRelayJSON)
+	if err != nil {
+		t.Fatalf("RelayMapPreview() error: %v", err)
+	}
+	if preview.Kind != RelayInline {
+		t.Fatalf("Kind = %v, want inline", preview.Kind)
+	}
+	if preview.Map == nil || len(preview.Map.Regions) != 1 {
+		t.Fatalf("Map = %+v, want one region", preview.Map)
+	}
+	if preview.FetchedAt.IsZero() {
+		t.Fatal("FetchedAt was left zero")
+	}
+	if !strings.Contains(preview.JSON, `"RegionID": 901`) {
+		t.Fatalf("JSON is not the canonical, indented map: %q", preview.JSON)
+	}
+}
+
+func TestRelayPreviewFetchesAURL(t *testing.T) {
+	server, hits := relayTestServer(t, http.StatusOK, minimalRelayJSON)
+	f := newManagerFixture(t)
+	preview, err := f.m.RelayMapPreview(context.Background(), server.URL+"/map.json")
+	if err != nil {
+		t.Fatalf("RelayMapPreview() error: %v", err)
+	}
+	if atomic.LoadInt32(hits) != 1 {
+		t.Fatalf("requests = %d, want 1", *hits)
+	}
+	if preview.Kind != RelayURL {
+		t.Fatalf("Kind = %v, want URL", preview.Kind)
+	}
+	if preview.Map == nil {
+		t.Fatal("the downloaded map was not decoded")
+	}
+	region := preview.Map.Regions[901]
+	if region == nil || len(region.Nodes) != 1 || region.Nodes[0].HostName != "relay.example.com" {
+		t.Fatalf("regions = %+v", preview.Map.Regions)
+	}
+	if preview.FetchedAt.IsZero() {
+		t.Fatal("FetchedAt was left zero")
+	}
+}
+
+func TestRelayPreviewRejectsAnOversizedBody(t *testing.T) {
+	body := strings.Repeat("x", maxRelayConfigSize+1)
+	server, _ := relayTestServer(t, http.StatusOK, body)
+	f := newManagerFixture(t)
+	if _, err := f.m.RelayMapPreview(context.Background(), server.URL+"/big.json"); err == nil {
+		t.Fatal("accepted a body larger than the relay limit")
+	}
+}
+
+func TestRelayPreviewReportsHTTPFailure(t *testing.T) {
+	server, _ := relayTestServer(t, http.StatusInternalServerError, minimalRelayJSON)
+	f := newManagerFixture(t)
+	_, err := f.m.RelayMapPreview(context.Background(), server.URL+"/map.json")
+	if err == nil {
+		t.Fatal("reported success for a 500")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Fatalf("error = %q, want the status code in it", err.Error())
+	}
+}
+
+func TestRelayPreviewGivesUpAfterTheTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		_, _ = io.WriteString(w, minimalRelayJSON)
+	}))
+	defer server.Close()
+	previous := relayHTTPClient
+	relayHTTPClient = &http.Client{Timeout: 50 * time.Millisecond}
+	defer func() { relayHTTPClient = previous }()
+
+	f := newManagerFixture(t)
+	start := time.Now()
+	if _, err := f.m.RelayMapPreview(context.Background(), server.URL+"/map.json"); err == nil {
+		t.Fatal("reported success after the client timeout")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("waited %v, want the client timeout to end the request", elapsed)
+	}
+}
+
+func TestCachedRelayPreviewNeedsNoNetwork(t *testing.T) {
+	server, hits := relayTestServer(t, http.StatusOK, minimalRelayJSON)
+	f := newManagerFixture(t)
+	source := server.URL + "/map.json"
+	if _, ok := f.m.CachedRelayMapPreview(source); ok {
+		t.Fatal("answered from the cache before anything was fetched")
+	}
+	if _, err := f.m.RelayMapPreview(context.Background(), source); err != nil {
+		t.Fatalf("RelayMapPreview() error: %v", err)
+	}
+	server.Close()
+	preview, ok := f.m.CachedRelayMapPreview(source)
+	if !ok {
+		t.Fatal("the fetched map was not cached")
+	}
+	if preview.Map == nil || preview.Map.Regions[901].Nodes[0].HostName != "relay.example.com" {
+		t.Fatalf("cached preview = %+v", preview)
+	}
+	if atomic.LoadInt32(hits) != 1 {
+		t.Fatalf("requests = %d, want the cache to answer the second time", *hits)
 	}
 }

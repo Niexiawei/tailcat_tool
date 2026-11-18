@@ -1,10 +1,16 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"tailscale.com/tailcfg"
 )
@@ -161,4 +167,49 @@ func isSpace(r rune) bool {
 		return true
 	}
 	return false
+}
+
+// relayHTTPClient downloads one map. The timeout keeps a stalled server from
+// leaving the detail page spinning forever.
+var relayHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+// fetchRelayMap downloads one URL and validates it exactly the way the editor
+// validates inline JSON: same size bound, same region and node rules.
+func fetchRelayMap(ctx context.Context, rawURL string) (RelayConfig, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return RelayConfig{}, Error("下载 DERP 地图失败，请检查网络或链接")
+	}
+	response, err := relayHTTPClient.Do(request)
+	if err != nil {
+		return RelayConfig{}, relayDownloadError(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return RelayConfig{}, Errorf("下载 DERP 地图失败：服务器返回 %d", response.StatusCode)
+	}
+	// Read one byte past the limit so an oversized body is detected without
+	// buffering all of it.
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxRelayConfigSize+1))
+	if err != nil {
+		return RelayConfig{}, relayDownloadError(err)
+	}
+	if len(body) > maxRelayConfigSize {
+		return RelayConfig{}, Error("下载的 DERP 地图超过 128 KiB")
+	}
+	cfg, err := NormalizeRelay(string(body))
+	if err != nil || cfg.IsOfficial() {
+		return RelayConfig{}, Error("下载的内容不是有效的 DERP 地图")
+	}
+	return cfg, nil
+}
+
+// relayDownloadError reports a transport failure without echoing the URL back
+// into the UI.
+func relayDownloadError(err error) error {
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+		return Error("下载 DERP 地图超时，请检查网络后重试")
+	}
+	return Error("下载 DERP 地图失败，请检查网络或链接")
 }

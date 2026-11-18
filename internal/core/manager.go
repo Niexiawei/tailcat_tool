@@ -49,7 +49,11 @@ type Manager struct {
 	tasks        []Task
 	relayPresets []RelayPreset
 	relayHistory []RelayHistoryEntry
-	tools        ToolSettings
+	// relayPreviews holds the last fetched map of each source. It is memory
+	// only on purpose: a map changes, and a stale copy on disk would look
+	// current.
+	relayPreviews map[string]RelayMapPreview
+	tools         ToolSettings
 
 	generations map[uuid.UUID]uuid.UUID
 	runtimes    map[uuid.UUID]*runtimeState
