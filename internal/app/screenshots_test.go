@@ -343,6 +343,16 @@ func shotCases() []shotCase {
 			},
 		},
 		{
+			name: "27-resources-app-actions",
+			build: func(t *testing.T) *ViewModel {
+				vm, _ := resourceFixtureWithMeta(t, map[string]core.AppMeta{
+					"com.foo": {Package: "com.foo", Label: "微信"},
+				})
+				return vm
+			},
+			settle: 4,
+		},
+		{
 			name: "26-appmeta-cache-long",
 			build: func(t *testing.T) *ViewModel {
 				cache := &stubAppMetaCache{entries: map[string][]core.AppMetaEntry{}}

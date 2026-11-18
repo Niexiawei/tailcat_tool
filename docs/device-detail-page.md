@@ -189,9 +189,11 @@ GPU 型号来自 `dumpsys SurfaceFlinger` 的 `GLES: <厂商>, <renderer>, <版�
 一台设备常有 120+ 个分组行，全量解析几分钟起步，而且通过 tailcat 时带宽更紧。所以：
 
 - 采样**从不**主动请求元数据（`attachAppMeta` 只查缓存，不排队）；
-- 每行在「还没有名字」时提供一个 `PackageSearch` 图标按钮「解析应用信息」，只请求该包；
+- 每行末尾始终有一个读取按钮，只请求该包：还没有名字时是 `PackageSearch`「解析应用信息」，
+  已经有名字时是 `RefreshCw`「重新读取应用信息」——应用在设备上改名或换了图标，光看缓存看不出来，
+  这一行要能自己重新读一次（`ResolveAppMeta` 走 `Refresh`，忽略 7 天有效期）；
 - 工具栏的「刷新应用信息」是批量动作，一次请求当前列表里的全部应用；
-- 解析期间该行显示 `components.Spinner`（加载指示器），有名字后按钮自动消失。
+- 解析期间该行显示 `components.Spinner`（加载指示器），读完按钮回来（失败时按状态换成原因/重试）。
 
 ### 3.2 三级取数（**二进制条目必须走 `exec-out`**）
 
@@ -248,7 +250,7 @@ APK 都解析失败，第 1 级一直是一段死代码，每次「解析应用�
 |---|---|---|
 | `AppMetaUnknown` | 从没问过 | 显示「解析应用信息」按钮 |
 | `AppMetaPending` | 已入队或在读 | `components.Spinner`（无障碍名「正在读取应用信息」） |
-| `AppMetaReady` | 缓存里有名字（可能过期） | 显示名字；过期时补「7 天前更新」 |
+| `AppMetaReady` | 缓存里有名字（可能过期） | 显示名字与「重新读取应用信息」按钮；过期时补「7 天前更新」 |
 | `AppMetaFailed{Reason, Final}` | 读失败，`Reason` 是用户能读的中文原因 | 「无应用包」/「读取失败」+ Tooltip 全文；`Final` 时不给重试按钮 |
 
 `Final` = **重试无用**：设备上没有这个应用的应用包（`system_server`、`surfaceflinger`、

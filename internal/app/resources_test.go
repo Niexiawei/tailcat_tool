@@ -659,14 +659,27 @@ func TestProcessTableResolvesOneAppOnDemand(t *testing.T) {
 	}
 }
 
-func TestProcessTableHidesResolveButtonOnceNamed(t *testing.T) {
-	vm, _ := resourceFixtureWithMeta(t, map[string]core.AppMeta{
-		"com.foo":       {Package: "com.foo", Label: "微信"},
-		"system_server": {Package: "system_server", Label: "系统"},
+// TestProcessTableOffersRefreshOnNamedRows pins the way out of an application
+// that renamed or re-iconed itself on the device: the row keeps an action after
+// it has a name, and that action reads the app again, cache lifetime or not.
+func TestProcessTableOffersRefreshOnNamedRows(t *testing.T) {
+	vm, meta := resourceFixtureWithMeta(t, map[string]core.AppMeta{
+		"com.foo": {Package: "com.foo", Label: "微信"},
 	})
 	tt := ui.NewTester(vm.ContentView, 900, 900)
-	if tt.HasText("解析应用信息") {
-		t.Fatalf("a named application still offers to resolve itself; texts = %v", tt.Texts())
+	if !tt.HasText("重新读取应用信息") {
+		t.Fatalf("a named application offers no way to refresh a name the device changed; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("重新读取应用信息"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(meta.refreshedPackages()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	got := meta.refreshedPackages()
+	if len(got) != 1 || got[0] != "com.foo" {
+		t.Fatalf("the row refresh queued %v, want just com.foo", got)
 	}
 }
 
