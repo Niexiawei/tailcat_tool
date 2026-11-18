@@ -44,9 +44,14 @@ func (vm *ViewModel) routedPage(c *ui.Context) {
 		return
 	}
 	vm.Router.View(c, func(r *ui.Route) {
-		if name, isManage := managePageTitle(r.Path()); isManage {
-			r.Title(name)
+		switch {
+		case r.Match(LogsRoute):
+			r.Title("日志")
 			vm.logsPage(c)
+			return
+		case r.Match(DerpRoute):
+			r.Title("DERP 地图")
+			vm.derpListPage(c)
 			return
 		}
 		if r.Match("/devices/{id}") {

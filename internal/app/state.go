@@ -97,6 +97,21 @@ type ViewModel struct {
 	toastsMu sync.Mutex
 	toasts   []ui.Toast
 
+	// DerpTable keeps the DERP list's column layout across frames.
+	DerpTable components.TableState
+	// DerpEditor is the DERP editor's draft; nil closes the dialog.
+	DerpEditor *DerpEditorDraft
+	// DerpConfirmDelete asks before removing this preset; nil closes it.
+	DerpConfirmDelete *core.RelayPreset
+	// DerpPreview is the map the detail page shows; nil while loading.
+	DerpPreview *core.RelayMapPreview
+	// DerpPreviewErr is why the last preview attempt failed.
+	DerpPreviewErr string
+	// DerpPreviewLoading is true while a preview fetch is in flight.
+	DerpPreviewLoading bool
+	// derpPreviewMu guards what preview goroutines write.
+	derpPreviewMu sync.Mutex
+
 	// PageLogFilter is the log page's filter; nil means it was never opened.
 	PageLogFilter *logFilter
 	// LogOutput is the task whose output dialog is open; nil closes it.
@@ -237,6 +252,12 @@ const DeviceIndexRoute = "/devices"
 // every task into one searchable timeline.
 const LogsRoute = "/logs"
 
+// DerpRoute lists every DERP map source; DerpDetailRoute shows one preset.
+const DerpRoute = "/manage/derp"
+
+// DerpDetailRoute is the page of one saved DERP preset.
+func DerpDetailRoute(id uuid.UUID) string { return DerpRoute + "/" + id.String() }
+
 // DeviceRoute is the page of one device.
 func DeviceRoute(id uuid.UUID) string { return DeviceIndexRoute + "/" + id.String() }
 
@@ -250,6 +271,23 @@ func (vm *ViewModel) OpenDevice(id uuid.UUID) {
 		return
 	}
 	if target := DeviceRoute(id); vm.Router.Path() != target {
+		vm.Router.Push(target)
+	}
+}
+
+// OpenDerp shows the DERP list.
+func (vm *ViewModel) OpenDerp() {
+	if vm.Router != nil && vm.Router.Path() != DerpRoute {
+		vm.Router.Push(DerpRoute)
+	}
+}
+
+// OpenDerpDetail shows one preset.
+func (vm *ViewModel) OpenDerpDetail(id uuid.UUID) {
+	if vm.Router == nil {
+		return
+	}
+	if target := DerpDetailRoute(id); vm.Router.Path() != target {
 		vm.Router.Push(target)
 	}
 }
@@ -307,7 +345,7 @@ func (vm *ViewModel) ContentTitle(c *ui.Context) {
 	}
 	id, ok := deviceIDFromPath(vm.Router.Path())
 	if !ok {
-		if name, isManage := managePageTitle(vm.Router.Path()); isManage {
+		if name, isManage := vm.managePageTitle(vm.Router.Path()); isManage {
 			vm.CrumbChoice = -1
 			crumbs := components.Breadcrumbs(c, []string{pageName, name}, &vm.CrumbChoice)
 			if crumbs.Changed() && vm.CrumbChoice == 0 {
