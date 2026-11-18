@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/google/uuid"
 	"github.com/oneo-me/onevra/source/components"
@@ -371,6 +374,9 @@ func (vm *ViewModel) logcatFootRow(c *ui.Context, f *logcatState) {
 	ui.Row(c).FillWidth().Shrink(0).AlignItems(ui.Center).Justify(ui.SpaceBetween).Gap(theme.Space(2)).Children(func() {
 		components.Text(c, logcatStatusText(f)).FontSize(11).TextColor(theme.TextMuted)
 		ui.Row(c).Shrink(0).Gap(theme.Space(1.5)).AlignItems(ui.Center).Children(func() {
+			if components.Button(c, "导出…", components.ButtonOutline).Height(26).Clicked() {
+				vm.exportLogcat(f)
+			}
 			if components.Button(c, "清空缓冲", components.ButtonOutline).Height(26).Clicked() {
 				vm.clearLogcat(f)
 			}
@@ -402,6 +408,56 @@ func (vm *ViewModel) restartLogcat(f *logcatState) {
 	f.exited = false
 	f.err = ""
 	f.received, f.dropped = 0, 0
+}
+
+// exportLogcat asks where to save and writes the rows the page shows: the
+// filter is the point of the page, so the file holds what the user is looking
+// at, not the whole buffer.
+func (vm *ViewModel) exportLogcat(f *logcatState) {
+	if len(f.rows) == 0 {
+		vm.FailText("没有可导出的行")
+		return
+	}
+	target, err := saveLocalPath(mygo.SaveDialogOptions{
+		Title:       "导出 Logcat",
+		DefaultPath: "logcat-" + time.Now().Format("20060102-150405") + ".txt",
+		Filters:     []mygo.FileFilter{{Name: "文本文件", Extensions: []string{"txt"}}},
+	})
+	if err != nil || target == "" {
+		// Cancelling a save dialog is not an error, and the system one reports
+		// a dismissal as an error on some platforms.
+		return
+	}
+	rows := append([]core.LogcatEntry(nil), f.rows...)
+	text := logcatExportText(rows)
+	go func() {
+		if err := os.WriteFile(target, []byte(text), 0o600); err != nil {
+			vm.Fail(core.Errorf("无法写入文件：%v", err))
+			return
+		}
+		vm.Notify("已导出 " + itoa(len(rows)) + " 行到 " + target)
+	}()
+}
+
+// logcatExportText is the file's content: one line per entry, oldest first, in
+// the shape a person reads in a text editor. The file carries the full date
+// even though the table shows only month and day: a file outlives the day it
+// was written.
+func logcatExportText(rows []core.LogcatEntry) string {
+	var b strings.Builder
+	for _, entry := range rows {
+		b.WriteString(entry.At.Format("2006-01-02 15:04:05.000"))
+		b.WriteString(" ")
+		b.WriteString(string(entry.Level))
+		b.WriteString("/")
+		b.WriteString(entry.Tag)
+		b.WriteString("(")
+		b.WriteString(itoa(entry.PID))
+		b.WriteString("): ")
+		b.WriteString(entry.Text)
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // logcatFilterActive reports whether the user narrowed what the page shows.

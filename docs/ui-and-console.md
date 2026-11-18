@@ -434,7 +434,7 @@ TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v
 | 侧栏、分组、底栏、提示队列、标题栏面包屑 | `internal/app/state.go` |
 | 路由、页面、概览、页签 | `internal/app/detail.go` |
 | 日志页与设备日志标签（共享 `logView`、筛选、跟随、输出、清空） | `internal/app/logs.go` |
-| Logcat 页（设备选择、筛选、表格、暂停/跟随、清空、流的生命周期） | `internal/app/logcat.go` |
+| Logcat 页（设备选择、筛选、表格、暂停/跟随、清空、导出、流的生命周期） | `internal/app/logcat.go` |
 | logcat 拆行、解析、环形缓冲、过滤（纯逻辑，不启进程） | `internal/core/logcat.go` |
 | logcat 流的启动与按设备登记（`StartLogcat` / `StopLogcat`） | `internal/core/manager_logcat.go` |
 | 内嵌终端、`lineConsole` | `internal/app/terminal.go` |
@@ -634,4 +634,6 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 
 **`-v threadtime` 的年份**：threadtime 不打印年份与时区。解析时用「当前年」，若算出的时间晚于现在 24 小时则减一年（1 月读到的 12 月日志属于刚过去的那年）。续行（不以时间戳开头的缩进行）拼到上一条的正文里；`--------- beginning of main` 这类分隔行丢弃；单行超过 8 KiB 截断并加「（已截断）」，否则一条跑飞的二进制行会把缓冲撑爆。
 
-**`--demo`**：`demoRunner.Start` 见到 `logcat` 就按 150ms 打印一条演示行，直到 ctx 取消（`--demo` 没有真实进程，`ExecRunner` 忽略 ctx，演示版遵守它）。所以演示环境里这一页有内容、筛选也能试。
+**导出**：状态行的「导出…」调 `mygo.Dialog.Save` 弹系统保存对话框（默认文件名 `logcat-YYYYMMDD-HHMMSS.txt`，过滤 `*.txt`），写的是**当前筛选命中的行**——筛选是这个页面的意义所在。一行一条 `2006-01-02 15:04:05.000 I/Tag(1234): 正文`：文件里写完整日期，因为被翻看的文件需要年份，而表格里只到月日。写文件在 goroutine 里做，成功弹「已导出 N 行到 <路径>」；用户取消不是错误，静默返回（系统对话框在某些平台上把"取消"报成 error）。没有可导出的行时不弹对话框，只提示「没有可导出的行」。
+
+**`--demo`**：`demoRunner.Start` 见到 `logcat` 就按 150ms 打印一条演示行，直到 ctx 取消（`--demo` 没有真实进程，`ExecRunner` 忽略 ctx，演示版遵守它）。所以演示环境里这一页有内容，筛选与导出也能试。

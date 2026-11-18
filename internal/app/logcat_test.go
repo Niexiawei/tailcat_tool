@@ -2,11 +2,15 @@ package app
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -362,4 +366,123 @@ func TestDemoLogcatStreamFeedsSyntheticLines(t *testing.T) {
 	})
 	tt := ui.NewTester(vm.ContentView, 1100, 720)
 	waitForText(t, tt, "演示日志")
+}
+
+// stubSaveDialog replaces the system save dialog and records what it was asked.
+func stubSaveDialog(t *testing.T, target string) *int {
+	t.Helper()
+	calls := 0
+	original := saveLocalPath
+	t.Cleanup(func() { saveLocalPath = original })
+	saveLocalPath = func(mygo.SaveDialogOptions) (string, error) {
+		calls++
+		return target, nil
+	}
+	return &calls
+}
+
+// waitForFile reads path once the export goroutine wrote it.
+func waitForFile(t *testing.T, path string) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		data, err := os.ReadFile(path)
+		// The file exists a moment before its content does: wait for the
+		// content, not for the name.
+		if err == nil && len(data) > 0 {
+			return string(data)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("never wrote %s: %v", path, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func TestLogcatExportWritesTheVisibleRows(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.123  1234  1250 I ActivityManager: Started proc\n" +
+		"11-18 09:30:02.000  1234  1250 W demo.camera: preview dropped\n")
+	waitForText(t, tt, "preview dropped")
+
+	target := filepath.Join(t.TempDir(), "logcat.txt")
+	stubSaveDialog(t, target)
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatalf("Click(导出…) error: %v", err)
+	}
+	text := waitForFile(t, target)
+	year := time.Now().Year()
+	for _, want := range []string{
+		itoa(year) + "-11-18 09:30:01.123 I/ActivityManager(1234): Started proc\n",
+		itoa(year) + "-11-18 09:30:02.000 W/demo.camera(1234): preview dropped\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("the file has no %q; content = %q", want, text)
+		}
+	}
+}
+
+func TestLogcatExportKeepsTheFilter(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.123  1  1 I Tag: info line\n" +
+		"11-18 09:30:02.000  1  1 E Tag: error line\n")
+	waitForText(t, tt, "error line")
+	if err := tt.Click("错误"); err != nil {
+		t.Fatalf("Click(错误) error: %v", err)
+	}
+	target := filepath.Join(t.TempDir(), "filtered.txt")
+	stubSaveDialog(t, target)
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatalf("Click(导出…) error: %v", err)
+	}
+	text := waitForFile(t, target)
+	if strings.Contains(text, "info line") || !strings.Contains(text, "error line") {
+		t.Fatalf("the export ignored the filter; content = %q", text)
+	}
+}
+
+func TestLogcatExportCancelledWritesNothing(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.123  1  1 I Tag: a line\n")
+	waitForText(t, tt, "a line")
+
+	dir := t.TempDir()
+	calls := stubSaveDialog(t, "")
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatalf("Click(导出…) error: %v", err)
+	}
+	tt.Frame()
+	if *calls != 1 {
+		t.Fatalf("the save dialog opened %d times, want 1", *calls)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("a cancelled export wrote %d files", len(entries))
+	}
+}
+
+func TestLogcatExportRefusesAnEmptyTable(t *testing.T) {
+	vm, _ := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	calls := stubSaveDialog(t, filepath.Join(t.TempDir(), "empty.txt"))
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatalf("Click(导出…) error: %v", err)
+	}
+	tt.Frame()
+	if *calls != 0 {
+		t.Fatal("an empty table still opened the save dialog")
+	}
+	if !tt.HasText("没有可导出的行") {
+		t.Fatalf("an empty export says nothing; texts = %v", tt.Texts())
+	}
 }
