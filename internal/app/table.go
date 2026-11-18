@@ -27,7 +27,12 @@ type tableOptions struct {
 	Rows int
 	// Fit takes Rows at its word instead of capping at maxTableRows: use it
 	// when a box around the table scrolls, so every row is drawn and no row is
-	// hidden behind a second scrollbar inside the card.
+	// hidden behind a second scrollbar inside the card. It also pins the rows
+	// to the theme's least row height (ListState.RowHeight): only a uniform row
+	// height lets the card be exactly as tall as what it shows. A row holding a
+	// button is taller than that by its padding, so a card sized by an estimate
+	// was short by a pixel or two per row — enough to hide the last row behind
+	// the card's own scrollbar.
 	Fit bool
 	// Unframed omits the card's border, for a table already inside a frame.
 	Unframed bool
@@ -48,6 +53,11 @@ func tableCard(c *ui.Context, state *ui.ListState, columns []ui.TableColumn, row
 	}
 	var table ui.Element
 	frame.Children(func() {
+		if opts.Fit {
+			// tableRowsHeight counts the theme's least row for every row, which
+			// is what the table has to give each one for the two to agree.
+			state.RowHeight = c.Theme().Space(8)
+		}
 		table = ui.Table(c, state, columns, rows, cell).FillWidth().Label(opts.Label)
 		if opts.Grow {
 			table.Grow(1).MinHeight(0)

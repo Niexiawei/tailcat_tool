@@ -627,17 +627,36 @@ func saveDerpPresets(t *testing.T, vm *ViewModel, n int) {
 	}
 }
 
-// TestDerpPresetTableShowsEverySavedNode pins that the preset list is not
-// capped at the card's usual eight rows: the box around the list is what
-// scrolls, so a table that hid row nine would hide it twice.
-func TestDerpPresetTableShowsEverySavedNode(t *testing.T) {
+// TestDerpPresetTableShowsEverySavedRow pins that the preset list is not
+// capped at the card's usual eight rows, and — the bug this test was born as —
+// that the card is as tall as its rows are: a row holding a button is taller
+// than the theme's least row, so a card sized by an estimate hid its last rows
+// behind a scrollbar inside the card, inside the box that already scrolls.
+func TestDerpPresetTableShowsEverySavedRow(t *testing.T) {
 	vm := newTestViewModel(t)
 	saveDerpPresets(t, vm, 12)
 	vm.OpenDerp()
-	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	// Tall enough that the box around the list is not what clips the table:
+	// this is about the card's own height, not the window's.
+	tt := ui.NewTester(vm.ContentView, 1000, 1600)
+	table, ok := tt.Find("DERP 节点预设列表")
+	if !ok {
+		t.Fatalf("the page has no preset table; texts = %v", tt.Texts())
+	}
+	if vm.DerpTable.RowHeight <= 0 {
+		t.Fatal("the card did not pin its row height, so it cannot be exactly as tall as its rows")
+	}
 	for _, want := range []string{"预设1", "预设8", "预设12"} {
 		if !tt.HasText(want) {
 			t.Fatalf("the preset table dropped %q; texts = %v", want, tt.Texts())
+		}
+		row, ok := tt.Find(want)
+		if !ok || row.H <= 0 {
+			t.Fatalf("%q is built but clipped by the card: %+v", want, row)
+		}
+		if row.Y+row.H > table.Y+table.H+0.5 {
+			t.Fatalf("%q sits past the card's edge (%.1f > %.1f), so the card scrolls its own rows",
+				want, row.Y+row.H, table.Y+table.H)
 		}
 	}
 }

@@ -73,6 +73,11 @@ func TestTableCardFitsEveryRowWhenAsked(t *testing.T) {
 	if want <= cap {
 		t.Fatalf("the fit height %v is not past the %d-row cap %v", want, maxTableRows, cap)
 	}
+	// A card can only be exactly as tall as its rows when every row is the
+	// same height, so Fit pins it rather than trusting the content.
+	if state.RowHeight <= 0 {
+		t.Fatalf("Fit left RowHeight at %v, so the height is an estimate", state.RowHeight)
+	}
 }
 
 // unframedTables maps the tables that may leave the card's border off to the

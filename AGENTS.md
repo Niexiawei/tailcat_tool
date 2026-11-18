@@ -122,7 +122,7 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 2. **表格自己滚，外面不要再套滚动容器**。`components.Table` 自己不滚、要求调用方套 `ScrollView`，而我们套的是竖滚容器——列一调宽，最右列的调整抓手就被裁在可视区外且没有横向滚动能过去。`ui.Table` 的表头与行在同一个横向滚动区里，所以：
    - 表格是本屏主体（资源、缓存、日志、文件）→ `tableOptions{Grow: true}`，占满剩余高度；
    - 页面本身要滚（DERP 详情、连通测试对话框）→ 给 `tableOptions{Rows: n}` 定高，最多 `maxTableRows` 行，超出在表内滚；
-   - 外面那个框负责滚（DERP 页的预设列表：上半部固定、下半部一个框）→ `tableOptions{Rows: n, Fit: true}`，表格按行数撑满、自己不滚，由框统一滚（`TestDerpPresetTableShowsEverySavedNode`、`TestDerpListPinsTheCreateActionAndDefaultNode`）。`Fit` 只给这类"行数有上限"的列表：它会一次建出所有行，别给文件列表那种没上限的表。
+   - 外面那个框负责滚（DERP 页的预设列表：上半部固定、下半部一个框）→ `tableOptions{Rows: n, Fit: true}`，表格按行数撑满、自己不滚，由框统一滚（`TestDerpPresetTableShowsEverySavedRow`、`TestDerpListPinsTheCreateActionAndDefaultNode`）。`Fit` 会把每行钉成主题的最小行高（`ListState.RowHeight`）——只有行高统一，表高才能等于内容高；行里有按钮的行本来就更高，按估算给高度就会每行差一两像素，最后几行被藏在表格自己的滚动条后面。`Fit` 只给这类"行数有上限"的列表：它会一次建出所有行，别给文件列表那种没上限的表。
 3. **行激活用 `RowClicked()`，不要用 `Changed()`**。`Changed()` 对上下键移动选中也报，用它会在用户只是按键浏览时进目录、弹任务输出（两次都是真 bug）。
 4. **选中行（`ListState.Selected`）必须指向状态字段**，不能指向构建函数里的局部变量：列表在帧与帧之间写它，局部变量活不到下一帧，箭头键的写入会丢。文件页为此存 `fileState.chosen` + `chosenPath`（`TestFileTableKeyboardMovesTheChoice` 钉住）。
 5. **`ListState.Key` 必须是稳定身份**（日志用 `logRowKey`：两行日志可以时间、来源、文本全同）。

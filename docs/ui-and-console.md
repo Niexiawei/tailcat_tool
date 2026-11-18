@@ -181,7 +181,7 @@ if !open {
 - **表格一律用 `internal/app/table.go` 的 `tableCard`**：它调用 `ui.Table` 并加 1 DIP 圆角边框、按需要定高或 `Grow(1)`、给表一个标签。页面**不要**直接写 `ui.Table`，也不要再用 onevra 的 `components.Table` / `TableVirtualized`（`TestNoOnevraTableComponentsAnywhere` 会红）。
 - **每个表格都有边框**：`tableCard` 默认画 1 DIP 圆角框。例外只给"表格已经在别人画的框里"：文件页右栏（整页浏览区是一个框）与 DERP 页的预设列表（下半部那个滚动框），那里传 `tableOptions{Unframed: true}`（`TestOnlyAFramedPaneLeavesTheTableUnframed` 钉住）。
 - **不要把表格塞进 `components.ScrollView` / `ui.Scroll`**：`ui.Table` 自己就是滚动区，表头与内容在同一个横向滚动容器里；外面再套一层竖滚容器，列一调宽，调整抓手就会被裁到可视区外（这正是换组件的原因）。唯一例外是 `tableOptions{Fit: true}`：卡片按 `Rows` 给的行数撑满、不封顶到 `maxTableRows`，表格自己**没有**滚动条，由外面那个框统一滚（DERP 页的预设列表就是这么做的，见下一条）。
-- **`Fit` 只给"外面那个框负责滚"的地方**：`Fit` 的表高=内容高，所以它不会藏行，也不会出现第二条滚动条；但反过来说，一张几百行的表会一次性建出所有行——用在预设列表（几十条）可以，不要用在文件列表那种没有上限的地方。
+- **`Fit` 只给"外面那个框负责滚"的地方**：`Fit` 的表高=内容高，所以它不会藏行，也不会出现第二条滚动条。前提是**行高统一**：`Fit` 会把每行钉成主题的最小行高（`ListState.RowHeight`），因为行里放按钮的行天然比表头高，按"最小行高"估算表高会每行差一两像素，最后几行就被表格自己的滚动条藏起来（`TestDerpPresetTableShowsEverySavedRow` 钉住）。反过来说，一张几百行的表会一次性建出所有行——用在预设列表（几十条）可以，不要用在文件列表那种没有上限的地方。
 - **行级点击走 `ListState.Selected` + `Table(...).Changed()`**：`ui.Table` 没有 `TableRow.Clicked()`；`Selected` 初始给 -1，否则点第一行"没变化"。
 - **排序由页面算，不由组件算**：把 `&state.Sort` 交给表，建表前用 `Sort` 里的列自己排好行序（资源页 `sortApps` / `sortProcessRows`）。
 - **可能被截断的单行文本**都要挂 `components.Tooltip` 给全文（见 §10）。
