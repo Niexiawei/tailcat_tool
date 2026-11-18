@@ -99,6 +99,8 @@ type ViewModel struct {
 
 	// DerpTable keeps the DERP list's column layout across frames.
 	DerpTable components.TableState
+	// DerpRegionTable keeps the detail page's region table layout.
+	DerpRegionTable components.TableState
 	// DerpEditor is the DERP editor's draft; nil closes the dialog.
 	DerpEditor *DerpEditorDraft
 	// DerpConfirmDelete asks before removing this preset; nil closes it.
@@ -107,8 +109,14 @@ type ViewModel struct {
 	DerpPreview *core.RelayMapPreview
 	// DerpPreviewErr is why the last preview attempt failed.
 	DerpPreviewErr string
+	// DerpPreviewTried is the source a fetch was started for. Without it a
+	// failed fetch would restart on every frame and its error would never stay
+	// on screen long enough to click 重试.
+	DerpPreviewTried string
 	// DerpPreviewLoading is true while a preview fetch is in flight.
 	DerpPreviewLoading bool
+	// DerpJSONOpen is the detail page's raw JSON disclosure.
+	DerpJSONOpen bool
 	// derpPreviewMu guards what preview goroutines write.
 	derpPreviewMu sync.Mutex
 

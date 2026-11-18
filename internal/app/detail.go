@@ -53,6 +53,11 @@ func (vm *ViewModel) routedPage(c *ui.Context) {
 			r.Title("DERP 地图")
 			vm.derpListPage(c)
 			return
+		case r.Match(DerpRoute + "/{id}"):
+			name, _ := vm.managePageTitle(r.Path())
+			r.Title(name)
+			vm.derpDetailPage(c, r.Param("id"))
+			return
 		}
 		if r.Match("/devices/{id}") {
 			profile, ok := vm.profileByID(r.Param("id"))
