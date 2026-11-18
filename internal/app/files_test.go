@@ -661,3 +661,25 @@ func TestFileTreeMirrorsTheDeviceFilesystemFromOneRoot(t *testing.T) {
 		seen[row] = true
 	}
 }
+
+// TestFilePageUsesNoOnevraTable keeps the right pane on the one table card: the
+// onevra table's header does not scroll with its columns.
+func TestFilePageUsesNoOnevraTable(t *testing.T) {
+	assertNoOnevraTable(t, "files.go")
+}
+
+// TestFileRowStaysChosenAfterOpeningIt pins that a click both opens the entry
+// and leaves its row chosen: the table's choice is the path the page selected.
+func TestFileRowStaysChosenAfterOpeningIt(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "Download")
+	if err := tt.Click("Download"); err != nil {
+		t.Fatalf("Click(Download) error: %v", err)
+	}
+	tt.Frame()
+	profile := vm.Manager.Profiles()[0]
+	if got := vm.fileStateFor(profile.ID).selected; got != "/sdcard/Download" {
+		t.Fatalf("selected = %q, want /sdcard/Download", got)
+	}
+}

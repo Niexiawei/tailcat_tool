@@ -51,7 +51,7 @@ type fileState struct {
 	// paths, which are unique; labels are not, and two folders called DCIM
 	// would otherwise share one row's state.
 	tree  components.TreeVirtualizedState[string]
-	table components.TableState
+	table ui.ListState
 }
 
 // fileStateFor returns one device's page state, creating it on first use.
@@ -424,24 +424,29 @@ func (vm *ViewModel) fileTable(c *ui.Context, profile core.Profile, state *fileS
 		if listing.Truncated {
 			components.Text(c, "只显示前 2000 项，请进入子文件夹查看其余内容").FontSize(11).TextColor(theme.Danger)
 		}
-		components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).MinHeight(0).
-			Label("设备文件列表").Children(func() {
-			if len(listing.Entries) == 0 {
-				components.Text(c, "这个文件夹是空的").FontSize(11).TextColor(theme.TextMuted)
-				return
+		if len(listing.Entries) == 0 {
+			components.Text(c, "这个文件夹是空的").FontSize(11).TextColor(theme.TextMuted).Grow(1)
+			return
+		}
+		// The chosen row is the path the page selected: a click on another row
+		// reports Changed, which is what opens it.
+		chosen := -1
+		for i, entry := range listing.Entries {
+			if entry.Path == state.selected {
+				chosen = i
+				break
 			}
-			components.Table(c, &state.table, fileColumns(), func() {
-				for _, entry := range listing.Entries {
-					entry := entry
-					row := components.TableRow(c, entry.Path, entry.Name, state.selected == entry.Path, func(col int) {
-						vm.fileCell(c, col, entry)
-					})
-					if row.Clicked() {
-						vm.activateEntry(profile, state, entry)
-					}
-				}
-			})
+		}
+		state.table.Selected = &chosen
+		table := tableCard(c, &state.table, fileColumns(), len(listing.Entries), tableOptions{
+			// The pane is already inside the browser's 1 DIP frame.
+			Label: "设备文件列表", Grow: true, Unframed: true,
+		}, func(row, col int) {
+			vm.fileCell(c, col, listing.Entries[row])
 		})
+		if table.Changed() && chosen >= 0 && chosen < len(listing.Entries) {
+			vm.activateEntry(profile, state, listing.Entries[chosen])
+		}
 	})
 }
 
