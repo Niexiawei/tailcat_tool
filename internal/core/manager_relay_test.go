@@ -242,3 +242,33 @@ func TestCachedRelayPreviewNeedsNoNetwork(t *testing.T) {
 		t.Fatalf("requests = %d, want the cache to answer the second time", *hits)
 	}
 }
+
+func TestRelayPreviewFailureKeepsThePresetSaved(t *testing.T) {
+	store := NewConfigStore(t.TempDir())
+	server, _ := relayTestServer(t, http.StatusInternalServerError, "boom")
+	f := newManagerFixture(t, func(o *ManagerOptions) {
+		o.Config = store
+		o.Configuration = Configuration{}
+	})
+	source := server.URL + "/map.json"
+	id, err := f.m.SaveRelayPreset(SaveRelayPresetRequest{Name: "离线", Source: source})
+	if err != nil {
+		t.Fatalf("SaveRelayPreset() error: %v", err)
+	}
+	if _, err := f.m.RelayMapPreview(context.Background(), source); err == nil {
+		t.Fatal("a 500 was reported as success")
+	}
+	if presets := f.m.RelayPresets(); len(presets) != 1 || presets[0].ID != id {
+		t.Fatalf("presets = %+v, a failed preview must not touch them", presets)
+	}
+	if _, ok := f.m.CachedRelayMapPreview(source); ok {
+		t.Fatal("a failed fetch was cached as if it had succeeded")
+	}
+	cfg, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.RelayPresets) != 1 {
+		t.Fatalf("saved presets = %+v", cfg.RelayPresets)
+	}
+}
