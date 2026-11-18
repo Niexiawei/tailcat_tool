@@ -306,6 +306,18 @@ func shotCases() []shotCase {
 			settle: 12,
 		},
 		{
+			name: "24-device-editor-relay",
+			build: func(t *testing.T) *ViewModel {
+				vm, preset := newDerpViewModel(t)
+				vm.openEditor(&EditorRequest{})
+				vm.EditorDraft.RelayTab = 1
+				vm.EditorDraft.RelayPick = preset.Source
+				vm.EditorDraft.RelaySource = preset.Source
+				return vm
+			},
+			settle: 12,
+		},
+		{
 			name: "22-appmeta-cache",
 			build: func(t *testing.T) *ViewModel {
 				cache := &stubAppMetaCache{entries: map[string][]core.AppMetaEntry{}}

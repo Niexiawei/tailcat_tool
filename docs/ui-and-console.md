@@ -97,7 +97,7 @@ ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
 | `/logs` | 日志页 | 应用错误 / 通道日志 / 任务的统一时间线，四个筛选项（见 §14）；面包屑「我的设备 › 日志」；入口在侧栏设备列表之下 |
 | `/manage/appmeta` | 缓存管理页 | 按设备列出已缓存的应用名称与图标（包名、大小、读取时间、是否过期），可删除单条或清空这台设备；面包屑「我的设备 › 缓存管理」 |
 | `/manage/derp` | DERP 节点页 | 默认节点 / 预设 / 最近用过的来源集中一页，可新建、编辑、删除（在用不可删）；入口在侧栏设备列表之下 |
-| `/manage/derp/{id}` | DERP 节点详情页 | 区域与节点表、原始 JSON、使用设备；面包屑用预设名称；URL 型可强制重新获取 |
+| `/manage/derp/{id}` | DERP 节点详情页 | 区域与节点表、原始 JSON、使用设备；面包屑「我的设备 › DERP 节点 › 名称」，点中间一级回到列表；URL 型可强制重新获取 |
 | 其他 | 列表页 | 兜底 |
 | `/devices/{无效 id}` | "设备不存在"页 | 附带"返回我的设备" |
 
@@ -426,7 +426,7 @@ TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v
 | 路由、页面、概览、页签 | `internal/app/detail.go` |
 | 日志页与设备日志标签（共享 `logView`、筛选、跟随、输出、清空） | `internal/app/logs.go` |
 | 内嵌终端、`lineConsole` | `internal/app/terminal.go` |
-| 表单（连接方式单选、中继分段与历史） | `internal/app/editor.go` |
+| 表单（连接方式单选、中继分段与「预设 + 历史」合并选择） | `internal/app/editor.go` |
 | 上传/下载表单 | `internal/app/transfer.go` |
 | 连通测试表（`components.Table`、状态图标） | `internal/app/reachability.go` |
 | 错误回流（连接、探测、终端） | `internal/app/detail.go`、`internal/app/actions.go`、`internal/app/app.go` |

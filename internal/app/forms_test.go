@@ -393,17 +393,6 @@ func TestEditorRelayTabSwitchesToCustom(t *testing.T) {
 	}
 }
 
-func TestRelayHistoryOptionsListSavedSources(t *testing.T) {
-	entries := []core.RelayHistoryEntry{
-		{Name: "内网中继", Source: "https://relay.example.com/map.json"},
-		{Name: "内联 JSON 4f2a9c1b", Source: `{"Regions":{}}`},
-	}
-	options := relayHistoryOptions(entries)
-	if len(options) != 2 || options[0].Label != "内网中继" || options[0].Value != "https://relay.example.com/map.json" {
-		t.Fatalf("options = %+v", options)
-	}
-}
-
 func TestClosingTheEditorDoesNotPanic(t *testing.T) {
 	vm := newTestViewModel(t)
 	vm.openEditor(&EditorRequest{})
@@ -463,5 +452,65 @@ func TestTruncatedDeviceNamesShowATooltip(t *testing.T) {
 		if _, ok := tt.AccessByRole(ui.RoleTooltip, long); !ok {
 			t.Fatalf("%s: hovering the clipped name showed no tooltip", tc.name)
 		}
+	}
+}
+
+func TestRelaySourceOptionsMergePresetsAndHistory(t *testing.T) {
+	presets := []core.RelayPreset{
+		{Name: "公司自建", Source: "https://relay.example.com/map.json"},
+		{Name: "内网", Source: `{"Regions":{}}`},
+	}
+	history := []core.RelayHistoryEntry{
+		// The same source as a preset: listed once, under the user's name.
+		{Name: "relay.example.com", Source: "https://relay.example.com/map.json"},
+		{Name: "evcc.coauto.cc", Source: "https://evcc.coauto.cc/map.json"},
+	}
+	options := relaySourceOptions(presets, history)
+	want := []struct{ label, value string }{
+		{"预设 · 公司自建", "https://relay.example.com/map.json"},
+		{"预设 · 内网", `{"Regions":{}}`},
+		{"历史 · evcc.coauto.cc", "https://evcc.coauto.cc/map.json"},
+	}
+	if len(options) != len(want) {
+		t.Fatalf("options = %+v, want %d", options, len(want))
+	}
+	for i, w := range want {
+		if options[i].Label != w.label || options[i].Value != w.value {
+			t.Fatalf("options[%d] = %+v, want %+v", i, options[i], w)
+		}
+	}
+}
+
+func TestEditorPicksAPresetFromTheMergedMenu(t *testing.T) {
+	vm, preset := newDerpViewModel(t)
+	vm.openEditor(&EditorRequest{})
+	tt := ui.NewTester(vm.ContentView, 900, 1000)
+	if err := tt.Click("自定义"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if !tt.HasText("从预设或历史选择") {
+		t.Fatalf("the merged picker is missing; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("DERP 节点来源"); err != nil {
+		t.Fatalf("opening the menu: %v", err)
+	}
+	if err := tt.ChooseMenuItem("预设 · 公司自建"); err != nil {
+		t.Fatalf("ChooseMenuItem() error: %v", err)
+	}
+	if vm.EditorDraft.RelaySource != preset.Source {
+		t.Fatalf("RelaySource = %q, want the preset's %q", vm.EditorDraft.RelaySource, preset.Source)
+	}
+	if vm.EditorDraft.RelayPick != preset.Source {
+		t.Fatalf("RelayPick = %q", vm.EditorDraft.RelayPick)
+	}
+}
+
+func TestEditorPrefillsThePresetPickerWhenEditingADevice(t *testing.T) {
+	vm, preset := newDerpViewModel(t)
+	profile := vm.Manager.Profiles()[0]
+	profile.RelaySource = preset.Source
+	vm.openEditor(&EditorRequest{Profile: &profile})
+	if vm.EditorDraft.RelayPick != preset.Source {
+		t.Fatalf("RelayPick = %q, want the device's preset", vm.EditorDraft.RelayPick)
 	}
 }

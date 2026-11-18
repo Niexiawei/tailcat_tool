@@ -379,11 +379,17 @@ func (vm *ViewModel) ContentTitle(c *ui.Context) {
 	}
 	id, ok := deviceIDFromPath(vm.Router.Path())
 	if !ok {
-		if name, isManage := vm.managePageTitle(vm.Router.Path()); isManage {
+		if trail, isManage := vm.managePageTrail(vm.Router.Path()); isManage {
 			vm.CrumbChoice = -1
-			crumbs := components.Breadcrumbs(c, []string{pageName, name}, &vm.CrumbChoice)
-			if crumbs.Changed() && vm.CrumbChoice == 0 {
-				vm.OpenDevices()
+			crumbs := components.Breadcrumbs(c, append([]string{pageName}, trail...), &vm.CrumbChoice)
+			if crumbs.Changed() {
+				switch {
+				case vm.CrumbChoice == 0:
+					vm.OpenDevices()
+				case vm.CrumbChoice == 1 && len(trail) > 1:
+					// The intermediate crumb of a detail page is its list.
+					vm.OpenDerp()
+				}
 			}
 			return
 		}

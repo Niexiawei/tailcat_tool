@@ -41,28 +41,28 @@ func (vm *ViewModel) manageEntry(c *ui.Context, icon func() *ui.SVG, label, rout
 	}
 }
 
-// managePageTitle returns the breadcrumb name of a management page, and false
-// for every other route. ContentTitle falls back to 我的设备 when it is false.
-// A preset's detail page is named after the preset, so a rename shows up in the
-// title bar without the route changing.
-func (vm *ViewModel) managePageTitle(path string) (string, bool) {
+// managePageTrail returns the breadcrumb names below 我的设备 for a management
+// page, and false for every other route. A detail page keeps its list in the
+// trail, so the title bar always offers the way back to it. The preset's name
+// is read every frame, so a rename shows up without the route changing.
+func (vm *ViewModel) managePageTrail(path string) ([]string, bool) {
 	switch path {
 	case CacheRoute:
-		return "缓存管理", true
+		return []string{"缓存管理"}, true
 	case LogsRoute:
-		return "日志", true
+		return []string{"日志"}, true
 	case DerpRoute:
-		return "DERP 节点", true
+		return []string{"DERP 节点"}, true
 	}
 	if rest, ok := strings.CutPrefix(path, DerpRoute+"/"); ok {
 		if id, err := uuid.Parse(rest); err == nil && vm.Manager != nil {
 			for _, preset := range vm.Manager.RelayPresets() {
 				if preset.ID == id {
-					return preset.Name, true
+					return []string{"DERP 节点", preset.Name}, true
 				}
 			}
 		}
-		return "DERP 节点", true
+		return []string{"DERP 节点"}, true
 	}
-	return "", false
+	return nil, false
 }

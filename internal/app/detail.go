@@ -61,8 +61,9 @@ func (vm *ViewModel) routedPage(c *ui.Context) {
 			vm.derpListPage(c)
 			return
 		case r.Match(DerpRoute + "/{id}"):
-			name, _ := vm.managePageTitle(r.Path())
-			r.Title(name)
+			if trail, isManage := vm.managePageTrail(r.Path()); isManage {
+				r.Title(trail[len(trail)-1])
+			}
 			vm.derpDetailPage(c, r.Param("id"))
 			return
 		}

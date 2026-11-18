@@ -113,9 +113,20 @@ func (vm *ViewModel) openEditor(request *EditorRequest) {
 		if profile.RelaySource != "" {
 			draft.RelaySource = profile.RelaySource
 			draft.RelayTab = 1
-			for _, entry := range vm.Manager.RelayHistory() {
-				if entry.Source == profile.RelaySource {
-					draft.RelayPick = entry.Source
+			// The picker shows the choice when it knows the source, whether it
+			// was saved as a preset or only used before.
+			for _, preset := range vm.Manager.RelayPresets() {
+				if preset.Source == profile.RelaySource {
+					draft.RelayPick = profile.RelaySource
+					break
+				}
+			}
+			if draft.RelayPick == "" {
+				for _, entry := range vm.Manager.RelayHistory() {
+					if entry.Source == profile.RelaySource {
+						draft.RelayPick = profile.RelaySource
+						break
+					}
 				}
 			}
 		}
@@ -291,24 +302,49 @@ func raisedFace(theme *ui.Theme) (face, shadow ui.Color) {
 
 // relayHistoryOptions turns the recorded sources into the editor's history
 // menu. Values are the canonical sources, so picking one fills the field.
-func relayHistoryOptions(entries []core.RelayHistoryEntry) []components.NativeSelectOption[string] {
-	options := make([]components.NativeSelectOption[string], 0, len(entries))
-	for _, entry := range entries {
-		options = append(options, components.NativeSelectOption[string]{Value: entry.Source, Label: entry.Name})
+// relaySourceOptions merges the saved presets and the sources devices have used
+// into one menu, presets first. A source that is both appears once, under the
+// name the user gave it: two rows with one source would make the choice
+// ambiguous.
+func relaySourceOptions(presets []core.RelayPreset, history []core.RelayHistoryEntry) []components.NativeSelectOption[string] {
+	options := make([]components.NativeSelectOption[string], 0, len(presets)+len(history))
+	seen := make(map[string]bool, len(presets)+len(history))
+	for _, preset := range presets {
+		if preset.Source == "" || seen[preset.Source] {
+			continue
+		}
+		seen[preset.Source] = true
+		options = append(options, components.NativeSelectOption[string]{
+			Value: preset.Source,
+			Label: "预设 · " + preset.Name,
+		})
+	}
+	for _, entry := range history {
+		if entry.Source == "" || seen[entry.Source] {
+			continue
+		}
+		seen[entry.Source] = true
+		options = append(options, components.NativeSelectOption[string]{
+			Value: entry.Source,
+			Label: "历史 · " + entry.Name,
+		})
 	}
 	return options
 }
 
-// relaySourceFields renders the history picker and the free-form source box.
+// relaySourceFields renders the merged picker and the free-form source box. The
+// picker writes its choice into the box, so a user can pick a preset, adjust it
+// once, and see exactly what the device will store.
 func (vm *ViewModel) relaySourceFields(c *ui.Context) {
-	if entries := vm.Manager.RelayHistory(); len(entries) > 0 {
+	options := relaySourceOptions(vm.Manager.RelayPresets(), vm.Manager.RelayHistory())
+	if len(options) > 0 {
 		ui.Column(c).Gap(3).Children(func() {
-			components.Text(c, "之前用过的中继").FontSize(11)
-			pick := components.NativeSelect(c, &vm.EditorDraft.RelayPick, relayHistoryOptions(entries))
+			components.Text(c, "从预设或历史选择").FontSize(11)
+			pick := components.NativeSelect(c, &vm.EditorDraft.RelayPick, options)
 			if pick.Changed() {
 				vm.EditorDraft.RelaySource = vm.EditorDraft.RelayPick
 			}
-			pick.Trigger.Label("之前用过的中继").FillWidth()
+			pick.Trigger.Label("DERP 节点来源").FillWidth()
 		})
 	}
 	field(c, "DERP JSON 链接或内容", &vm.EditorDraft.RelaySource, false)

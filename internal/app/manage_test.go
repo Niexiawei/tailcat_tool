@@ -43,3 +43,22 @@ func TestManageEntryOpensCachePage(t *testing.T) {
 		t.Fatalf("title = %v, want 我的设备 › 缓存管理", title.Texts())
 	}
 }
+
+// TestDerpDetailBreadcrumbHasTheListNode pins the trail: a detail page sits
+// under the list, so the title bar must offer the way back to it.
+func TestDerpDetailBreadcrumbHasTheListNode(t *testing.T) {
+	vm, preset := newDerpViewModel(t)
+	vm.OpenDerpDetail(preset.ID)
+	title := ui.NewTester(vm.ContentTitle, 700, 40)
+	for _, want := range []string{"我的设备", "DERP 节点", preset.Name} {
+		if !title.HasText(want) {
+			t.Fatalf("the title bar lacks %q; texts = %v", want, title.Texts())
+		}
+	}
+	if err := title.Click("DERP 节点"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if got := vm.Router.Path(); got != DerpRoute {
+		t.Fatalf("path = %q after the breadcrumb, want %q", got, DerpRoute)
+	}
+}
