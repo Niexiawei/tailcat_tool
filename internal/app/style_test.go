@@ -171,3 +171,34 @@ func TestNoOfficialOrMapWording(t *testing.T) {
 		t.Fatalf("Walk() error: %v", err)
 	}
 }
+
+// TestNoOnevraTableComponentsAnywhere enforces the rule of this migration: the
+// onevra tables do not scroll their own header, so a column dragged wider than
+// the pane put its resize grip where no scroll could reach it. Every table is a
+// ui.Table built by tableCard.
+func TestNoOnevraTableComponentsAnywhere(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("Glob() error: %v", err)
+	}
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		for _, banned := range []string{
+			"components.Table(",
+			"components.TableRow(",
+			"components.TableVirtualized",
+			"components.TableState{",
+			"components.TableVirtualizedState{",
+		} {
+			if strings.Contains(string(source), banned) {
+				t.Fatalf("%s still builds a table with %s; use tableCard", path, banned)
+			}
+		}
+	}
+}

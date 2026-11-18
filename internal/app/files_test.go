@@ -662,12 +662,6 @@ func TestFileTreeMirrorsTheDeviceFilesystemFromOneRoot(t *testing.T) {
 	}
 }
 
-// TestFilePageUsesNoOnevraTable keeps the right pane on the one table card: the
-// onevra table's header does not scroll with its columns.
-func TestFilePageUsesNoOnevraTable(t *testing.T) {
-	assertNoOnevraTable(t, "files.go")
-}
-
 // TestFileRowStaysChosenAfterOpeningIt pins that a click both opens the entry
 // and leaves its row chosen: the table's choice is the path the page selected.
 func TestFileRowStaysChosenAfterOpeningIt(t *testing.T) {

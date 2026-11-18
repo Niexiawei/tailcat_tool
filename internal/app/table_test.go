@@ -71,24 +71,3 @@ func TestOnlyFilesLeavesTheTableUnframed(t *testing.T) {
 		}
 	}
 }
-
-// assertNoOnevraTable fails while one page still builds its table with the
-// onevra component, whose header does not scroll with its columns.
-func assertNoOnevraTable(t *testing.T, name string) {
-	t.Helper()
-	source, err := os.ReadFile(name)
-	if err != nil {
-		t.Fatalf("reading %s: %v", name, err)
-	}
-	for _, banned := range []string{
-		"components.Table",
-		"components.TableRow",
-		"components.TableVirtualized",
-		"components.TableState",
-		"components.TableVirtualizedState",
-	} {
-		if strings.Contains(string(source), banned) {
-			t.Fatalf("%s still uses %s; build its table with tableCard", name, banned)
-		}
-	}
-}

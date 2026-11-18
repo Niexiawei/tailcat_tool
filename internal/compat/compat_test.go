@@ -96,8 +96,6 @@ var (
 	_                                                                                                                       = components.Switch
 	_                                                                                                                       = components.Tabs
 	_                                                                                                                       = components.TabsSegmented
-	_                                                                                                                       = components.Table
-	_                                                                                                                       = components.TableRow
 	_                                                                                                                       = components.Tooltip
 	_                                                                                                                       = ui.RoleTooltip
 	_                                                                                                                       = components.IconButton
@@ -107,7 +105,6 @@ var (
 	_                                                                                                                       = components.AvatarNoStatus
 	_                                                                                                                       = components.ScrollView
 	_                                                                                                                       = components.ScrollViewOptions{}.Axes
-	_                                                                                                                       = components.TableState{}.Columns
 	_ func(*ui.Context, float64) ui.Element                                                                                 = components.ProgressRing
 	_ func(string, apkparser.ManifestEncoder) (error, error, error)                                                         = apkparser.ParseApk
 	_ func(io.ReadSeeker) (*apkparser.ZipReader, error)                                                                     = apkparser.OpenZipReader
@@ -135,9 +132,6 @@ var (
 	_                                                                                                                       = components.Split
 	_                                                                                                                       = components.SplitOptions{}.FirstMin
 	_                                                                                                                       = components.Tree
-	_                                                                                                                       = components.TableVirtualized
-	_                                                                                                                       = components.TableVirtualizedState{}.List
-	_ func(*ui.Context, *components.TableVirtualizedState, []ui.TableColumn, int, func(int, int)) ui.Element                = components.TableVirtualized
 	_                                                                                                                       = components.Badge
 	_                                                                                                                       = components.BadgeOptions{}.Tone
 	_                                                                                                                       = components.BadgeDanger

@@ -510,11 +510,6 @@ func TestDerpRegionTableScrollsItsOwnRows(t *testing.T) {
 	}
 }
 
-// TestDerpPageUsesNoOnevraTable keeps both DERP tables on the one table card.
-func TestDerpPageUsesNoOnevraTable(t *testing.T) {
-	assertNoOnevraTable(t, "derp.go")
-}
-
 // TestDerpEditorClosesWithoutPanic pins the crash the device editor already
 // documents: components.Tabs keeps the chosen tab as an Element in its paint
 // callback, and MyGo paints a closing dialog without rebuilding it, so the

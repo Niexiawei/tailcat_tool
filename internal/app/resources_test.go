@@ -264,12 +264,6 @@ func TestProcessGroupExpandsFromItsChevron(t *testing.T) {
 	}
 }
 
-// TestResourcesPageUsesNoOnevraTable keeps this page on the one table card:
-// the onevra table's header does not scroll with its columns.
-func TestResourcesPageUsesNoOnevraTable(t *testing.T) {
-	assertNoOnevraTable(t, "resources.go")
-}
-
 func TestProcessTableSaysGPUUnavailable(t *testing.T) {
 	vm, _ := resourceFixture(t)
 	tt := ui.NewTester(vm.ContentView, 900, 900)

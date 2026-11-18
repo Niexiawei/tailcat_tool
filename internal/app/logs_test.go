@@ -790,11 +790,6 @@ func TestLogFootRowHoldsRefreshLeftOfClear(t *testing.T) {
 	}
 }
 
-// TestLogsPageUsesNoOnevraTable keeps the timeline on the one table card.
-func TestLogsPageUsesNoOnevraTable(t *testing.T) {
-	assertNoOnevraTable(t, "logs.go")
-}
-
 // TestLogTimelineIsItsOwnScrollArea pins the timeline's layout: it is a labelled
 // table that scrolls its own rows, so a long text column scrolls sideways
 // instead of pushing the header out of reach.

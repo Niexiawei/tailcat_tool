@@ -153,11 +153,6 @@ func TestCacheTableKeepsTheClearActionInView(t *testing.T) {
 	waitForText(t, tt, "应用 39")
 }
 
-// TestCachePageUsesNoOnevraTable keeps the cache list on the one table card.
-func TestCachePageUsesNoOnevraTable(t *testing.T) {
-	assertNoOnevraTable(t, "appcache.go")
-}
-
 func TestCachePageExplainsAnEmptyCache(t *testing.T) {
 	cache := &stubAppMetaCache{entries: map[string][]core.AppMetaEntry{}}
 	vm := newCacheViewModel(t, cache)
