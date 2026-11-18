@@ -510,3 +510,142 @@ func derpKindLabel(source string) string {
 	}
 	return "JSON"
 }
+
+// DerpEditorView is the create/edit dialog. Validation is core's: the dialog
+// does not parse JSON itself, so a map the editor accepts is exactly one a
+// device can connect with.
+func (vm *ViewModel) DerpEditorView(c *ui.Context) {
+	if vm.DerpEditor == nil {
+		return
+	}
+	theme := c.Theme()
+	open := true
+	components.Dialog(c, &open, components.DialogOptions{Label: "DERP 地图"}, func(panel ui.Element) {
+		panel.Padding(20).Gap(10).Width(470)
+		panel.Children(func() {
+			draft := vm.DerpEditor
+			if draft == nil {
+				open = false
+				return
+			}
+			title := "新建 DERP 地图"
+			if draft.ID != nil {
+				title = "编辑 DERP 地图"
+			}
+			components.Text(c, title).FontSize(18).Bold()
+			if draft.ID != nil {
+				if preset, found := vm.derpPreset(*draft.ID); found {
+					if users := len(vm.Manager.RelayPresetUsage(preset.ID)); users > 0 {
+						components.Text(c, "这台地图正被 "+itoa(users)+" 台设备使用。修改只影响之后选择它的设备；已保存的设备仍用原来的来源。").
+							FontSize(11).TextColor(theme.Warning)
+					}
+				}
+			}
+			field(c, "名称", &draft.Name, false)
+
+			tab := 0
+			if draft.Kind == "url" {
+				tab = 1
+			}
+			components.Tabs(c, &tab, components.TabsSegmented, "JSON", "链接")
+			if tab == 1 {
+				draft.Kind = "url"
+			} else {
+				draft.Kind = "json"
+			}
+			ui.Column(c).Gap(3).Children(func() {
+				components.Text(c, "内容").FontSize(11)
+				if draft.Kind == "url" {
+					components.TextBox(c, &draft.Content, components.TextBoxOptions{}).
+						Label("内容").Placeholder("https://example.com/derpmap.json")
+				} else {
+					components.TextBox(c, &draft.Content, components.TextBoxOptions{Multiline: true}).
+						Label("内容").Lines(12, 12)
+				}
+			})
+			if draft.Error != "" {
+				components.Text(c, draft.Error).FontSize(11).TextColor(theme.Warning)
+			}
+			ui.Row(c).FillWidth().Gap(6).Justify(ui.End).Children(func() {
+				if components.Button(c, "取消", components.ButtonOutline).Clicked() {
+					vm.DerpEditor = nil
+					open = false
+				}
+				if components.Button(c, "保存", components.ButtonPrimary).Clicked() {
+					vm.saveDerpDraft()
+					open = vm.DerpEditor != nil
+				}
+			})
+		})
+	})
+	if !open {
+		vm.DerpEditor = nil
+	}
+}
+
+// saveDerpDraft hands the draft to core and keeps the dialog open on a refusal,
+// so the reason is next to the field that caused it.
+func (vm *ViewModel) saveDerpDraft() {
+	draft := vm.DerpEditor
+	if draft == nil {
+		return
+	}
+	_, err := vm.Manager.SaveRelayPreset(core.SaveRelayPresetRequest{
+		ID:     draft.ID,
+		Name:   draft.Name,
+		Source: draft.Content,
+	})
+	if err != nil {
+		draft.Error = err.Error()
+		return
+	}
+	vm.DerpEditor = nil
+	vm.Notify("已保存 DERP 地图")
+}
+
+// DerpDeleteView asks before removing a preset. The refusal comes from core and
+// is shown here rather than disabling the button: whether a device uses the map
+// changes outside this page.
+func (vm *ViewModel) DerpDeleteView(c *ui.Context) {
+	if vm.DerpConfirmDelete == nil {
+		return
+	}
+	theme := c.Theme()
+	open := true
+	components.Dialog(c, &open, components.DialogOptions{Label: "删除 DERP 地图"}, func(panel ui.Element) {
+		panel.Padding(20).Gap(10).Width(440)
+		panel.Children(func() {
+			preset := vm.DerpConfirmDelete
+			if preset == nil {
+				open = false
+				return
+			}
+			components.Text(c, "删除「"+preset.Name+"」？").FontSize(18).Bold()
+			components.Text(c, "删除后不能恢复；正在被设备使用的地图不会被删除。").FontSize(11).TextColor(theme.TextMuted)
+			if vm.DerpDeleteError != "" {
+				components.Text(c, vm.DerpDeleteError).FontSize(11).TextColor(theme.Warning)
+			}
+			ui.Row(c).FillWidth().Gap(6).Justify(ui.End).Children(func() {
+				if components.Button(c, "取消", components.ButtonOutline).Clicked() {
+					vm.DerpConfirmDelete = nil
+					vm.DerpDeleteError = ""
+					open = false
+				}
+				if components.Button(c, "确认删除", components.ButtonSecondary).Clicked() {
+					if err := vm.Manager.DeleteRelayPreset(preset.ID); err != nil {
+						vm.DerpDeleteError = err.Error()
+						return
+					}
+					vm.Notify("已删除 DERP 地图")
+					vm.DerpConfirmDelete = nil
+					vm.DerpDeleteError = ""
+					open = false
+				}
+			})
+		})
+	})
+	if !open {
+		vm.DerpConfirmDelete = nil
+		vm.DerpDeleteError = ""
+	}
+}

@@ -290,3 +290,141 @@ func TestRelayPreviewFailureKeepsThePresetSaved(t *testing.T) {
 		t.Fatalf("saved presets = %+v, want the failed one to stay", cfg.RelayPresets)
 	}
 }
+
+// openDerpEditorFor opens the list and clicks the button with that name.
+func clickInList(t *testing.T, vm *ViewModel, name string) *ui.Tester {
+	t.Helper()
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	if err := tt.Click(name); err != nil {
+		t.Fatalf("Click(%q) error: %v", name, err)
+	}
+	tt.Frame()
+	return tt
+}
+
+// focusField puts the caret in the text field with that accessible name. The
+// visible label is a separate text, so Click would hit the label instead.
+func focusField(t *testing.T, tt *ui.Tester, name string) {
+	t.Helper()
+	info, ok := tt.AccessByRole(ui.RoleTextField, name)
+	if !ok {
+		t.Fatalf("text field %q not found; access = %v", name, tt.AccessAll())
+	}
+	tt.ClickAt(info.Bounds.X+info.Bounds.W/2, info.Bounds.Y+info.Bounds.H/2)
+	tt.Frame()
+}
+
+func TestDerpEditorSavesAnInlineMap(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.OpenDerp()
+	tt := clickInList(t, vm, "新建 DERP 地图")
+	if !tt.HasText("新建 DERP 地图") {
+		t.Fatalf("the editor did not open; texts = %v", tt.Texts())
+	}
+	focusField(t, tt, "名称")
+	tt.Type("公司自建")
+	focusField(t, tt, "内容")
+	tt.Type(derpTestMap)
+	if err := tt.Click("保存"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	presets := vm.Manager.RelayPresets()
+	if len(presets) != 1 || presets[0].Name != "公司自建" {
+		t.Fatalf("presets = %+v, want the saved one", presets)
+	}
+	if vm.DerpEditor != nil {
+		t.Fatal("the editor stayed open after a successful save")
+	}
+	tt.Frame()
+	if !tt.HasText("公司自建") {
+		t.Fatalf("the saved preset does not show in the list; texts = %v", tt.Texts())
+	}
+}
+
+func TestDerpEditorRejectsInvalidJSON(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.OpenDerp()
+	tt := clickInList(t, vm, "新建 DERP 地图")
+	focusField(t, tt, "名称")
+	tt.Type("坏的")
+	focusField(t, tt, "内容")
+	tt.Type(`{"Regions":{}}`)
+	if err := tt.Click("保存"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if vm.DerpEditor == nil {
+		t.Fatal("the editor closed after an invalid map")
+	}
+	if !tt.HasText("1–128 个 Regions") {
+		t.Fatalf("the editor shows no reason; texts = %v", tt.Texts())
+	}
+	if len(vm.Manager.RelayPresets()) != 0 {
+		t.Fatalf("presets = %+v, want an invalid map rejected", vm.Manager.RelayPresets())
+	}
+}
+
+func TestDerpEditorWarnsWhenThePresetIsInUse(t *testing.T) {
+	vm, preset := newDerpViewModel(t)
+	if _, err := vm.Manager.SaveDevice(core.SaveDeviceRequest{
+		Name: "客厅", Address: testAddress, RemotePort: 5555, RelaySource: preset.Source,
+	}); err != nil {
+		t.Fatalf("SaveDevice() error: %v", err)
+	}
+	vm.OpenDerp()
+	if err := ui.NewTester(vm.ContentView, 1000, 800).Click("编辑"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	const want = "这台地图正被 1 台设备使用。修改只影响之后选择它的设备；已保存的设备仍用原来的来源。"
+	if !tt.HasText(want) {
+		t.Fatalf("editing a preset in use does not warn; texts = %v", tt.Texts())
+	}
+}
+
+func TestDerpDeleteAsksBeforeRemovingAPreset(t *testing.T) {
+	vm := newTestViewModel(t)
+	const source = "https://relay.example.com/map.json"
+	if _, err := vm.Manager.SaveRelayPreset(core.SaveRelayPresetRequest{Name: "公司自建", Source: source}); err != nil {
+		t.Fatalf("SaveRelayPreset() error: %v", err)
+	}
+	vm.OpenDerp()
+	tt := clickInList(t, vm, "删除")
+	if !tt.HasText("删除「公司自建」？") {
+		t.Fatalf("the delete confirmation did not open; texts = %v", tt.Texts())
+	}
+	if len(vm.Manager.RelayPresets()) != 1 {
+		t.Fatal("the preset was deleted before the confirmation")
+	}
+	if err := tt.Click("确认删除"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if len(vm.Manager.RelayPresets()) != 0 {
+		t.Fatalf("presets = %+v, want the confirmed one gone", vm.Manager.RelayPresets())
+	}
+	if vm.DerpConfirmDelete != nil {
+		t.Fatal("the confirmation stayed open after the delete")
+	}
+}
+
+func TestDerpDeleteRefusalIsShownInTheDialog(t *testing.T) {
+	vm, preset := newDerpViewModel(t)
+	if _, err := vm.Manager.SaveDevice(core.SaveDeviceRequest{
+		Name: "客厅", Address: testAddress, RemotePort: 5555, RelaySource: preset.Source,
+	}); err != nil {
+		t.Fatalf("SaveDevice() error: %v", err)
+	}
+	vm.OpenDerp()
+	tt := clickInList(t, vm, "删除")
+	if err := tt.Click("确认删除"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if vm.DerpConfirmDelete == nil {
+		t.Fatal("the dialog closed instead of showing the refusal")
+	}
+	if !tt.HasText("有 1 台设备正在使用「公司自建」，请先把它们改用其他 DERP 地图") {
+		t.Fatalf("the refusal is not shown in the dialog; texts = %v", tt.Texts())
+	}
+	if len(vm.Manager.RelayPresets()) != 1 {
+		t.Fatalf("presets = %+v, want the used one kept", vm.Manager.RelayPresets())
+	}
+}

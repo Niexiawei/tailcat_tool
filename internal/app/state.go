@@ -105,6 +105,8 @@ type ViewModel struct {
 	DerpEditor *DerpEditorDraft
 	// DerpConfirmDelete asks before removing this preset; nil closes it.
 	DerpConfirmDelete *core.RelayPreset
+	// DerpDeleteError is why the delete was refused; shown in the dialog.
+	DerpDeleteError string
 	// DerpPreview is the map the detail page shows; nil while loading.
 	DerpPreview *core.RelayMapPreview
 	// DerpPreviewErr is why the last preview attempt failed.

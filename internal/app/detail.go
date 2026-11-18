@@ -28,6 +28,8 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 	vm.AttentionDialog(c)
 	vm.LogOutputView(c)
 	vm.LogClearView(c)
+	vm.DerpEditorView(c)
+	vm.DerpDeleteView(c)
 }
 
 // routedPage builds the page the router shows.
