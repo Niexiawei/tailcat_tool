@@ -384,7 +384,7 @@ func TestLogsPageKeepsTheReaderAtTheTail(t *testing.T) {
 	waitForText(t, tt, "最新一行")
 	// The newest row is at the top, so "at the tail" means the table still
 	// shows the top of the list rather than staying where the reader was.
-	if first, _ := filter.table.List.Visible(); first != 0 {
+	if first, _ := filter.table.Visible(); first != 0 {
 		t.Fatalf("the followed table starts at row %d, want the newest row", first)
 	}
 }
@@ -613,7 +613,7 @@ func TestDeviceLogTabKeepsFollowTheTail(t *testing.T) {
 	vm.followLogs(filter)
 	tt.Frame()
 	waitForText(t, tt, "又一行")
-	if first, _ := filter.table.List.Visible(); first != 0 {
+	if first, _ := filter.table.Visible(); first != 0 {
 		t.Fatalf("the followed tab starts at row %d, want the newest row", first)
 	}
 }
@@ -788,4 +788,41 @@ func TestLogFootRowHoldsRefreshLeftOfClear(t *testing.T) {
 	if ok && refresh.Y < rows.Y+rows.H {
 		t.Fatalf("刷新 is still up with the filters at y=%0.0f", refresh.Y)
 	}
+}
+
+// TestLogsPageUsesNoOnevraTable keeps the timeline on the one table card.
+func TestLogsPageUsesNoOnevraTable(t *testing.T) {
+	assertNoOnevraTable(t, "logs.go")
+}
+
+// TestLogTimelineIsItsOwnScrollArea pins the timeline's layout: it is a labelled
+// table that scrolls its own rows, so a long text column scrolls sideways
+// instead of pushing the header out of reach.
+func TestLogTimelineIsItsOwnScrollArea(t *testing.T) {
+	vm, reader, base := deviceLogFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	var rows []core.TimelineEntry
+	for i := 0; i < 80; i++ {
+		rows = append(rows, core.TimelineEntry{
+			At: base.Add(time.Duration(-i) * time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+			DeviceID: profile.ID, DeviceName: "E245", Text: "第" + itoa(i) + "行日志",
+		})
+	}
+	reader.add(rows...)
+
+	tt := ui.NewTester(vm.ContentView, 900, 700)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	waitForText(t, tt, "第0行日志")
+	timeline, ok := tt.Find("日志时间线")
+	if !ok {
+		t.Fatalf("the timeline is not a labelled table; texts = %v", tt.Texts())
+	}
+	if tt.HasText("第79行日志") {
+		t.Fatal("the timeline built a row it does not show")
+	}
+	tt.Scroll(timeline.X+timeline.W/2, timeline.Y+timeline.H/2, 0, 4000)
+	tt.Advance(500 * time.Millisecond)
+	tt.Frame()
+	waitForText(t, tt, "第79行日志")
 }

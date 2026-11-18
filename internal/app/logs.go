@@ -98,8 +98,8 @@ type logFilter struct {
 	// rows were prepended; the table state belongs to the render thread.
 	jumpToTop bool
 
-	table components.TableVirtualizedState
-	// selected is the chosen row; the table writes it and OnChange reads it.
+	table ui.ListState
+	// selected is the chosen row; the table writes it and Changed reports it.
 	selected int
 }
 
@@ -352,22 +352,15 @@ func (vm *ViewModel) logTable(c *ui.Context, f *logFilter, entries []core.Timeli
 	f.jumpToTop = false
 	vm.logMu.Unlock()
 	if jump {
-		state.List.ScrollTo(0, ui.Start)
+		state.ScrollTo(0, ui.Start)
 	}
-	state.List.Selected = &f.selected
-	state.List.OnChange = func() {
-		row := f.selected
-		if row < 0 || row >= len(entries) {
-			return
-		}
-		// A task row is the only row that opens something; a log line has
-		// nothing behind it.
-		if entry := entries[row]; entry.Source == core.LogTask {
-			vm.openLogOutput(entry)
-		}
-	}
-	state.List.Key = func(row int) any { return logRowKey(entries[row], row) }
-	components.TableVirtualized(c, state, logColumns(), len(entries), func(row, col int) {
+	state.Selected = &f.selected
+	// The row's own identity: two log lines can share time, source and text,
+	// so no combination of those tells them apart.
+	state.Key = func(row int) any { return logRowKey(entries[row], row) }
+	table := tableCard(c, state, logColumns(), len(entries), tableOptions{
+		Label: "日志时间线", Grow: true,
+	}, func(row, col int) {
 		entry := entries[row]
 		switch col {
 		case 0:
@@ -382,6 +375,14 @@ func (vm *ViewModel) logTable(c *ui.Context, f *logFilter, entries []core.Timeli
 			components.Tooltip(c, components.Text(c, entry.Text).FontSize(11).SingleLine(), entry.Text)
 		}
 	})
+	if table.Changed() {
+		row := f.selected
+		// A task row is the only row that opens something; a log line has
+		// nothing behind it.
+		if row >= 0 && row < len(entries) && entries[row].Source == core.LogTask {
+			vm.openLogOutput(entries[row])
+		}
+	}
 }
 
 // logDeviceCell says which device a row belongs to; an app line belongs to
