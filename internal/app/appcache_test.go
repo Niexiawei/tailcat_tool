@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -110,6 +111,55 @@ func TestCachePageListsEntriesOfChosenDevice(t *testing.T) {
 			t.Fatalf("the cache page lacks %q; texts = %v", want, tt.Texts())
 		}
 	}
+}
+
+// TestCachePageScrollsLongLists pins the layout of a device with more entries
+// than fit: the list scrolls inside the page and the 清空 action stays on
+// screen, instead of the table pushing both past the window's bottom edge.
+func TestCachePageScrollsLongLists(t *testing.T) {
+	cache := &stubAppMetaCache{entries: map[string][]core.AppMetaEntry{}}
+	vm := newCacheViewModel(t, cache)
+	profile := vm.Manager.Profiles()[0]
+	const rows = 40
+	for i := 0; i < rows; i++ {
+		cache.entries[profile.ID.String()] = append(cache.entries[profile.ID.String()], core.AppMetaEntry{
+			Package:   fmt.Sprintf("com.example.app%02d", i),
+			Label:     fmt.Sprintf("应用 %02d", i),
+			Size:      1024,
+			FetchedAt: time.Date(2026, 11, 16, 9, 30, 0, 0, time.Local),
+		})
+	}
+	const height = 700
+	tt := ui.NewTester(vm.ContentView, 900, height)
+	tt.Frame()
+
+	footer, ok := tt.Find("清空这台设备的缓存")
+	if !ok {
+		t.Fatal("the clear action is not laid out")
+	}
+	if footer.Y+footer.H > height {
+		t.Fatalf("the clear action at %+v is below the %d px page; the list must scroll instead", footer, height)
+	}
+
+	last, ok := tt.Find("应用 39")
+	if !ok {
+		t.Fatal("the last row is not laid out")
+	}
+	tt.Scroll(450, 350, 0, 3000)
+	tt.Advance(500 * time.Millisecond)
+	tt.Frame()
+	moved, ok := tt.Find("应用 39")
+	if !ok {
+		t.Fatal("the last row vanished after scrolling")
+	}
+	if moved.Y >= last.Y {
+		t.Fatalf("the last row stays at y=%0.0f after a wheel scroll; the list does not scroll", moved.Y)
+	}
+	if moved.Y < height {
+		// Scrolled into view, which is the point of the wheel.
+		return
+	}
+	t.Fatalf("the last row is still at y=%0.0f, outside the %d px page", moved.Y, height)
 }
 
 func TestCachePageExplainsAnEmptyCache(t *testing.T) {

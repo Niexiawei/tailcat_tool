@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"image"
 	"image/png"
 	"os"
@@ -340,6 +341,24 @@ func shotCases() []shotCase {
 				}
 				return vm
 			},
+		},
+		{
+			name: "26-appmeta-cache-long",
+			build: func(t *testing.T) *ViewModel {
+				cache := &stubAppMetaCache{entries: map[string][]core.AppMetaEntry{}}
+				vm := newCacheViewModel(t, cache)
+				profile := vm.Manager.Profiles()[0]
+				for i := 0; i < 25; i++ {
+					cache.entries[profile.ID.String()] = append(cache.entries[profile.ID.String()], core.AppMetaEntry{
+						Package:   fmt.Sprintf("com.example.app%02d", i),
+						Label:     fmt.Sprintf("示例应用 %02d", i),
+						Size:      int64(1024 * (i + 1)),
+						FetchedAt: time.Date(2026, 11, 16, 9, 30, 0, 0, time.Local),
+					})
+				}
+				return vm
+			},
+			width: 900, height: 700,
 		},
 		{
 			name: "23-appmeta-cache-confirm",
