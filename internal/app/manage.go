@@ -12,12 +12,15 @@ import (
 // manageEntries is the browsing group under the device list: pages, not window
 // actions, so they live inside the scrolling sidebar and scroll with it.
 //
-// The three management pages (cache, DERP, logs) add their rows here; the
-// device groups come first because the user asked for these below them.
+// The management pages add their rows here; the device groups come first
+// because the user asked for these below them.
 func (vm *ViewModel) manageEntries(c *ui.Context) {
 	vm.manageEntry(c, lucide.Database, "缓存管理", CacheRoute)
 	vm.manageEntry(c, lucide.Server, "DERP 节点", DerpRoute)
 	vm.manageEntry(c, lucide.ScrollText, "日志", LogsRoute)
+	// The last row is the one thing that configures the app itself rather than
+	// showing its data; it sits at the end so the data pages stay first.
+	vm.manageEntry(c, lucide.Settings, "工具设置", SettingsRoute)
 }
 
 // manageEntry is one row of that group. It is built like a device row rather
@@ -41,16 +44,18 @@ func (vm *ViewModel) manageEntry(c *ui.Context, icon func() *ui.SVG, label, rout
 	}
 }
 
-// managePageTrail returns the breadcrumb names below 我的设备 for a management
-// page, and false for every other route. A detail page keeps its list in the
-// trail, so the title bar always offers the way back to it. The preset's name
-// is read every frame, so a rename shows up without the route changing.
+// managePageTrail returns the breadcrumb names below 首页 for a management page,
+// and false for every other route. A detail page keeps its list in the trail, so
+// the title bar always offers the way back to it. The preset's name is read
+// every frame, so a rename shows up without the route changing.
 func (vm *ViewModel) managePageTrail(path string) ([]string, bool) {
 	switch path {
 	case CacheRoute:
 		return []string{"缓存管理"}, true
 	case LogsRoute:
 		return []string{"日志"}, true
+	case SettingsRoute:
+		return []string{"工具设置"}, true
 	case DerpRoute:
 		return []string{"DERP 节点"}, true
 	}

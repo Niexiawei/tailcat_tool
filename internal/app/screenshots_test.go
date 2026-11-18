@@ -228,10 +228,10 @@ func shotCases() []shotCase {
 			name: "12-tool-settings",
 			build: func(t *testing.T) *ViewModel {
 				vm := shotConnected(t, readFixture)
-				vm.openSettings()
+				vm.OpenTools()
 				return vm
 			},
-			settle: 12,
+			settle: 6,
 		},
 		{
 			name: "13-reachability",
@@ -290,6 +290,16 @@ func shotCases() []shotCase {
 				}); err != nil {
 					t.Fatalf("SaveRelayPreset() error: %v", err)
 				}
+				return vm
+			},
+		},
+		{
+			name: "18b-derp-list-long",
+			build: func(t *testing.T) *ViewModel {
+				// Enough presets that the box around the list has to scroll: the
+				// page's whole point is that the top half does not move with it.
+				vm, _ := newDerpViewModel(t)
+				saveDerpPresets(t, vm, 12)
 				return vm
 			},
 		},

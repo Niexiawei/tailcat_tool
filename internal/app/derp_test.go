@@ -613,3 +613,77 @@ func TestDefaultRowNamesTheTailcatNodes(t *testing.T) {
 		t.Fatalf("the official row does not name its map; texts = %v", tt.Texts())
 	}
 }
+
+// saveDerpPresets saves n URL presets under names that sort and read apart.
+func saveDerpPresets(t *testing.T, vm *ViewModel, n int) {
+	t.Helper()
+	for i := 1; i <= n; i++ {
+		if _, err := vm.Manager.SaveRelayPreset(core.SaveRelayPresetRequest{
+			Name:   "预设" + itoa(i),
+			Source: "https://relay" + itoa(i) + ".example.com/map.json",
+		}); err != nil {
+			t.Fatalf("SaveRelayPreset(%d) error: %v", i, err)
+		}
+	}
+}
+
+// TestDerpPresetTableShowsEverySavedNode pins that the preset list is not
+// capped at the card's usual eight rows: the box around the list is what
+// scrolls, so a table that hid row nine would hide it twice.
+func TestDerpPresetTableShowsEverySavedNode(t *testing.T) {
+	vm := newTestViewModel(t)
+	saveDerpPresets(t, vm, 12)
+	vm.OpenDerp()
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	for _, want := range []string{"预设1", "预设8", "预设12"} {
+		if !tt.HasText(want) {
+			t.Fatalf("the preset table dropped %q; texts = %v", want, tt.Texts())
+		}
+	}
+}
+
+// TestDerpListPinsTheCreateActionAndDefaultNode pins the page's split: the
+// action and the built-in map answer "what am I on" and stay put; only the list
+// below them scrolls.
+func TestDerpListPinsTheCreateActionAndDefaultNode(t *testing.T) {
+	vm := newTestViewModel(t)
+	saveDerpPresets(t, vm, 20)
+	vm.OpenDerp()
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+
+	create, ok := tt.Find("新建 DERP 节点")
+	if !ok {
+		t.Fatalf("the create action is missing; texts = %v", tt.Texts())
+	}
+	builtIn, ok := tt.Find("tailcat 提供，本应用不缓存")
+	if !ok {
+		t.Fatalf("the default-node row is missing; texts = %v", tt.Texts())
+	}
+	first, ok := tt.Find("预设1")
+	if !ok {
+		t.Fatalf("the first preset is missing; texts = %v", tt.Texts())
+	}
+
+	// The wheel goes into the box, on the preset heading it holds.
+	box, ok := tt.Find("DERP 节点（预设）")
+	if !ok {
+		t.Fatalf("the preset section heading is missing; texts = %v", tt.Texts())
+	}
+	tt.Scroll(box.X+box.W/2, box.Y+4, 0, 400)
+	tt.Advance(300 * time.Millisecond)
+	tt.Frame()
+
+	moved, ok := tt.Find("预设1")
+	if !ok {
+		t.Fatalf("the first preset disappeared while scrolling; texts = %v", tt.Texts())
+	}
+	if moved.Y >= first.Y {
+		t.Fatalf("the list did not scroll: 预设1 stayed at y=%.0f", moved.Y)
+	}
+	if after, ok := tt.Find("新建 DERP 节点"); !ok || after.Y != create.Y {
+		t.Fatalf("the create action scrolled with the list: y=%.0f → %.0f", create.Y, after.Y)
+	}
+	if after, ok := tt.Find("tailcat 提供，本应用不缓存"); !ok || after.Y != builtIn.Y {
+		t.Fatalf("the default-node row scrolled with the list: y=%.0f → %.0f", builtIn.Y, after.Y)
+	}
+}

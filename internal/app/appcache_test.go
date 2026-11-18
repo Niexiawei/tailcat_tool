@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"testing"
@@ -277,5 +278,33 @@ func TestPurgeClearsTheDecodedIconCache(t *testing.T) {
 	}
 	if len(cache.purged) != 1 {
 		t.Fatalf("purged = %v", cache.purged)
+	}
+}
+
+// TestCachePageMovesOffARemovedDevice pins the picker's fallback: a device that
+// was deleted must not leave the page naming it, with an empty list and a
+// picker that cannot be reopened.
+func TestCachePageMovesOffARemovedDevice(t *testing.T) {
+	cache := &stubAppMetaCache{entries: map[string][]core.AppMetaEntry{}}
+	vm := newCacheViewModel(t, cache)
+	kept := vm.Manager.Profiles()[0]
+	goneID, err := vm.Manager.SaveDevice(core.SaveDeviceRequest{
+		Name: "客厅", Address: testAddress, RemotePort: 5555,
+	})
+	if err != nil {
+		t.Fatalf("SaveDevice() error: %v", err)
+	}
+	vm.CacheDevice = goneID
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	tt.Frame()
+	if vm.CacheDevice != goneID {
+		t.Fatalf("the page abandoned a device that still exists: %v", vm.CacheDevice)
+	}
+	if err := vm.Manager.RemoveDevice(context.Background(), goneID); err != nil {
+		t.Fatalf("RemoveDevice() error: %v", err)
+	}
+	tt.Frame()
+	if vm.CacheDevice != kept.ID {
+		t.Fatalf("the picker still points at the removed device: %v", vm.CacheDevice)
 	}
 }

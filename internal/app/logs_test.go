@@ -250,8 +250,8 @@ func TestLogsPageTitleHasABreadcrumbBack(t *testing.T) {
 	vm := newTestViewModel(t)
 	vm.OpenLogs()
 	title := ui.NewTester(vm.ContentTitle, 400, 40)
-	if !title.HasText("我的设备") || !title.HasText("日志") {
-		t.Fatalf("title = %v, want 我的设备 › 日志", title.Texts())
+	if !title.HasText("首页") || !title.HasText("日志") {
+		t.Fatalf("title = %v, want 首页 › 日志", title.Texts())
 	}
 }
 

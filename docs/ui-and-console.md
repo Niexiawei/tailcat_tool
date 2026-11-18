@@ -94,10 +94,11 @@ ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
 |---|---|---|
 | `/devices` | 设备列表页 | 卡片式列表（状态点 / 名称 / 连接方式与地址 / 状态），空态给出"添加设备"；页面标题在窗口标题栏里，正文不再重复 |
 | `/devices/{id}` | 设备页 | 面包屑 + 标题行（编辑 / 连接 / 断开）+ 页签（概览 / 资源 / 终端 / 文件 / 日志） |
-| `/logs` | 日志页 | 应用错误 / 通道日志 / 任务的统一时间线，四个筛选项（见 §14）；面包屑「我的设备 › 日志」；入口在侧栏设备列表之下 |
-| `/manage/appmeta` | 缓存管理页 | 按设备列出已缓存的应用名称与图标（包名、大小、读取时间、是否过期），可删除单条或清空这台设备；面包屑「我的设备 › 缓存管理」 |
-| `/manage/derp` | DERP 节点页 | 默认节点 / 预设 / 最近用过的来源集中一页，可新建、编辑、删除（在用不可删）；入口在侧栏设备列表之下 |
-| `/manage/derp/{id}` | DERP 节点详情页 | 区域与节点表、原始 JSON、使用设备；面包屑「我的设备 › DERP 节点 › 名称」，点中间一级回到列表；URL 型可强制重新获取 |
+| `/logs` | 日志页 | 应用错误 / 通道日志 / 任务的统一时间线，四个筛选项（见 §14）；面包屑「首页 › 日志」；入口在侧栏设备列表之下 |
+| `/manage/appmeta` | 缓存管理页 | 按设备列出已缓存的应用名称与图标（包名、大小、读取时间、是否过期），可删除单条或清空这台设备；面包屑「首页 › 缓存管理」 |
+| `/manage/derp` | DERP 节点页 | 上半部固定（新建 / 默认节点），下半部把预设与最近用过合成一个滚动框，可新建、编辑、删除（在用不可删）；入口在侧栏设备列表之下 |
+| `/manage/derp/{id}` | DERP 节点详情页 | 区域与节点表、原始 JSON、使用设备；面包屑「首页 › DERP 节点 › 名称」，点中间一级回到列表；URL 型可强制重新获取 |
+| `/manage/settings` | 工具设置页 | ADB / scrcpy 的路径与当前解析结果，缺失的工具可直接安装；面包屑「首页 › 工具设置」，侧栏设备列表之下有入口。**不是弹窗** |
 | 其他 | 列表页 | 兜底 |
 | `/devices/{无效 id}` | "设备不存在"页 | 附带"返回我的设备" |
 
@@ -106,7 +107,7 @@ ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
 ### 3.2 导航的两条入口
 
 - **侧栏点击**：`deviceRow` → `vm.OpenDevice(id)`；已在该页时不重复 `Push`。
-- **标题栏面包屑**：`vm.ContentTitle` 交给 `ShellOptions.ContentTitle`，用 `components.Breadcrumbs(c, []string{"我的设备", 设备名}, &vm.CrumbChoice)`；`Changed()` 且 index 为 0 时 `vm.OpenDevices()`。它读路由而不是 `Selection`，所以按 ⌘[ 后退时标题栏自动跟着变。`deviceIDFromPath(path)` 是这一步唯一的路径解析（纯函数，单独可测）。
+- **标题栏面包屑**：`vm.ContentTitle` 交给 `ShellOptions.ContentTitle`，用 `components.Breadcrumbs(c, []string{"首页", 设备名}, &vm.CrumbChoice)`；`Changed()` 且 index 为 0 时 `vm.OpenDevices()`。它读路由而不是 `Selection`，所以按 ⌘[ 后退时标题栏自动跟着变。根一级叫「首页」而不是「我的设备」：它下面的页面不止设备（缓存 / DERP / 日志 / 工具设置），「我的设备」是侧栏那个设备分组。`deviceIDFromPath(path)` 是这一步唯一的路径解析（纯函数，单独可测）。
 
 `Router` 自带 ⌘[ / ⌘]（Windows/Linux 为 Alt+← / →）与鼠标侧键，页面在历史中保留滚动位置与焦点。
 
@@ -123,7 +124,7 @@ vm.Router.View(c, func(r *ui.Route) {
 		return
 	}
 	vm.Selection = uuid.Nil         // 列表页没有选中设备
-	r.Title("我的设备")
+	r.Title("首页")
 	vm.toolbar(c)                   // 窗口级操作只在列表页
 	vm.deviceIndexPage(c)
 })
@@ -131,13 +132,15 @@ vm.Router.View(c, func(r *ui.Route) {
 
 这样"后退回上一台设备"时侧栏高亮、详情内容天然一致，不需要额外同步逻辑。**不要**在别处再写一遍 `Selection = ...`，否则两个真相会打架。
 
+管理页（缓存 / DERP / 日志 / 工具设置）在 `routedPage` 里统一走 `vm.dropSelection(path)`：它们不显示任何设备，侧栏留着一条高亮的设备行会被读成"这些数据属于它"。进缓存管理时它顺手把当前设备交给 `CacheDevice`——第一次打开仍落在刚才那台设备上（`TestManagePageLeavesNoDeviceSelected`、`TestCachePageOpensOnTheDeviceTheUserCameFrom`）。
+
 ### 3.4 窗口级操作只属于列表页
 
-添加设备 / 临时连接 / 测试全部设备只对"设备集合"有意义，因此 `vm.toolbar(c)` 只在列表页分支里调用，顺序固定：**主操作「添加设备」在最前**，其余按常用度排在后面。设备页只保留设备自身的动作。「工具设置」不属于设备集合，它配置的是侧栏底栏显示的那两个工具，所以放在 `LeftToolbar`（见 §4）。
+添加设备 / 临时连接 / 测试全部设备只对"设备集合"有意义，因此 `vm.toolbar(c)` 只在列表页分支里调用，顺序固定：**主操作「添加设备」在最前**，其余按常用度排在后面。设备页只保留设备自身的动作。「工具设置」既不在这里也不在底栏：它是一个页面，入口在侧栏的页面列表里（见 §4）。
 
 ### 3.5 动作一律「图标 + 文字」
 
-窗口级动作统一走 `actionButton(c, icon, label, variant)`：`components.Button` 加 `Children`，里面是 `components.Icon(c, lucide.X)` 和 `components.Text`，按钮的 `Label` 仍是文案本身——所以无障碍名与 `Tester.Click("添加设备")` 都不受影响。用的都是 `lucide` 图标：`Plus`（添加设备）、`Zap`（临时连接）、`Radar`（测试全部设备）、`Settings`（工具设置）。
+窗口级动作统一走 `actionButton(c, icon, label, variant)`：`components.Button` 加 `Children`，里面是 `components.Icon(c, lucide.X)` 和 `components.Text`，按钮的 `Label` 仍是文案本身——所以无障碍名与 `Tester.Click("添加设备")` 都不受影响。用的都是 `lucide` 图标：`Plus`（添加设备）、`Zap`（临时连接）、`Radar`（测试全部设备）。
 
 **不要**给动作只放文字：一行同尺寸的文字按钮读起来像正文（见 §10 的幽灵按钮一行）。
 
@@ -171,13 +174,14 @@ if !open {
 ```
 
 - **关闭只放右上角一个图标按钮**（`components.IconButton` + `lucide.X()`，`Label` 写「关闭」）。底栏不放「取消 / 关闭 / 完成」，只放这个对话框真正要做的那**一件**事；主作用按钮带图标、用 `ButtonPrimary`。
-  目前只有「全部设备连通测试」是这个形状；「添加设备 / 工具设置 / 上传下载」底栏还留着文字的「关闭」，迁移时照抄上面这段即可（在那之前，底栏里紧挨主按钮的次要动作仍用幽灵样式，见 §10 幽灵按钮一行）。
+  目前只有「全部设备连通测试」是这个形状；「添加设备 / 上传下载」底栏还留着文字的「关闭」，迁移时照抄上面这段即可（在那之前，底栏里紧挨主按钮的次要动作仍用幽灵样式，见 §10 幽灵按钮一行）。
 - **`if !open` 是唯一的关闭出口**：Esc、遮罩、✕ 都会把它置为 false，收尾（中止后台批次、丢弃草稿）只写这一处。
 - **慢的、批量的、耗网络的事情由用户点按钮发起**，打开对话框不自动跑；关闭时中止它——看不见的结果不值得继续探测。
 - **结果要一眼看懂**：成功/失败同时给文字和图标，颜色取 `theme.Success` / `theme.Danger`（映射集中在一个纯函数 `reachStatus` 里，测试直接断言颜色）。
 - **表格一律用 `internal/app/table.go` 的 `tableCard`**：它调用 `ui.Table` 并加 1 DIP 圆角边框、按需要定高或 `Grow(1)`、给表一个标签。页面**不要**直接写 `ui.Table`，也不要再用 onevra 的 `components.Table` / `TableVirtualized`（`TestNoOnevraTableComponentsAnywhere` 会红）。
-- **每个表格都有边框**：`tableCard` 默认画 1 DIP 圆角框。唯一例外是文件页右栏——整页浏览区已经是一个框，那里传 `tableOptions{Unframed: true}`（`TestOnlyFilesLeavesTheTableUnframed` 钉住）。
-- **不要把表格塞进 `components.ScrollView` / `ui.Scroll`**：`ui.Table` 自己就是滚动区，表头与内容在同一个横向滚动容器里；外面再套一层竖滚容器，列一调宽，调整抓手就会被裁到可视区外（这正是换组件的原因）。
+- **每个表格都有边框**：`tableCard` 默认画 1 DIP 圆角框。例外只给"表格已经在别人画的框里"：文件页右栏（整页浏览区是一个框）与 DERP 页的预设列表（下半部那个滚动框），那里传 `tableOptions{Unframed: true}`（`TestOnlyAFramedPaneLeavesTheTableUnframed` 钉住）。
+- **不要把表格塞进 `components.ScrollView` / `ui.Scroll`**：`ui.Table` 自己就是滚动区，表头与内容在同一个横向滚动容器里；外面再套一层竖滚容器，列一调宽，调整抓手就会被裁到可视区外（这正是换组件的原因）。唯一例外是 `tableOptions{Fit: true}`：卡片按 `Rows` 给的行数撑满、不封顶到 `maxTableRows`，表格自己**没有**滚动条，由外面那个框统一滚（DERP 页的预设列表就是这么做的，见下一条）。
+- **`Fit` 只给"外面那个框负责滚"的地方**：`Fit` 的表高=内容高，所以它不会藏行，也不会出现第二条滚动条；但反过来说，一张几百行的表会一次性建出所有行——用在预设列表（几十条）可以，不要用在文件列表那种没有上限的地方。
 - **行级点击走 `ListState.Selected` + `Table(...).Changed()`**：`ui.Table` 没有 `TableRow.Clicked()`；`Selected` 初始给 -1，否则点第一行"没变化"。
 - **排序由页面算，不由组件算**：把 `&state.Sort` 交给表，建表前用 `Sort` 里的列自己排好行序（资源页 `sortApps` / `sortProcessRows`）。
 - **可能被截断的单行文本**都要挂 `components.Tooltip` 给全文（见 §10）。
@@ -193,11 +197,11 @@ ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), Space(2), 0, Space(2)).Chil
 })
 ```
 
-- **管理入口**：设备两组之后是三行页面入口——缓存管理（`lucide.Database`）、DERP 节点（`lucide.Server`）、日志（`lucide.ScrollText`）。它们是页面不是窗口动作，因此放在滚动区里、设备列表之下，而不是底栏；每行与设备行同样的内边距、左对齐与选中底色，读起来是同一份「去哪里」的列表。
+- **管理入口**：设备两组之后是四行页面入口——缓存管理（`lucide.Database`）、DERP 节点（`lucide.Server`）、日志（`lucide.ScrollText`）、工具设置（`lucide.Settings`）。它们是页面不是窗口动作，因此放在滚动区里、设备列表之下，而不是底栏；每行与设备行同样的内边距、左对齐与选中底色，读起来是同一份「去哪里」的列表。工具设置排在最后：它是配置，不是数据页。
 - **分组**：`components.Accordion` 两个 `group.Item`，标题带数量（`我的设备 (3)` / `临时设备 (空)`），展开状态在 `ViewModel.SavedOpen / TemporaryOpen`，默认都展开。空组给一句说明而不是空白。
 - **设备行**：`ui.ButtonBase(c).FillWidth().Shrink(0).Justify(ui.Start).AlignItems(ui.Center).Radius(t.Radius)`，选中时 `Background(t.Selection)`。`ButtonBase` 内部是 `coreRow(c).Center()`，**必须显式 `Justify(Start)`**，否则内容居中。
 - **提示**：设备行的名称与状态行都挂了 `components.Tooltip`，侧栏只有 220 宽，长名字必然被截断。
-- **底栏**：两个工具的健康状态（缺失时给「安装」按钮），以及带图标的「工具设置」动作（它配置的就是这两行显示的工具）。不放通道计数（它与设备行上的状态点重复，且无法操作），也不放提示文本。
+- **底栏**：只有两个工具的健康状态（缺失时给「安装」按钮）。工具设置的入口在侧栏页面列表里，同一个地方只留一个入口——底栏再放一个按钮，读起来会像两件不同的事。不放通道计数（它与设备行上的状态点重复，且无法操作），也不放提示文本。
 
 ## 5. 内嵌终端
 
@@ -387,7 +391,7 @@ vm.Notify("已复制…")   // 成功级：3 秒
 | 目的 | 手法 |
 |---|---|
 | 分页与返回 | `Click("E245")` 后断言 `Router.Path()`；`Router.Back()` 后断言 `Selection` 跟着变 |
-| 面包屑可点 | `Click("我的设备")` 断言回到 `/devices` |
+| 面包屑可点 | `Click("首页")` 断言回到 `/devices` |
 | 折叠面板 | `Click("我的设备 (1)")` 后断言行消失、`SavedOpen` 变为 false |
 | 单选切换 | `Click("本地 ADB 直连")` 后断言表单字段变化 |
 | 标题栏不压内容 | `Tester.SetTitleBar` 换成 48/64 DIP，断言正文首个可见元素 `Y >= sidebar.HeaderHeight(c)` |
@@ -414,7 +418,7 @@ TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v
 
 - **不设环境变量就 SKIP**，`go test ./...` 不写文件、不耗时（CI 不受影响）。
 - **没有断言、没有基准图**：像素级比对在不同字体/平台上必然不稳，本仓库也就不会因为「差一个像素」红。它的用途是人（或代理）看一眼。
-- 用例表 `shotCases()` 覆盖：设备列表、侧栏、概览、资源、文件（列表 / 读失败 / 读取中 / 属性弹窗）、日志页（有数据 / 空态）、任务输出对话框、设备日志标签、设备编辑器、临时设备、工具设置、连通测试、干预弹窗。**加了页面或对话框状态就加一条**。
+- 用例表 `shotCases()` 覆盖：设备列表、侧栏、概览、资源、文件（列表 / 读失败 / 读取中 / 属性弹窗）、日志页（有数据 / 空态）、任务输出对话框、设备日志标签、设备编辑器、临时设备、工具设置页、连通测试、干预弹窗。**加了页面或对话框状态就加一条**。
 - 每帧循环里都有一次真实 `time.Sleep`：`ui.Tester` 的时钟是虚拟的，目录读取、任务启动跑在 goroutine 上，不睡就永远等不到数据。
 - `view` 字段可以只截某个 shell 槽位（侧栏就是这么截的）。
 - **终端页不在此列**：真实终端要运行期加载 libghostty-vt，`go test` 不应下载它（见 §10 最后一行），终端外观用 `go run ./cmd/tailcat-manager --demo` 目视。

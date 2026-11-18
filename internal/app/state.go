@@ -75,9 +75,12 @@ type ViewModel struct {
 	TransferRemotePath string
 	TransferError      string
 
-	SettingsOpen  bool
 	SettingsDraft core.ToolSettings
 	SettingsError string
+	// SettingsLoaded marks the draft as filled from the manager. The page loads
+	// it once per visit: a view that reloaded every frame would erase the box
+	// the user is typing in whenever anything else asked for a redraw.
+	SettingsLoaded bool
 
 	ReachabilityOpen bool
 	AttentionOpen    bool
@@ -279,6 +282,10 @@ const LogsRoute = "/logs"
 // CacheRoute is the management page for cached application names and icons.
 const CacheRoute = "/manage/appmeta"
 
+// SettingsRoute is the tool settings form: a page, not a dialog, because it is
+// a place with its own breadcrumb rather than a modal step of another action.
+const SettingsRoute = "/manage/settings"
+
 // DerpRoute lists every DERP map source; DerpDetailRoute shows one preset.
 const DerpRoute = "/manage/derp"
 
@@ -333,6 +340,13 @@ func (vm *ViewModel) OpenLogs() {
 	}
 }
 
+// OpenTools shows the tool settings page.
+func (vm *ViewModel) OpenTools() {
+	if vm.Router != nil && vm.Router.Path() != SettingsRoute {
+		vm.Router.Push(SettingsRoute)
+	}
+}
+
 // OpenDevices goes back to the device index.
 func (vm *ViewModel) OpenDevices() {
 	if vm.Router != nil && vm.Router.Path() != DeviceIndexRoute {
@@ -371,8 +385,12 @@ func deviceIDFromPath(path string) (uuid.UUID, bool) {
 // ContentTitle fills the shell header's leading slot: the path back to the
 // device index on a device page, and the page name everywhere else. It lives
 // in the title bar so the header's drag strip can never swallow the click.
+//
+// The root crumb is 首页, not 我的设备: the page under it lists the cache, the
+// DERP nodes, the logs and the tools too, and 我的设备 is the sidebar's device
+// group. One name for the group, one for the place.
 func (vm *ViewModel) ContentTitle(c *ui.Context) {
-	pageName := "我的设备"
+	pageName := "首页"
 	if vm.Router == nil {
 		components.Text(c, pageName).Bold().SingleLine()
 		return
@@ -547,16 +565,15 @@ func countLabel(n int) string {
 	return "(" + itoa(n) + ")"
 }
 
-// SidebarFooter is the fixed bottom toolbar: channel count, tool health and
-// the temporary-connection action.
+// SidebarFooter is the fixed bottom toolbar: the health of the two external
+// tools. The action that edits their paths is a page of its own now, in the
+// sidebar's list of places (manageEntries); two entries for one place read as
+// two different things.
 func (vm *ViewModel) SidebarFooter(c *ui.Context) {
 	theme := c.Theme()
 	ui.Column(c).FillWidth().Padding(theme.Space(2), theme.Space(2.5)).Gap(theme.Space(1.5)).Children(func() {
 		for _, component := range core.AllTools() {
 			vm.toolRow(c, component)
-		}
-		if actionButton(c, lucide.Settings, "工具设置", components.ButtonSecondary).Clicked() {
-			vm.openSettings()
 		}
 	})
 }

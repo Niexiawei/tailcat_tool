@@ -121,13 +121,14 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 1. **只调 `internal/app/table.go` 的 `tableCard`**：页面里不许直接写 `ui.Table`，更不许再用 onevra 的 `components.Table` / `TableVirtualized`。两条守卫分别在 `internal/app/table_test.go`（`TestTablesAreBuiltOnlyByTableCard`：`ui.Table(` 只允许出现在 `table.go`）和 `internal/app/style_test.go`（`TestNoOnevraTableComponentsAnywhere`：onevra 表格组件全仓清零）。
 2. **表格自己滚，外面不要再套滚动容器**。`components.Table` 自己不滚、要求调用方套 `ScrollView`，而我们套的是竖滚容器——列一调宽，最右列的调整抓手就被裁在可视区外且没有横向滚动能过去。`ui.Table` 的表头与行在同一个横向滚动区里，所以：
    - 表格是本屏主体（资源、缓存、日志、文件）→ `tableOptions{Grow: true}`，占满剩余高度；
-   - 页面本身要滚（DERP 列表、DERP 详情、连通测试对话框）→ 给 `tableOptions{Rows: n}` 定高，最多 `maxTableRows` 行，超出在表内滚。
+   - 页面本身要滚（DERP 详情、连通测试对话框）→ 给 `tableOptions{Rows: n}` 定高，最多 `maxTableRows` 行，超出在表内滚；
+   - 外面那个框负责滚（DERP 页的预设列表：上半部固定、下半部一个框）→ `tableOptions{Rows: n, Fit: true}`，表格按行数撑满、自己不滚，由框统一滚（`TestDerpPresetTableShowsEverySavedNode`、`TestDerpListPinsTheCreateActionAndDefaultNode`）。`Fit` 只给这类"行数有上限"的列表：它会一次建出所有行，别给文件列表那种没上限的表。
 3. **行激活用 `RowClicked()`，不要用 `Changed()`**。`Changed()` 对上下键移动选中也报，用它会在用户只是按键浏览时进目录、弹任务输出（两次都是真 bug）。
 4. **选中行（`ListState.Selected`）必须指向状态字段**，不能指向构建函数里的局部变量：列表在帧与帧之间写它，局部变量活不到下一帧，箭头键的写入会丢。文件页为此存 `fileState.chosen` + `chosenPath`（`TestFileTableKeyboardMovesTheChoice` 钉住）。
 5. **`ListState.Key` 必须是稳定身份**（日志用 `logRowKey`：两行日志可以时间、来源、文本全同）。
 6. **表格是虚拟化的**：屏幕外的行根本不存在，测试必须滚动之后再断言（`TestCacheTableKeepsTheClearActionInView`、`TestDerpRegionTableScrollsItsOwnRows`、`TestLogTimelineIsItsOwnScrollArea`）。任何「第 40 行在不在」的旧断言都要改写，不是删掉。
 7. **排序由页面算**：把 `&state.Sort` 交给表，建表前用 `Sort` 里的列自己排好行序（资源页 `sortApps` / `sortProcessRows`）。列上要 `Sortable: true`；默认值写成一个 `ui.SortOrder{Column: "app"}`；降序只翻主键，并列键永远升序（同一应用的行不许散开）；`不可用` 的 GPU 双向都排在数字后面。
-8. **每个表格都有边框**（`tableCard` 默认 1 DIP 圆角框）。唯一例外是文件页右栏——整页浏览区已经是一个框，那里传 `Unframed: true`，由 `TestOnlyFilesLeavesTheTableUnframed` 钉住。
+8. **每个表格都有边框**（`tableCard` 默认 1 DIP 圆角框）。例外只给「表格已经在别人画的框里」：文件页右栏（整页浏览区是框）与 DERP 页的预设列表（下半部那个滚动框），那里传 `Unframed: true`，由 `TestOnlyAFramedPaneLeavesTheTableUnframed` 钉住。
 
 ## 常见改动 cookbook
 

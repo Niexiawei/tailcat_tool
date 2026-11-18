@@ -25,6 +25,10 @@ type tableOptions struct {
 	// Rows is how many rows the card makes room for when Grow is false: the
 	// table keeps its own scroll inside a page that scrolls around it.
 	Rows int
+	// Fit takes Rows at its word instead of capping at maxTableRows: use it
+	// when a box around the table scrolls, so every row is drawn and no row is
+	// hidden behind a second scrollbar inside the card.
+	Fit bool
 	// Unframed omits the card's border, for a table already inside a frame.
 	Unframed bool
 }
@@ -48,7 +52,7 @@ func tableCard(c *ui.Context, state *ui.ListState, columns []ui.TableColumn, row
 		if opts.Grow {
 			table.Grow(1).MinHeight(0)
 		} else {
-			table.Height(tableRowsHeight(c, opts.Rows))
+			table.Height(tableRowsHeight(c, opts.Rows, opts.Fit))
 		}
 	})
 	if opts.Grow {
@@ -58,9 +62,12 @@ func tableCard(c *ui.Context, state *ui.ListState, columns []ui.TableColumn, row
 }
 
 // tableRowsHeight is how tall a table with rows rows is when it does not grow:
-// the header plus the rows, at most maxTableRows of them. Space(8) is the height
-// of ui.Table's own header and its least row.
-func tableRowsHeight(c *ui.Context, rows int) float32 {
-	shown := min(max(rows, 1), maxTableRows)
+// the header plus the rows, at most maxTableRows of them unless fit asks for
+// every row. Space(8) is the height of ui.Table's own header and its least row.
+func tableRowsHeight(c *ui.Context, rows int, fit bool) float32 {
+	shown := max(rows, 1)
+	if !fit {
+		shown = min(shown, maxTableRows)
+	}
 	return c.Theme().Space(8) * float32(shown+1)
 }

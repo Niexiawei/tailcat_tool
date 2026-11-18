@@ -16,7 +16,7 @@ func TestTableCardSizesAShortTableForItsRows(t *testing.T) {
 	var state ui.ListState
 	var want float32
 	tt := ui.NewTester(func(c *ui.Context) {
-		want = tableRowsHeight(c, 3)
+		want = tableRowsHeight(c, 3, false)
 		tableCard(c, &state, []ui.TableColumn{{Title: "名称", ID: "name"}}, 3,
 			tableOptions{Label: "探针表", Rows: 3},
 			func(row, col int) { ui.Text(c, "行"+itoa(row)) })
@@ -36,7 +36,7 @@ func TestTableCardCapsHowManyRowsItMakesRoomFor(t *testing.T) {
 	var state ui.ListState
 	var want float32
 	tt := ui.NewTester(func(c *ui.Context) {
-		want = tableRowsHeight(c, maxTableRows)
+		want = tableRowsHeight(c, maxTableRows, false)
 		tableCard(c, &state, []ui.TableColumn{{Title: "名称", ID: "name"}}, 40,
 			tableOptions{Label: "长表", Rows: 40},
 			func(row, col int) { ui.Text(c, "行"+itoa(row)) })
@@ -50,10 +50,43 @@ func TestTableCardCapsHowManyRowsItMakesRoomFor(t *testing.T) {
 	}
 }
 
-// TestOnlyFilesLeavesTheTableUnframed pins the single exception to the framing
-// rule: the file browser's pane is already a 1 DIP frame, so its table must not
-// draw a second one.
-func TestOnlyFilesLeavesTheTableUnframed(t *testing.T) {
+// TestTableCardFitsEveryRowWhenAsked pins the option the DERP list needs: the
+// card takes rows past the cap, because there the box around the table is what
+// scrolls, and a capped card would hide rows behind a second scrollbar.
+func TestTableCardFitsEveryRowWhenAsked(t *testing.T) {
+	var state ui.ListState
+	var want, cap float32
+	tt := ui.NewTester(func(c *ui.Context) {
+		want = tableRowsHeight(c, 40, true)
+		cap = tableRowsHeight(c, maxTableRows, false)
+		tableCard(c, &state, []ui.TableColumn{{Title: "名称", ID: "name"}}, 40,
+			tableOptions{Label: "整表", Rows: 40, Fit: true},
+			func(row, col int) { ui.Text(c, "行"+itoa(row)) })
+	}, 600, 1600)
+	rect, ok := tt.Find("整表")
+	if !ok {
+		t.Fatalf("the card's table is not labelled; texts = %v", tt.Texts())
+	}
+	if rect.H != want {
+		t.Fatalf("table height = %v, want all 40 rows (%v)", rect.H, want)
+	}
+	if want <= cap {
+		t.Fatalf("the fit height %v is not past the %d-row cap %v", want, maxTableRows, cap)
+	}
+}
+
+// unframedTables maps the tables that may leave the card's border off to the
+// frame the page already draws around them. A table inside a frame of its own
+// would read as a box in a box.
+var unframedTables = map[string]string{
+	"files.go": "the file browser's right pane is the frame",
+	"derp.go":  "the preset list sits in the box that scrolls it",
+}
+
+// TestOnlyAFramedPaneLeavesTheTableUnframed pins the single exception to the
+// framing rule: a table already inside a frame the page draws (the file
+// browser's pane, the DERP list's scroll box) must not draw a second one.
+func TestOnlyAFramedPaneLeavesTheTableUnframed(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatalf("Glob() error: %v", err)
@@ -66,8 +99,15 @@ func TestOnlyFilesLeavesTheTableUnframed(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reading %s: %v", path, err)
 		}
-		if strings.Contains(string(source), "Unframed: true") && path != "files.go" {
-			t.Fatalf("%s leaves its table unframed; only the file browser's pane already frames it", path)
+		if strings.Contains(string(source), "Unframed: true") {
+			if _, ok := unframedTables[path]; !ok {
+				t.Fatalf("%s leaves its table unframed; only a table already inside a frame may", path)
+			}
+			continue
+		}
+		// A table that stopped being unframed left a stale entry behind.
+		if reason, ok := unframedTables[path]; ok {
+			t.Fatalf("%s no longer leaves a table unframed (%s)", path, reason)
 		}
 	}
 }

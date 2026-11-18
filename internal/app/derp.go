@@ -48,6 +48,12 @@ func (vm *ViewModel) derpInfoFor(source string) derpSourceInfo {
 // derpListPage collects every DERP source in one place: the official map,
 // the presets, and the sources devices have used. Navigation goes through
 // OpenDerpDetail so Back returns to the list.
+//
+// The page is two halves. The upper half answers "which nodes am I on" — the
+// create action and the map tailcat itself uses — and never moves. The lower
+// half is one list of the saved presets followed by the recently used sources,
+// framed and scrolling as a whole, so a hundred presets cannot push the answer
+// off the screen.
 func (vm *ViewModel) derpListPage(c *ui.Context) {
 	theme := c.Theme()
 	ui.Column(c).Fill().Padding(20).Gap(14).Children(func() {
@@ -57,11 +63,14 @@ func (vm *ViewModel) derpListPage(c *ui.Context) {
 			}
 			components.Text(c, "预设只影响之后选择它的设备").FontSize(11).TextColor(theme.TextMuted)
 		})
-		ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
-			ui.Column(c).FillWidth().Gap(16).Children(func() {
-				vm.derpDefaultSection(c)
-				vm.derpPresetSection(c)
-				vm.derpHistorySection(c)
+		vm.derpDefaultSection(c)
+		ui.Column(c).FillWidth().Grow(1).MinHeight(0).
+			Padding(1).Radius(theme.Radius).Border(1, theme.Border).Clip().Children(func() {
+			ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
+				ui.Column(c).FillWidth().Padding(theme.Space(1.5), theme.Space(1.5)).Gap(16).Children(func() {
+					vm.derpPresetSection(c)
+					vm.derpHistorySection(c)
+				})
 			})
 		})
 	})
@@ -110,9 +119,10 @@ func (vm *ViewModel) derpPresetSection(c *ui.Context) {
 		return
 	}
 	tableCard(c, &vm.DerpTable, derpColumns(), len(presets), tableOptions{
-		// The page scrolls around this table, so the card makes room for a
-		// handful of rows and lets the rest scroll inside it.
-		Label: "DERP 节点预设列表", Rows: len(presets),
+		// The box around the list scrolls and draws the frame, so the card takes
+		// every preset at its full height without a second border inside it: an
+		// eight-row cap would hide rows behind a scrollbar inside a scrollbar.
+		Label: "DERP 节点预设列表", Rows: len(presets), Fit: true, Unframed: true,
 	}, func(row, col int) {
 		vm.derpPresetCell(c, col, presets[row])
 	})

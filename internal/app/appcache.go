@@ -57,20 +57,19 @@ func (vm *ViewModel) cachePage(c *ui.Context) {
 }
 
 // ensureCacheDevice keeps the picker on a device that still exists: a removed
-// device must not leave the page pointing at nothing.
+// device must not leave the page pointing at nothing. The first device is a
+// bare fallback; the device the user was looking at comes in through
+// dropSelection, which runs before this page builds.
 func (vm *ViewModel) ensureCacheDevice() {
-	for _, profile := range vm.Manager.AllProfiles() {
+	profiles := vm.Manager.AllProfiles()
+	for _, profile := range profiles {
 		if profile.ID == vm.CacheDevice {
 			return
 		}
 	}
-	if vm.Selection != uuid.Nil {
-		vm.CacheDevice = vm.Selection
-	}
-	if vm.CacheDevice == uuid.Nil {
-		if profiles := vm.Manager.AllProfiles(); len(profiles) > 0 {
-			vm.CacheDevice = profiles[0].ID
-		}
+	vm.CacheDevice = uuid.Nil
+	if len(profiles) > 0 {
+		vm.CacheDevice = profiles[0].ID
 	}
 }
 

@@ -600,8 +600,13 @@ func TestContentTitleShowsTheDevicePath(t *testing.T) {
 	vm := newTestViewModel(t)
 	vm.OpenDevice(vm.Manager.Profiles()[0].ID)
 	tt := ui.NewTester(vm.ContentTitle, 420, 48)
-	if !tt.HasText("我的设备") || !tt.HasText("E245") {
+	if !tt.HasText("首页") || !tt.HasText("E245") {
 		t.Fatalf("the title bar does not show the path; texts = %v", tt.Texts())
+	}
+	// 我的设备 is the sidebar's device group, not the root crumb: the root page
+	// lists more than devices now (cache, DERP, logs, tools).
+	if tt.HasText("我的设备") {
+		t.Fatalf("the root crumb still says 我的设备; texts = %v", tt.Texts())
 	}
 }
 
@@ -611,7 +616,7 @@ func TestContentTitleBreadcrumbReturnsToTheDeviceIndex(t *testing.T) {
 	// The title bar is a strip of its own, so the click never races the
 	// window-drag area the way it did inside ContentView.
 	tt := ui.NewTester(vm.ContentTitle, 420, 48)
-	if err := tt.Click("我的设备"); err != nil {
+	if err := tt.Click("首页"); err != nil {
 		t.Fatalf("Click() on the breadcrumb error: %v", err)
 	}
 	if got := vm.Router.Path(); got != DeviceIndexRoute {
@@ -628,7 +633,7 @@ func TestContentTitleFollowsTheRouter(t *testing.T) {
 	if tt.HasText("E245") {
 		t.Fatalf("the title bar kept the device after going back; texts = %v", tt.Texts())
 	}
-	if !tt.HasText("我的设备") {
+	if !tt.HasText("首页") {
 		t.Fatalf("the title bar lost the page name; texts = %v", tt.Texts())
 	}
 }
@@ -640,7 +645,7 @@ func TestDevicePageHasNoSecondBreadcrumb(t *testing.T) {
 	// The body must not repeat navigation the title bar already shows; the
 	// device name is body content, so only the crumb text counts.
 	for _, text := range tt.Texts() {
-		if text == "我的设备" {
+		if text == "首页" {
 			t.Fatalf("the device page repeats the breadcrumb in the body; texts = %v", tt.Texts())
 		}
 	}
@@ -680,20 +685,6 @@ func TestIndexToolbarPutsAddDeviceFirst(t *testing.T) {
 	}
 }
 
-func TestSidebarFooterOpensToolSettings(t *testing.T) {
-	vm := newTestViewModel(t)
-	tt := sidebarTester(vm, 280, 420)
-	if !tt.HasText("工具设置") {
-		t.Fatalf("the footer has no tool settings action; texts = %v", tt.Texts())
-	}
-	if err := tt.Click("工具设置"); err != nil {
-		t.Fatalf("Click() error: %v", err)
-	}
-	if !vm.SettingsOpen {
-		t.Fatal("the footer action did not open the settings dialog")
-	}
-}
-
 func TestStartupNoticeArrivesAsAToast(t *testing.T) {
 	m, _ := newTestManager(t)
 	a := New(Environment{
@@ -712,8 +703,9 @@ func TestStartupNoticeArrivesAsAToast(t *testing.T) {
 
 func TestSavedToolSettingsIsAToastNotInlineText(t *testing.T) {
 	vm := newTestViewModel(t)
-	vm.openSettings()
+	vm.OpenTools()
 	tt := ui.NewTester(vm.ContentView, 900, 900)
+	tt.Frame()
 	if err := tt.Click("保存"); err != nil {
 		t.Fatalf("Click() error: %v", err)
 	}

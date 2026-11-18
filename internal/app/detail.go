@@ -23,7 +23,6 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 	vm.EditorView(c)
 	vm.TransferView(c)
 	vm.FileDetailView(c)
-	vm.SettingsView(c)
 	vm.ReachabilityView(c)
 	vm.AttentionDialog(c)
 	vm.LogOutputView(c)
@@ -46,11 +45,27 @@ func (vm *ViewModel) routedPage(c *ui.Context) {
 		}
 		return
 	}
+	// The tools draft belongs to one visit: leaving the page drops it, so
+	// coming back starts from what is saved rather than a forgotten edit.
+	if vm.Router.Path() != SettingsRoute {
+		vm.SettingsLoaded = false
+	}
+	// A management page shows no device page, so no sidebar row stays tinted:
+	// a highlighted E245 next to 缓存管理 reads as "these are E245's". The
+	// cache page keeps the device the user came from, since it opens on the
+	// selected device's entries the first time.
+	if _, isManage := vm.managePageTrail(vm.Router.Path()); isManage {
+		vm.dropSelection(vm.Router.Path())
+	}
 	vm.Router.View(c, func(r *ui.Route) {
 		switch {
 		case r.Match(CacheRoute):
 			r.Title("缓存管理")
 			vm.cachePage(c)
+			return
+		case r.Match(SettingsRoute):
+			r.Title("工具设置")
+			vm.settingsPage(c)
 			return
 		case r.Match(LogsRoute):
 			r.Title("日志")
@@ -83,10 +98,20 @@ func (vm *ViewModel) routedPage(c *ui.Context) {
 		}
 		// The index page shows no device, so nothing is selected.
 		vm.Selection = uuid.Nil
-		r.Title("我的设备")
+		r.Title("首页")
 		vm.toolbar(c)
 		vm.deviceIndexPage(c)
 	})
+}
+
+// dropSelection clears the sidebar's tint when a page that shows no device is
+// opened. The cache page keeps the device it was opened from, because it shows
+// that device's entries; every other management page just drops it.
+func (vm *ViewModel) dropSelection(path string) {
+	if path == CacheRoute && vm.CacheDevice == uuid.Nil {
+		vm.CacheDevice = vm.Selection
+	}
+	vm.Selection = uuid.Nil
 }
 
 // deviceIndexPage lists the devices; it is what the first breadcrumb returns to.

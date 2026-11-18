@@ -21,7 +21,6 @@ func TestDialogsCloseWithoutPanic(t *testing.T) {
 	}{
 		{"device editor", func(vm *ViewModel) { vm.openEditor(&EditorRequest{}) }, func(vm *ViewModel) { vm.PendingEditor = nil }},
 		{"transfer", func(vm *ViewModel) { vm.TransferOpen = true }, func(vm *ViewModel) { vm.TransferOpen = false }},
-		{"settings", func(vm *ViewModel) { vm.openSettings() }, func(vm *ViewModel) { vm.SettingsOpen = false }},
 		{"reachability", func(vm *ViewModel) { vm.ReachabilityOpen = true }, func(vm *ViewModel) { vm.ReachabilityOpen = false }},
 		{"attention", func(vm *ViewModel) { vm.AttentionOpen = true }, func(vm *ViewModel) { vm.AttentionOpen = false }},
 		{"cache confirm", func(vm *ViewModel) {
