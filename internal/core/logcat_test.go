@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -157,6 +158,13 @@ func logcatText(level, tag, text string) string {
 	return "11-18 09:30:01.123  1234  1250 " + level + " " + tag + ": " + text + "\n"
 }
 
+// logcatTextMS is logcatText with a millisecond of its own. Tests that need many
+// lines must vary it: logcat stamps one call's lines identically, and identical
+// stamps fold into a single entry on purpose.
+func logcatTextMS(ms int, level, tag, text string) string {
+	return "11-18 09:30:01." + fmt.Sprintf("%03d", ms%1000) + "  1234  1250 " + level + " " + tag + ": " + text + "\n"
+}
+
 // newTestLogcatStream builds a stream with a small ring and a notify counter.
 func newTestLogcatStream(limit int) (*LogcatStream, *int) {
 	noted := 0
@@ -165,8 +173,8 @@ func newTestLogcatStream(limit int) (*LogcatStream, *int) {
 
 func TestLogcatBufferKeepsTheNewestLines(t *testing.T) {
 	stream, _ := newTestLogcatStream(3)
-	for _, text := range []string{"one", "two", "three", "four", "five"} {
-		stream.append(logcatText("I", "Tag", text))
+	for i, text := range []string{"one", "two", "three", "four", "five"} {
+		stream.append(logcatTextMS(i, "I", "Tag", text))
 	}
 	snap := stream.Snapshot(LogcatFilter{})
 	if len(snap.Entries) != 3 {
@@ -294,9 +302,9 @@ func TestLogcatSnapshotKeepsTheNewestMatchingRows(t *testing.T) {
 	// One non-matching line at the very end proves the cap is applied to the
 	// matches, not to the buffer.
 	for i := 0; i < 3000; i++ {
-		stream.append(logcatText("I", "Tag", "line"))
+		stream.append(logcatTextMS(i, "I", "Tag", "line"))
 	}
-	stream.append(logcatText("V", "Tag", "quiet"))
+	stream.append(logcatTextMS(999, "V", "Tag", "quiet"))
 	snap := stream.Snapshot(LogcatFilter{MinLevel: LogcatInfo})
 	if len(snap.Entries) != LogcatMaxRows {
 		t.Fatalf("kept %d rows, want %d", len(snap.Entries), LogcatMaxRows)
@@ -309,7 +317,7 @@ func TestLogcatSnapshotKeepsTheNewestMatchingRows(t *testing.T) {
 func TestLogcatClearKeepsTheCounters(t *testing.T) {
 	stream, _ := newTestLogcatStream(10)
 	for i := 0; i < 3; i++ {
-		stream.append(logcatText("I", "Tag", "line"))
+		stream.append(logcatTextMS(i, "I", "Tag", "line"))
 	}
 	stream.Clear()
 	snap := stream.Snapshot(LogcatFilter{})
@@ -358,5 +366,44 @@ func TestLogcatCloseIsIdempotent(t *testing.T) {
 	stream.Close()
 	if !stream.Closed() {
 		t.Fatal("Close did not close the stream")
+	}
+}
+
+func TestLogcatStackFramesFromOneCallStayOneEntry(t *testing.T) {
+	stream, _ := newTestLogcatStream(10)
+	// One log call with newlines: logcat stores a record per line but stamps
+	// them all with the same time, pid, tid, level and tag. They belong to one
+	// entry, or a stack trace becomes dozens of rows.
+	stream.append("11-18 09:42:35.293  1182  1182 E CCTAggProxyLogStore: java.util.concurrent.ExecutionException: boom\n" +
+		"11-18 09:42:35.293  1182  1182 E CCTAggProxyLogStore: \tat dgwp.o(Unknown Source:12)\n" +
+		"11-18 09:42:35.293  1182  1182 E CCTAggProxyLogStore: \tat asqd.l(Unknown Source:8)\n")
+	snap := stream.Snapshot(LogcatFilter{})
+	if len(snap.Entries) != 1 {
+		t.Fatalf("kept %d entries, want one entry for one call", len(snap.Entries))
+	}
+	want := "java.util.concurrent.ExecutionException: boom\n\tat dgwp.o(Unknown Source:12)\n\tat asqd.l(Unknown Source:8)"
+	if snap.Entries[0].Text != want {
+		t.Fatalf("Text = %q, want the whole call", snap.Entries[0].Text)
+	}
+	if snap.Received != 3 {
+		t.Fatalf("Received = %d, want 3: three lines were parsed", snap.Received)
+	}
+}
+
+func TestLogcatLinesWithDifferentTimesStayApart(t *testing.T) {
+	stream, _ := newTestLogcatStream(10)
+	stream.append("11-18 09:42:35.293  1182  1182 E Tag: first\n" +
+		"11-18 09:42:35.294  1182  1182 E Tag: second\n")
+	if snap := stream.Snapshot(LogcatFilter{}); len(snap.Entries) != 2 {
+		t.Fatalf("kept %d entries, want two: different times are different calls", len(snap.Entries))
+	}
+}
+
+func TestLogcatLinesWithDifferentTagsStayApart(t *testing.T) {
+	stream, _ := newTestLogcatStream(10)
+	stream.append("11-18 09:42:35.293  1182  1182 E TagA: first\n" +
+		"11-18 09:42:35.293  1182  1182 E TagB: second\n")
+	if snap := stream.Snapshot(LogcatFilter{}); len(snap.Entries) != 2 {
+		t.Fatalf("kept %d entries, want two: different tags are different calls", len(snap.Entries))
 	}
 }

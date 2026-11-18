@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -313,15 +314,17 @@ func TestLogcatFootRowCountsReceivedAndDropped(t *testing.T) {
 	tt := ui.NewTester(vm.ContentView, 1100, 720)
 	tt.Frame()
 	runner.feed("11-18 09:30:01.123  1  1 I Tag: one\n")
-	waitForText(t, tt, "已接收 1 行 · 显示 1 行")
+	waitForText(t, tt, "已接收 1 行 · 显示 1 条")
 
 	// One line more than the ring holds: the page has to say what it lost.
+	// Each line needs a stamp of its own: one call's lines share a stamp and
+	// fold into a single entry.
 	burst := strings.Builder{}
 	for i := 0; i < core.LogcatMaxLines+1; i++ {
-		burst.WriteString("11-18 09:30:01.123  1  1 I Tag: line\n")
+		burst.WriteString(fmt.Sprintf("11-18 09:30:01.%03d  1  1 I Tag: line\n", i%1000))
 	}
 	runner.feed(burst.String())
-	waitForText(t, tt, "丢弃 2 行")
+	waitForText(t, tt, "丢弃 2 条")
 }
 
 func TestLogcatPageExplainsAnEmptyFilter(t *testing.T) {
@@ -541,5 +544,59 @@ func TestCloseLogcatStopsAHiddenWindowStream(t *testing.T) {
 	vm.CloseLogcat()
 	if !stream.Closed() {
 		t.Fatal("the stream kept reading the device while the window was hidden")
+	}
+}
+
+func TestLogcatRowCopiesItsLine(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.123  1234  1250 E AndroidRuntime: boom\n" +
+		"11-18 09:30:01.123  1234  1250 E AndroidRuntime: \tat com.demo.Main.run(Main.java:1)\n")
+	waitForText(t, tt, "boom")
+
+	copied := ""
+	original := writeClipboard
+	t.Cleanup(func() { writeClipboard = original })
+	writeClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+	if err := tt.Click("复制这一行"); err != nil {
+		t.Fatalf("Click(复制这一行) error: %v", err)
+	}
+	year := itoa(time.Now().Year())
+	for _, want := range []string{
+		year + "-11-18 09:30:01.123 E/AndroidRuntime(1234): boom",
+		"\tat com.demo.Main.run(Main.java:1)",
+	} {
+		if !strings.Contains(copied, want) {
+			t.Fatalf("the clipboard has no %q; it holds %q", want, copied)
+		}
+	}
+}
+
+func TestLogcatLineTextKeepsTheWholeEntry(t *testing.T) {
+	entry := core.LogcatEntry{
+		At: time.Date(2026, 11, 18, 9, 30, 1, 123e6, time.UTC), Level: core.LogcatFatal,
+		PID: 42, TID: 43, Tag: "demo", Text: "first\n\tat frame",
+	}
+	want := "2026-11-18 09:30:01.123 F/demo(42): first\n\tat frame"
+	if got := logcatLineText(entry); got != want {
+		t.Fatalf("logcatLineText() = %q, want %q", got, want)
+	}
+}
+
+func TestLogcatPageOpensWithRowsWhilePaused(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	// A pause that outlives a visit must still show what the stream already
+	// holds: an empty table under 「已暂停」 reads as lost data.
+	vm.Logcat = &logcatState{Follow: true, Paused: true}
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.123  1  1 I Tag: kept while paused\n")
+	waitForText(t, tt, "kept while paused")
+	if !tt.HasText("已暂停") {
+		t.Fatalf("the page does not say it is paused; texts = %v", tt.Texts())
 	}
 }

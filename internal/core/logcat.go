@@ -421,6 +421,19 @@ func (s *LogcatStream) appendLineLocked(line string) {
 // pushLocked appends one parsed line and evicts the oldest when the ring is
 // full.
 func (s *LogcatStream) pushLocked(entry LogcatEntry) {
+	// One log call that carried newlines arrives as one record per line, all
+	// stamped with the same time, pid, tid, level and tag. Folding them back
+	// into one entry is what keeps a stack trace a stack trace instead of
+	// dozens of rows.
+	if n := len(s.entries); n > 0 {
+		if last := &s.entries[n-1]; last.At.Equal(entry.At) && last.PID == entry.PID &&
+			last.TID == entry.TID && last.Level == entry.Level && last.Tag == entry.Tag {
+			last.Text += "\n" + entry.Text
+			s.received++
+			s.version++
+			return
+		}
+	}
 	s.seq++
 	entry.Seq = s.seq
 	s.entries = append(s.entries, entry)

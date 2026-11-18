@@ -504,7 +504,7 @@ func shotLogcatStream(t *testing.T) (*ViewModel, *logcatRunner) {
 // tags, one multi-line crash and one long message.
 const shotLogcatLines = `11-18 09:30:01.123  4100  4123 I ActivityManager: Start proc 4100:com.demo.camera/u0a132 for activity
 11-18 09:30:01.180  4100  4140 D OpenGLRenderer: setSurface called
-11-18 09:30:01.240  4100  4140 I Choreographer: Skipped 3 frames! The application may be doing too much work
+11-18 09:30:01.240  4100  4140 I Choreographer: Skipped 3 frames! The application may be doing too much work on its main thread: the frame took 47 ms and the deadline was missed by 19 ms, which is a long message on purpose so the column has to wrap it instead of cutting it off
 11-18 09:30:01.300  4100  4141 W demo.camera: preview callback returned 30 fps, dropping frames
 11-18 09:30:01.360  4200  4200 E AndroidRuntime: FATAL EXCEPTION: main
 11-18 09:30:01.360  4200  4200 E AndroidRuntime:   at com.demo.camera.Main.onResume(Main.java:42)

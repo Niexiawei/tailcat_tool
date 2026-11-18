@@ -188,7 +188,13 @@ func (vm *ViewModel) ensureLogcatStream(f *logcatState) {
 // paused page keeps the rows it shows: the point of pausing is that the reader
 // does not move.
 func (vm *ViewModel) refreshLogcatRows(f *logcatState) {
-	if f.stream == nil || f.Paused {
+	if f.stream == nil {
+		return
+	}
+	// A paused page keeps the rows it shows, but a page that was paused before
+	// it ever read the buffer still has to read it once: an empty table under
+	// 「已暂停」 looks like a page that lost its lines.
+	if f.Paused && f.version != 0 {
 		return
 	}
 	filterKey := string(f.Filter.MinLevel) + "\x00" + f.Filter.Tags + "\x00" + f.Filter.Terms
@@ -331,7 +337,8 @@ func (vm *ViewModel) logcatBox(c *ui.Context, f *logcatState) {
 }
 
 // logcatColumns is the table's column layout: the timestamp and the tag need
-// the most room, the level and the pid the least.
+// the most room, the level and the pid the least. The message takes whatever is
+// left and the copy button closes the row.
 func logcatColumns() []ui.TableColumn {
 	return []ui.TableColumn{
 		{ID: "at", Title: "时间", Width: 150},
@@ -339,6 +346,7 @@ func logcatColumns() []ui.TableColumn {
 		{ID: "pid", Title: "PID", Width: 64},
 		{ID: "tag", Title: "标签", Width: 160},
 		{ID: "text", Title: "内容"},
+		{ID: "copy", Title: "", Width: 44},
 	}
 }
 
@@ -354,6 +362,12 @@ func (vm *ViewModel) logcatTable(c *ui.Context, f *logcatState) {
 		Label: "Logcat 表", Grow: true,
 	}, func(row, col int) {
 		entry := rows[row]
+		if col == len(logcatColumns())-1 {
+			if components.IconButton(c, lucide.Copy(), "复制这一行", components.IconButtonCompact).Clicked() {
+				vm.copyLogcatLine(entry)
+			}
+			return
+		}
 		ui.Row(c).FillWidth().MinWidth(0).Children(func() {
 			switch col {
 			case 0:
@@ -365,10 +379,29 @@ func (vm *ViewModel) logcatTable(c *ui.Context, f *logcatState) {
 			case 3:
 				components.Tooltip(c, components.Text(c, entry.Tag).FontSize(11).SingleLine(), entry.Tag)
 			default:
-				components.Tooltip(c, components.Text(c, entry.Text).FontSize(11).SingleLine(), entry.Text)
+				// The message wraps to as many lines as it needs: a stack trace
+				// read one truncated line at a time is useless, and a tooltip is
+				// not how you read a crash.
+				components.Text(c, entry.Text).FontSize(11)
 			}
 		})
 	})
+}
+
+// copyLogcatLine puts one entry on the clipboard in the same shape the export
+// writes, so a line can be pasted into a bug report as it stands.
+func (vm *ViewModel) copyLogcatLine(entry core.LogcatEntry) {
+	if err := writeClipboard(logcatLineText(entry)); err != nil {
+		vm.FailText("复制失败：" + err.Error())
+		return
+	}
+	vm.Notify("已复制这一行")
+}
+
+// logcatLineText is one entry as text: the export's line and the clipboard's.
+func logcatLineText(entry core.LogcatEntry) string {
+	return entry.At.Format("2006-01-02 15:04:05.000") + " " +
+		string(entry.Level) + "/" + entry.Tag + "(" + itoa(entry.PID) + "): " + entry.Text
 }
 
 // logcatTone is the badge colour: errors and fatals red, warnings yellow.
@@ -464,15 +497,7 @@ func (vm *ViewModel) exportLogcat(f *logcatState) {
 func logcatExportText(rows []core.LogcatEntry) string {
 	var b strings.Builder
 	for _, entry := range rows {
-		b.WriteString(entry.At.Format("2006-01-02 15:04:05.000"))
-		b.WriteString(" ")
-		b.WriteString(string(entry.Level))
-		b.WriteString("/")
-		b.WriteString(entry.Tag)
-		b.WriteString("(")
-		b.WriteString(itoa(entry.PID))
-		b.WriteString("): ")
-		b.WriteString(entry.Text)
+		b.WriteString(logcatLineText(entry))
 		b.WriteString("\n")
 	}
 	return b.String()
@@ -493,9 +518,11 @@ func logcatStatusText(f *logcatState) string {
 	case f.err != "":
 		return "日志流无法启动：" + f.err
 	}
-	text := "已接收 " + itoa(int(f.received)) + " 行 · 显示 " + itoa(len(f.rows)) + " 行"
+	// 行 is what the device printed, 条 is what the page shows: one call can
+	// print several lines and they are one entry.
+	text := "已接收 " + itoa(int(f.received)) + " 行 · 显示 " + itoa(len(f.rows)) + " 条"
 	if f.dropped > 0 {
-		text += " · 缓冲已满，丢弃 " + itoa(int(f.dropped)) + " 行"
+		text += " · 缓冲已满，丢弃 " + itoa(int(f.dropped)) + " 条"
 	}
 	if f.Paused {
 		text += " · 已暂停"
