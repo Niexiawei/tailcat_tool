@@ -22,6 +22,8 @@ type logcatRunner struct {
 	feeds  []func(string)
 	procs  []*core.Proc
 	dones  []chan int
+	// startErr makes every Start fail, for the page's "cannot start" state.
+	startErr error
 }
 
 func (r *logcatRunner) Start(_ context.Context, c core.Command, onOutput func(string)) (*core.Proc, error) {
@@ -30,6 +32,9 @@ func (r *logcatRunner) Start(_ context.Context, c core.Command, onOutput func(st
 	done := make(chan int, 1)
 	proc := &core.Proc{Done: done}
 	r.starts = append(r.starts, c)
+	if r.startErr != nil {
+		return nil, r.startErr
+	}
 	r.feeds = append(r.feeds, onOutput)
 	r.procs = append(r.procs, proc)
 	r.dones = append(r.dones, done)
@@ -43,6 +48,13 @@ func (r *logcatRunner) Run(_ context.Context, c core.Command, _ func(string)) (c
 		}
 	}
 	return core.Result{}, nil
+}
+
+// attempts is how many streams the page asked for, failures included.
+func (r *logcatRunner) attempts() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.starts)
 }
 
 // logcatCalls keeps only the streaming commands.
@@ -484,5 +496,50 @@ func TestLogcatExportRefusesAnEmptyTable(t *testing.T) {
 	}
 	if !tt.HasText("没有可导出的行") {
 		t.Fatalf("an empty export says nothing; texts = %v", tt.Texts())
+	}
+}
+
+func TestLogcatPageDoesNotRetryAFailedStart(t *testing.T) {
+	runner := &logcatRunner{startErr: core.Error("adb 不可用")}
+	vm := newBlockingViewModel(t, runner)
+	profile := vm.Manager.Profiles()[0]
+	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	t.Cleanup(func() { vm.Manager.Disconnect(context.Background(), profile.ID) })
+	vm.OpenLogcat()
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	waitForText(t, tt, "日志流无法启动：adb 不可用")
+	if got := runner.attempts(); got != 1 {
+		t.Fatalf("started %d streams, want one attempt", got)
+	}
+	for i := 0; i < 5; i++ {
+		tt.Frame()
+	}
+	if got := runner.attempts(); got != 1 {
+		t.Fatalf("a failed start was retried %d times; the user did not ask for that", got)
+	}
+	if err := tt.Click("重新开始"); err != nil {
+		t.Fatalf("Click(重新开始) error: %v", err)
+	}
+	tt.Frame()
+	if got := runner.attempts(); got != 2 {
+		t.Fatalf("restarting made %d attempts, want a second one", got)
+	}
+}
+
+func TestCloseLogcatStopsAHiddenWindowStream(t *testing.T) {
+	vm, _ := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	stream := vm.Logcat.stream
+	if stream == nil {
+		t.Fatal("the page never started its stream")
+	}
+	// Closing the window hides it, and a hidden window draws no frames: the
+	// page cannot notice it was left, so the stream has to be stopped here.
+	vm.CloseLogcat()
+	if !stream.Closed() {
+		t.Fatal("the stream kept reading the device while the window was hidden")
 	}
 }

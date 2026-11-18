@@ -92,6 +92,15 @@ func (vm *ViewModel) settleLogcat() {
 	}
 }
 
+// CloseLogcat stops the streaming page's logcat. The window calls it when it is
+// closed: a hidden window draws no frames, so the page cannot notice that the
+// user left and would keep reading the device channel.
+func (vm *ViewModel) CloseLogcat() {
+	if vm.Logcat != nil {
+		vm.stopLogcatStream(vm.Logcat)
+	}
+}
+
 // stopLogcatStream closes whatever is running for the page.
 func (vm *ViewModel) stopLogcatStream(f *logcatState) {
 	stream := f.stream
@@ -157,6 +166,12 @@ func (vm *ViewModel) ensureLogcatStream(f *logcatState) {
 		return
 	}
 	if f.stream != nil && !f.stream.Closed() {
+		return
+	}
+	// One attempt per user action: a start that failed would otherwise be
+	// retried by every frame, spawning adb sixty times a second, and the
+	// message on screen would never sit still long enough to read.
+	if f.err != "" && f.stream == nil {
 		return
 	}
 	f.stream = nil
@@ -303,6 +318,8 @@ func (vm *ViewModel) logcatBox(c *ui.Context, f *logcatState) {
 		switch {
 		case len(f.rows) > 0:
 			vm.logcatTable(c, f)
+		case f.stream == nil && f.err != "":
+			placeholder(c, "日志流没有启动", 16)
 		case f.received > 0 && !f.Paused && logcatFilterActive(f.Filter):
 			placeholder(c, "没有符合筛选条件的日志", 16)
 		case f.exited:
@@ -380,7 +397,8 @@ func (vm *ViewModel) logcatFootRow(c *ui.Context, f *logcatState) {
 			if components.Button(c, "清空缓冲", components.ButtonOutline).Height(26).Clicked() {
 				vm.clearLogcat(f)
 			}
-			if f.exited && components.Button(c, "重新开始", components.ButtonPrimary).Height(26).Clicked() {
+			if (f.exited || (f.stream == nil && f.err != "")) &&
+				components.Button(c, "重新开始", components.ButtonPrimary).Height(26).Clicked() {
 				vm.restartLogcat(f)
 			}
 		})

@@ -630,7 +630,7 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 
 **筛选全在本机**：级别 / 标签 / 关键词都不过设备（不重开进程、不丢行）。代价是 V/D 行照样从设备经 Tailnet 传到本机，一台刷屏设备可能占带宽；真要压带宽，升级路径是给 `StartLogcat` 加 `*:W` 这样的 spec，代价是切换级别会重开进程。
 
-**流的生命周期**：`routedPage` 每帧先 `beginLogcatFrame()`、再 `defer settleLogcat()`；`logcatPage` 一进来就 `logcatDrawn = true`。一帧没画这个页面就说明用户走了，`settleLogcat` 立刻 `Manager.StopLogcat`。**不自动重启**：流结束（设备断开、adb 退出）后页面显示「日志流已结束」与「重新开始」，必须由用户点——断开后偷偷连回去是红线。
+**流的生命周期**：`routedPage` 每帧先 `beginLogcatFrame()`、再 `defer settleLogcat()`；`logcatPage` 一进来就 `logcatDrawn = true`。一帧没画这个页面就说明用户走了，`settleLogcat` 立刻 `Manager.StopLogcat`。关窗口到托盘时没有帧可画，属于同一件事的另一半：`shell.go` 的 `window.OnClosed` 里调 `vm.CloseLogcat()`，否则藏起来的窗口会一直读设备通道。**不自动重启**：流结束（设备断开、adb 退出）后页面显示「日志流已结束」与「重新开始」，必须由用户点——断开后偷偷连回去是红线。
 
 **`-v threadtime` 的年份**：threadtime 不打印年份与时区。解析时用「当前年」，若算出的时间晚于现在 24 小时则减一年（1 月读到的 12 月日志属于刚过去的那年）。续行（不以时间戳开头的缩进行）拼到上一条的正文里；`--------- beginning of main` 这类分隔行丢弃；单行超过 8 KiB 截断并加「（已截断）」，否则一条跑飞的二进制行会把缓冲撑爆。
 

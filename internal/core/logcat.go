@@ -135,31 +135,31 @@ func (s *logcatSplitter) feed(chunk string, emit func(string)) {
 	}
 	s.pending = append(s.pending, chunk...)
 	for {
-		if s.discarding {
-			index := bytes.IndexByte(s.pending, '\n')
-			if index < 0 {
-				s.pending = s.pending[:0]
-				return
-			}
-			s.pending = append(s.pending[:0], s.pending[index+1:]...)
-			s.discarding = false
-			continue
-		}
 		index := bytes.IndexByte(s.pending, '\n')
 		if index < 0 {
-			if len(s.pending) > logcatMaxLineBytes {
+			// A line that never ends: keep what fits, say it was cut, and
+			// swallow the rest up to its newline.
+			if !s.discarding && len(s.pending) > logcatMaxLineBytes {
 				emit(logcatTruncate(s.pending))
 				s.pending = s.pending[:0]
 				s.discarding = true
 			}
 			return
 		}
-		line := strings.TrimSuffix(string(s.pending[:index]), "\r")
-		s.pending = append(s.pending[:0], s.pending[index+1:]...)
-		if len(line) > logcatMaxLineBytes {
-			line = string(logcatTruncate([]byte(line)))
+		line := s.pending[:index]
+		// Reslice rather than copy: one burst can carry hundreds of lines, and
+		// shifting the rest down once per line is quadratic. The consumed
+		// prefix is simply left behind until the buffer is grown again.
+		s.pending = s.pending[index+1:]
+		if s.discarding {
+			s.discarding = false
+			continue
 		}
-		emit(line)
+		text := strings.TrimSuffix(string(line), "\r")
+		if len(text) > logcatMaxLineBytes {
+			text = string(logcatTruncate([]byte(text)))
+		}
+		emit(text)
 	}
 }
 
