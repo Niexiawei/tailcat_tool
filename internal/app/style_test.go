@@ -142,3 +142,32 @@ func TestNoTabsInsideDialogs(t *testing.T) {
 		}
 	}
 }
+
+// TestNoOfficialOrMapWording pins the vocabulary the user asked for: this app
+// manages DERP nodes, so nothing user-visible calls itself 官方 (the default
+// nodes are tailcat's, not an authority this app speaks for) and a derpmap is a
+// JSON format, not a 地图.
+func TestNoOfficialOrMapWording(t *testing.T) {
+	forbidden := []string{"官方", "DERP 地图"}
+	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, word := range forbidden {
+			if strings.Contains(string(source), word) {
+				t.Errorf("%s still says %q; call it 默认节点 or DERP 节点", path, word)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Walk() error: %v", err)
+	}
+}

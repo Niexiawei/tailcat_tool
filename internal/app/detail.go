@@ -52,7 +52,7 @@ func (vm *ViewModel) routedPage(c *ui.Context) {
 			vm.logsPage(c)
 			return
 		case r.Match(DerpRoute):
-			r.Title("DERP 地图")
+			r.Title("DERP 节点")
 			vm.derpListPage(c)
 			return
 		case r.Match(DerpRoute + "/{id}"):
@@ -311,7 +311,7 @@ func orPlaceholder(value, fallback string) string {
 
 func relayLabel(vm *ViewModel, profile core.Profile) string {
 	if profile.RelaySource == "" {
-		return "官方默认节点"
+		return "默认节点"
 	}
 	for _, preset := range vm.Manager.RelayPresets() {
 		if preset.Source == profile.RelaySource {

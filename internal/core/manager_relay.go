@@ -54,11 +54,11 @@ func (m *Manager) DeleteRelayPreset(id uuid.UUID) error {
 		}
 	}
 	if index < 0 {
-		return Error("没有找到这个 DERP 地图，它可能已被删除")
+		return Error("没有找到这个 DERP 节点，它可能已被删除")
 	}
 	preset := m.relayPresets[index]
 	if users := m.relayUsersLocked(preset.Source); len(users) > 0 {
-		return Errorf("有 %d 台设备正在使用「%s」，请先把它们改用其他 DERP 地图", len(users), preset.Name)
+		return Errorf("有 %d 台设备正在使用「%s」，请先把它们改用其他 DERP 节点", len(users), preset.Name)
 	}
 
 	updated := make([]RelayPreset, 0, len(m.relayPresets)-1)
@@ -94,7 +94,7 @@ func (m *Manager) RelayMapPreview(ctx context.Context, source string) (RelayMapP
 		return RelayMapPreview{}, err
 	}
 	if cfg.IsOfficial() {
-		return RelayMapPreview{}, Error("官方默认地图由 tailcat 提供，这里没有可预览的副本")
+		return RelayMapPreview{}, Error("默认节点由 tailcat 提供，这里没有可预览的副本")
 	}
 	sourceKey, kind := cfg.Source, cfg.Kind
 	if cfg.Kind == RelayURL {

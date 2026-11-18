@@ -87,7 +87,7 @@ func TestDetailRows(t *testing.T) {
 	tt := ui.NewTester(vm.ContentView, 900, 700)
 	for _, want := range []string{
 		"本地入口", "远端端口", "DERP 中继", "链路", "设备型号", "设备代号",
-		"Android", "设备序列号", "Shell 权限", "官方默认节点", "未探测",
+		"Android", "设备序列号", "Shell 权限", "默认节点", "未探测",
 		"探测链路", "刷新信息", "设备操作",
 	} {
 		if !tt.HasText(want) {

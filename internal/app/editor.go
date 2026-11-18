@@ -88,7 +88,7 @@ func (in EditorInput) Validate() (EditorValues, error) {
 	if in.RelayTab != 0 {
 		out.RelaySource = strings.TrimSpace(in.RelaySource)
 		if out.RelaySource == "" {
-			return out, core.Error("请填写 DERP JSON 链接或内容，或选择默认官方节点")
+			return out, core.Error("请填写 DERP JSON 链接或内容，或选择默认节点")
 		}
 	}
 	return out, nil
@@ -191,7 +191,7 @@ func (vm *ViewModel) EditorView(c *ui.Context) {
 				field(c, "远端 ADB 端口", &vm.EditorDraft.RemotePort, false)
 				ui.Column(c).Gap(3).Children(func() {
 					components.Text(c, "DERP 中继").FontSize(11)
-					segmentedChoice(c, &vm.EditorDraft.RelayTab, "官方默认", "自定义")
+					segmentedChoice(c, &vm.EditorDraft.RelayTab, "默认节点", "自定义")
 					if vm.EditorDraft.RelayTab == 1 {
 						vm.relaySourceFields(c)
 					}

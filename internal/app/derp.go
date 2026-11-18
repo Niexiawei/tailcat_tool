@@ -52,14 +52,14 @@ func (vm *ViewModel) derpListPage(c *ui.Context) {
 	theme := c.Theme()
 	ui.Column(c).Fill().Padding(20).Gap(14).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			if actionButton(c, lucide.Plus, "新建 DERP 地图", components.ButtonPrimary).Clicked() {
+			if actionButton(c, lucide.Plus, "新建 DERP 节点", components.ButtonPrimary).Clicked() {
 				vm.openDerpEditor(&DerpEditorDraft{Kind: "json"})
 			}
 			components.Text(c, "预设只影响之后选择它的设备").FontSize(11).TextColor(theme.TextMuted)
 		})
 		ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).FillWidth().Gap(16).Children(func() {
-				vm.derpOfficialSection(c)
+				vm.derpDefaultSection(c)
 				vm.derpPresetSection(c)
 				vm.derpHistorySection(c)
 			})
@@ -67,14 +67,14 @@ func (vm *ViewModel) derpListPage(c *ui.Context) {
 	})
 }
 
-// derpOfficialSection is the map tailcat ships. It has no local source, so it
-// offers no detail, edit or delete action: pretending otherwise would show a
-// copy that is not the map devices get.
-func (vm *ViewModel) derpOfficialSection(c *ui.Context) {
+// derpDefaultSection is the node list tailcat itself uses. It has no local
+// source, so it offers no detail, edit or delete action: pretending otherwise
+// would show a copy that is not what devices get.
+func (vm *ViewModel) derpDefaultSection(c *ui.Context) {
 	theme := c.Theme()
-	components.Text(c, "官方默认").FontSize(13).Bold()
-	// A direct-ADB device has no DERP map at all, so counting it here would say
-	// the official map is in use when nothing is connected through it.
+	components.Text(c, "默认节点").FontSize(13).Bold()
+	// A direct-ADB device has no DERP source at all, so counting it here would
+	// say the default nodes are in use when nothing is connected through them.
 	count := 0
 	for _, profile := range vm.Manager.AllProfiles() {
 		if !profile.DirectADB && profile.RelaySource == "" {
@@ -88,12 +88,13 @@ func (vm *ViewModel) derpOfficialSection(c *ui.Context) {
 	ui.Column(c).FillWidth().Gap(2).Padding(theme.Space(1.5), theme.Space(2)).
 		Border(1, theme.Border).Radius(theme.Radius).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			components.Text(c, "官方默认节点").Bold()
+			components.Text(c, "默认节点").Bold()
 			components.Badge(c, "内置", components.BadgeOptions{Tone: components.BadgeNeutral})
-			// Naming the map is the only way to answer "官方默认是哪一个": it is
-			// tailcat's own file, fetched by tailcat, not a map this app ships.
-			components.Tooltip(c, components.Text(c, core.OfficialRelayURL).FontSize(11).SingleLine(), core.OfficialRelayURL).Grow(1)
-			components.Text(c, "tailcat 内置公共地图").FontSize(11).TextColor(theme.TextMuted)
+			// Naming the file is the only way to answer "which nodes are the
+			// default": it belongs to tailcat, fetched by tailcat, and this app
+			// ships no copy of it.
+			components.Tooltip(c, components.Text(c, core.DefaultNodeListURL).FontSize(11).SingleLine(), core.DefaultNodeListURL).Grow(1)
+			components.Text(c, "tailcat 提供，本应用不缓存").FontSize(11).TextColor(theme.TextMuted)
 			components.Text(c, usage).FontSize(11).TextColor(theme.TextMuted)
 		})
 	})
@@ -102,10 +103,10 @@ func (vm *ViewModel) derpOfficialSection(c *ui.Context) {
 // derpPresetSection lists the presets the user saved.
 func (vm *ViewModel) derpPresetSection(c *ui.Context) {
 	theme := c.Theme()
-	components.Text(c, "DERP 地图（预设）").FontSize(13).Bold()
+	components.Text(c, "DERP 节点（预设）").FontSize(13).Bold()
 	presets := vm.Manager.RelayPresets()
 	if len(presets) == 0 {
-		components.Text(c, "还没有保存的 DERP 地图").FontSize(11).TextColor(theme.TextMuted)
+		components.Text(c, "还没有保存的 DERP 节点").FontSize(11).TextColor(theme.TextMuted)
 		return
 	}
 	components.Table(c, &vm.DerpTable, derpColumns(), func() {
@@ -442,9 +443,9 @@ func truncateUTF8(value string, limit int) string {
 
 func (vm *ViewModel) missingDerpPage(c *ui.Context) {
 	ui.Column(c).Fill().Center().Gap(8).Children(func() {
-		components.Text(c, "DERP 地图不存在").FontSize(18).Bold()
+		components.Text(c, "DERP 节点不存在").FontSize(18).Bold()
 		components.Text(c, "它可能已被删除。").FontSize(11)
-		if components.Button(c, "返回 DERP 地图", components.ButtonPrimary).Clicked() {
+		if components.Button(c, "返回 DERP 节点", components.ButtonPrimary).Clicked() {
 			vm.OpenDerp()
 		}
 	})
@@ -576,7 +577,7 @@ func (vm *ViewModel) DerpEditorView(c *ui.Context) {
 	}
 	theme := c.Theme()
 	open := true
-	components.Dialog(c, &open, components.DialogOptions{Label: "DERP 地图"}, func(panel ui.Element) {
+	components.Dialog(c, &open, components.DialogOptions{Label: "DERP 节点"}, func(panel ui.Element) {
 		panel.Padding(20).Gap(10).Width(470)
 		panel.Children(func() {
 			draft := vm.DerpEditor
@@ -584,15 +585,15 @@ func (vm *ViewModel) DerpEditorView(c *ui.Context) {
 				open = false
 				return
 			}
-			title := "新建 DERP 地图"
+			title := "新建 DERP 节点"
 			if draft.ID != nil {
-				title = "编辑 DERP 地图"
+				title = "编辑 DERP 节点"
 			}
 			components.Text(c, title).FontSize(18).Bold()
 			if draft.ID != nil {
 				if preset, found := vm.derpPreset(*draft.ID); found {
 					if users := len(vm.Manager.RelayPresetUsage(preset.ID)); users > 0 {
-						components.Text(c, "这台地图正被 "+itoa(users)+" 台设备使用。修改只影响之后选择它的设备；已保存的设备仍用原来的来源。").
+						components.Text(c, "这个节点正被 "+itoa(users)+" 台设备使用。修改只影响之后选择它的设备；已保存的设备仍用原来的来源。").
 							FontSize(11).TextColor(theme.Warning)
 					}
 				}
@@ -617,10 +618,10 @@ func (vm *ViewModel) DerpEditorView(c *ui.Context) {
 				components.Text(c, "内容").FontSize(11)
 				if draft.Kind == "url" {
 					components.TextBox(c, &draft.Content, components.TextBoxOptions{}).
-						Label("DERP 地图链接").Placeholder("https://example.com/derpmap.json")
+						Label("DERP 节点链接").Placeholder("https://example.com/derpmap.json")
 				} else {
 					components.TextBox(c, &draft.Content, components.TextBoxOptions{Multiline: true}).
-						Label("DERP 地图 JSON").Lines(12, 12)
+						Label("DERP 节点 JSON").Lines(12, 12)
 				}
 			})
 			if draft.Error != "" {
@@ -660,7 +661,7 @@ func (vm *ViewModel) saveDerpDraft() {
 		return
 	}
 	vm.DerpEditor = nil
-	vm.Notify("已保存 DERP 地图")
+	vm.Notify("已保存 DERP 节点")
 }
 
 // DerpDeleteView asks before removing a preset. The refusal comes from core and
@@ -672,7 +673,7 @@ func (vm *ViewModel) DerpDeleteView(c *ui.Context) {
 	}
 	theme := c.Theme()
 	open := true
-	components.Dialog(c, &open, components.DialogOptions{Label: "删除 DERP 地图"}, func(panel ui.Element) {
+	components.Dialog(c, &open, components.DialogOptions{Label: "删除 DERP 节点"}, func(panel ui.Element) {
 		panel.Padding(20).Gap(10).Width(440)
 		panel.Children(func() {
 			preset := vm.DerpConfirmDelete
@@ -681,7 +682,7 @@ func (vm *ViewModel) DerpDeleteView(c *ui.Context) {
 				return
 			}
 			components.Text(c, "删除「"+preset.Name+"」？").FontSize(18).Bold()
-			components.Text(c, "删除后不能恢复；正在被设备使用的地图不会被删除。").FontSize(11).TextColor(theme.TextMuted)
+			components.Text(c, "删除后不能恢复；正在被设备使用的节点不会被删除。").FontSize(11).TextColor(theme.TextMuted)
 			if vm.DerpDeleteError != "" {
 				components.Text(c, vm.DerpDeleteError).FontSize(11).TextColor(theme.Warning)
 			}
@@ -696,7 +697,7 @@ func (vm *ViewModel) DerpDeleteView(c *ui.Context) {
 						vm.DerpDeleteError = err.Error()
 						return
 					}
-					vm.Notify("已删除 DERP 地图")
+					vm.Notify("已删除 DERP 节点")
 					vm.DerpConfirmDelete = nil
 					vm.DerpDeleteError = ""
 					open = false

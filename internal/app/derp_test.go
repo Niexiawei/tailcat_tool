@@ -63,29 +63,28 @@ func buttonNames(tt *ui.Tester) map[string]int {
 	return counts
 }
 
-func TestDerpListShowsOfficialPresetsAndHistory(t *testing.T) {
+func TestDerpListShowsDefaultPresetsAndHistory(t *testing.T) {
 	vm, _ := newDerpViewModel(t)
 	tt := ui.NewTester(vm.ContentView, 1000, 800)
 	for _, want := range []string{
-		"DERP 地图",
-		"官方默认",
-		"官方默认节点",
-		"tailcat 内置公共地图",
+		"DERP 节点",
+		"默认节点",
+		"tailcat 提供，本应用不缓存",
 		"公司自建",
 		"最近用过",
 		"relay.example.com",
-		"新建 DERP 地图",
+		"新建 DERP 节点",
 	} {
 		if !tt.HasText(want) {
 			t.Fatalf("the DERP list lacks %q; texts = %v", want, tt.Texts())
 		}
 	}
-	if tt.HasText("还没有保存的 DERP 地图") {
+	if tt.HasText("还没有保存的 DERP 节点") {
 		t.Fatalf("the empty state shows with one preset saved; texts = %v", tt.Texts())
 	}
 }
 
-func TestDerpListSaysHowManyDevicesUseEachMap(t *testing.T) {
+func TestDerpListSaysHowManyDevicesUseEachNode(t *testing.T) {
 	vm, preset := newDerpViewModel(t)
 	// The empty relay source is the official map, so E245 uses that one.
 	if _, err := vm.Manager.SaveDevice(core.SaveDeviceRequest{
@@ -107,7 +106,7 @@ func TestDerpListSaysHowManyDevicesUseEachMap(t *testing.T) {
 	}
 }
 
-func TestOfficialRowOffersNoEditOrDelete(t *testing.T) {
+func TestDefaultRowOffersNoEditOrDelete(t *testing.T) {
 	vm, _ := newDerpViewModel(t)
 	tt := ui.NewTester(vm.ContentView, 1000, 800)
 	buttons := buttonNames(tt)
@@ -128,7 +127,7 @@ func TestDerpListEmptyState(t *testing.T) {
 	vm := newTestViewModel(t)
 	vm.OpenDerp()
 	tt := ui.NewTester(vm.ContentView, 1000, 800)
-	if !tt.HasText("还没有保存的 DERP 地图") {
+	if !tt.HasText("还没有保存的 DERP 节点") {
 		t.Fatalf("no empty state without presets; texts = %v", tt.Texts())
 	}
 }
@@ -319,13 +318,13 @@ func focusField(t *testing.T, tt *ui.Tester, name string) {
 func TestDerpEditorSavesAnInlineMap(t *testing.T) {
 	vm := newTestViewModel(t)
 	vm.OpenDerp()
-	tt := clickInList(t, vm, "新建 DERP 地图")
-	if !tt.HasText("新建 DERP 地图") {
+	tt := clickInList(t, vm, "新建 DERP 节点")
+	if !tt.HasText("新建 DERP 节点") {
 		t.Fatalf("the editor did not open; texts = %v", tt.Texts())
 	}
 	focusField(t, tt, "名称")
 	tt.Type("公司自建")
-	focusField(t, tt, "DERP 地图 JSON")
+	focusField(t, tt, "DERP 节点 JSON")
 	tt.Type(derpTestMap)
 	if err := tt.Click("保存"); err != nil {
 		t.Fatalf("Click() error: %v", err)
@@ -346,10 +345,10 @@ func TestDerpEditorSavesAnInlineMap(t *testing.T) {
 func TestDerpEditorRejectsInvalidJSON(t *testing.T) {
 	vm := newTestViewModel(t)
 	vm.OpenDerp()
-	tt := clickInList(t, vm, "新建 DERP 地图")
+	tt := clickInList(t, vm, "新建 DERP 节点")
 	focusField(t, tt, "名称")
 	tt.Type("坏的")
-	focusField(t, tt, "DERP 地图 JSON")
+	focusField(t, tt, "DERP 节点 JSON")
 	tt.Type(`{"Regions":{}}`)
 	if err := tt.Click("保存"); err != nil {
 		t.Fatalf("Click() error: %v", err)
@@ -377,7 +376,7 @@ func TestDerpEditorWarnsWhenThePresetIsInUse(t *testing.T) {
 		t.Fatalf("Click() error: %v", err)
 	}
 	tt := ui.NewTester(vm.ContentView, 1000, 800)
-	const want = "这台地图正被 1 台设备使用。修改只影响之后选择它的设备；已保存的设备仍用原来的来源。"
+	const want = "这个节点正被 1 台设备使用。修改只影响之后选择它的设备；已保存的设备仍用原来的来源。"
 	if !tt.HasText(want) {
 		t.Fatalf("editing a preset in use does not warn; texts = %v", tt.Texts())
 	}
@@ -423,7 +422,7 @@ func TestDerpDeleteRefusalIsShownInTheDialog(t *testing.T) {
 	if vm.DerpConfirmDelete == nil {
 		t.Fatal("the dialog closed instead of showing the refusal")
 	}
-	if !tt.HasText("有 1 台设备正在使用「公司自建」，请先把它们改用其他 DERP 地图") {
+	if !tt.HasText("有 1 台设备正在使用「公司自建」，请先把它们改用其他 DERP 节点") {
 		t.Fatalf("the refusal is not shown in the dialog; texts = %v", tt.Texts())
 	}
 	if len(vm.Manager.RelayPresets()) != 1 {
@@ -556,9 +555,9 @@ func click(t *testing.T, tt *ui.Tester, name string) {
 	tt.Frame()
 }
 
-// TestOfficialRowCountsOnlyTailcatDevices pins that a direct-ADB device, which
+// TestDefaultRowCountsOnlyTailcatDevices pins that a direct-ADB device, which
 // has no DERP map at all, is not counted as a user of the official one.
-func TestOfficialRowCountsOnlyTailcatDevices(t *testing.T) {
+func TestDefaultRowCountsOnlyTailcatDevices(t *testing.T) {
 	creds := core.NewMemoryCredentialStore()
 	m := core.NewManager(core.ManagerOptions{
 		Configuration: core.Configuration{
@@ -591,13 +590,13 @@ func TestOfficialRowCountsOnlyTailcatDevices(t *testing.T) {
 	}
 }
 
-// TestOfficialRowNamesTheTailcatDefaultMap pins the answer to "which map is the
-// default": the user cannot judge a row that only says 内置公共地图.
-func TestOfficialRowNamesTheTailcatDefaultMap(t *testing.T) {
+// TestDefaultRowNamesTheTailcatDefaultMap pins the answer to "which nodes are
+// the default": the user cannot judge a row that only says 内置.
+func TestDefaultRowNamesTheTailcatNodes(t *testing.T) {
 	vm := newTestViewModel(t)
 	vm.OpenDerp()
 	tt := ui.NewTester(vm.ContentView, 1000, 800)
-	if !tt.HasText(core.OfficialRelayURL) {
+	if !tt.HasText(core.DefaultNodeListURL) {
 		t.Fatalf("the official row does not name its map; texts = %v", tt.Texts())
 	}
 }

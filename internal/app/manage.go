@@ -15,7 +15,7 @@ import (
 // The cache and DERP pages add their own rows here once they exist; today the
 // group holds the log page only.
 func (vm *ViewModel) manageEntries(c *ui.Context) {
-	vm.manageEntry(c, lucide.Map, "DERP 地图", DerpRoute)
+	vm.manageEntry(c, lucide.Server, "DERP 节点", DerpRoute)
 	vm.manageEntry(c, lucide.ScrollText, "日志", LogsRoute)
 }
 
@@ -49,7 +49,7 @@ func (vm *ViewModel) managePageTitle(path string) (string, bool) {
 	case LogsRoute:
 		return "日志", true
 	case DerpRoute:
-		return "DERP 地图", true
+		return "DERP 节点", true
 	}
 	if rest, ok := strings.CutPrefix(path, DerpRoute+"/"); ok {
 		if id, err := uuid.Parse(rest); err == nil && vm.Manager != nil {
@@ -59,7 +59,7 @@ func (vm *ViewModel) managePageTitle(path string) (string, bool) {
 				}
 			}
 		}
-		return "DERP 地图", true
+		return "DERP 节点", true
 	}
 	return "", false
 }

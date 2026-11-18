@@ -80,7 +80,7 @@ func TestDeleteRelayPresetRefusesWhenADeviceUsesIt(t *testing.T) {
 	if err == nil {
 		t.Fatal("deleted a preset two devices still use")
 	}
-	want := "有 2 台设备正在使用「公司自建」，请先把它们改用其他 DERP 地图"
+	want := "有 2 台设备正在使用「公司自建」，请先把它们改用其他 DERP 节点"
 	if err.Error() != want {
 		t.Fatalf("error = %q, want %q", err.Error(), want)
 	}

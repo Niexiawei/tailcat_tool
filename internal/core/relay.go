@@ -16,10 +16,10 @@ import (
 	"tailscale.com/tailcfg"
 )
 
-// OfficialRelayURL is the DERP map tailcat itself uses when a device has no
-// source of its own. Showing it answers "which map is 官方默认"; the map behind
-// it still belongs to tailcat and is not cached here.
-const OfficialRelayURL = tailcat.DefaultDERPMapURL
+// DefaultNodeListURL is the node list tailcat itself uses when a device has no
+// source of its own. Showing it answers "which nodes are the default"; the file
+// behind it still belongs to tailcat and is not cached here.
+const DefaultNodeListURL = tailcat.DefaultDERPMapURL
 
 // maxRelayConfigSize bounds a DERP map, in bytes, before and after cleaning.
 const maxRelayConfigSize = 131072
@@ -184,7 +184,7 @@ var relayHTTPClient = &http.Client{Timeout: 10 * time.Second}
 func fetchRelayMap(ctx context.Context, rawURL string) (RelayConfig, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return RelayConfig{}, Error("下载 DERP 地图失败，请检查网络或链接")
+		return RelayConfig{}, Error("下载 DERP 节点配置失败，请检查网络或链接")
 	}
 	response, err := relayHTTPClient.Do(request)
 	if err != nil {
@@ -192,7 +192,7 @@ func fetchRelayMap(ctx context.Context, rawURL string) (RelayConfig, error) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return RelayConfig{}, Errorf("下载 DERP 地图失败：服务器返回 %d", response.StatusCode)
+		return RelayConfig{}, Errorf("下载 DERP 节点配置失败：服务器返回 %d", response.StatusCode)
 	}
 	// Read one byte past the limit so an oversized body is detected without
 	// buffering all of it.
@@ -201,11 +201,11 @@ func fetchRelayMap(ctx context.Context, rawURL string) (RelayConfig, error) {
 		return RelayConfig{}, relayDownloadError(err)
 	}
 	if len(body) > maxRelayConfigSize {
-		return RelayConfig{}, Error("下载的 DERP 地图超过 128 KiB")
+		return RelayConfig{}, Error("下载的 DERP 节点配置超过 128 KiB")
 	}
 	cfg, err := NormalizeRelay(string(body))
 	if err != nil || cfg.IsOfficial() {
-		return RelayConfig{}, Error("下载的内容不是有效的 DERP 地图")
+		return RelayConfig{}, Error("下载的内容不是有效的 DERP 节点配置")
 	}
 	return cfg, nil
 }
@@ -215,7 +215,7 @@ func fetchRelayMap(ctx context.Context, rawURL string) (RelayConfig, error) {
 func relayDownloadError(err error) error {
 	var netErr net.Error
 	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
-		return Error("下载 DERP 地图超时，请检查网络后重试")
+		return Error("下载 DERP 节点配置超时，请检查网络后重试")
 	}
-	return Error("下载 DERP 地图失败，请检查网络或链接")
+	return Error("下载 DERP 节点配置失败，请检查网络或链接")
 }
