@@ -821,3 +821,44 @@ func TestLogTimelineIsItsOwnScrollArea(t *testing.T) {
 	tt.Frame()
 	waitForText(t, tt, "第79行日志")
 }
+
+// TestLogTimelineKeysDoNotOpenATaskRow pins that the arrow keys only move the
+// choice: a task row opens its output on a click, as a log line does nothing,
+// so walking the timeline with the keyboard must not open dialogs.
+func TestLogTimelineKeysDoNotOpenATaskRow(t *testing.T) {
+	vm, reader, base := logsPageFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	taskID := uuid.New()
+	reader.outputs[taskID] = "output"
+	reader.add(core.TimelineEntry{
+		At: base.Add(-time.Minute), Level: core.LogInfo, Source: core.LogTask,
+		DeviceID: profile.ID, DeviceName: "E245", TaskID: taskID,
+		Text: "adb pull /sdcard/x · 失败",
+	})
+	// A channel line above the task row: clicking it focuses the table and
+	// opens nothing, so the key can then walk down to the task row.
+	reader.add(core.TimelineEntry{
+		At: base.Add(-2 * time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+		DeviceID: profile.ID, DeviceName: "E245", Text: "一行通道日志",
+	})
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	waitForText(t, tt, "一行通道日志")
+	if err := tt.Click("一行通道日志"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	tt.Frame()
+	filter := vm.pageLogFilter()
+	// The channel line sits under the task row, which is the newest; walking up
+	// to the task row must not open its output.
+	tt.KeyDown(ui.KeyUp)
+	tt.Frame()
+	entries, _, _, _, _ := vm.logSnapshot(filter)
+	if filter.selected != 0 || len(entries) == 0 || entries[0].Source != core.LogTask {
+		t.Fatalf("the choice = %d, entries = %d; want the task row", filter.selected, len(entries))
+	}
+	if vm.LogOutput != nil {
+		t.Fatal("moving the choice with the keyboard opened a task's output")
+	}
+}

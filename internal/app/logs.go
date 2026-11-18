@@ -358,30 +358,35 @@ func (vm *ViewModel) logTable(c *ui.Context, f *logFilter, entries []core.Timeli
 	// The row's own identity: two log lines can share time, source and text,
 	// so no combination of those tells them apart.
 	state.Key = func(row int) any { return logRowKey(entries[row], row) }
-	table := tableCard(c, state, logColumns(), len(entries), tableOptions{
+	// A click opens a task's output; the arrow keys only move the choice, so
+	// walking the timeline with the keyboard opens no dialogs.
+	opened := -1
+	tableCard(c, state, logColumns(), len(entries), tableOptions{
 		Label: "日志时间线", Grow: true,
 	}, func(row, col int) {
 		entry := entries[row]
-		switch col {
-		case 0:
-			components.Text(c, entry.At.Format("2006-01-02 15:04:05")).FontSize(11).SingleLine()
-		case 1:
-			components.Badge(c, entry.Level.Label(), components.BadgeOptions{Tone: logLevelTone(entry.Level)})
-		case 2:
-			components.Text(c, entry.Source.Label()).FontSize(11).SingleLine()
-		case 3:
-			components.Text(c, logDeviceCell(entry)).FontSize(11).SingleLine()
-		default:
-			components.Tooltip(c, components.Text(c, entry.Text).FontSize(11).SingleLine(), entry.Text)
+		cell := ui.Row(c).FillWidth().MinWidth(0).Children(func() {
+			switch col {
+			case 0:
+				components.Text(c, entry.At.Format("2006-01-02 15:04:05")).FontSize(11).SingleLine()
+			case 1:
+				components.Badge(c, entry.Level.Label(), components.BadgeOptions{Tone: logLevelTone(entry.Level)})
+			case 2:
+				components.Text(c, entry.Source.Label()).FontSize(11).SingleLine()
+			case 3:
+				components.Text(c, logDeviceCell(entry)).FontSize(11).SingleLine()
+			default:
+				components.Tooltip(c, components.Text(c, entry.Text).FontSize(11).SingleLine(), entry.Text)
+			}
+		})
+		if cell.RowClicked() && opened < 0 {
+			opened = row
 		}
 	})
-	if table.Changed() {
-		row := f.selected
-		// A task row is the only row that opens something; a log line has
-		// nothing behind it.
-		if row >= 0 && row < len(entries) && entries[row].Source == core.LogTask {
-			vm.openLogOutput(entries[row])
-		}
+	// A task row is the only row that opens something; a log line has nothing
+	// behind it.
+	if opened >= 0 && opened < len(entries) && entries[opened].Source == core.LogTask {
+		vm.openLogOutput(entries[opened])
 	}
 }
 
