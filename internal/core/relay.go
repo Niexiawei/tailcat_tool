@@ -12,8 +12,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tailscale/tailcat"
 	"tailscale.com/tailcfg"
 )
+
+// OfficialRelayURL is the DERP map tailcat itself uses when a device has no
+// source of its own. Showing it answers "which map is 官方默认"; the map behind
+// it still belongs to tailcat and is not cached here.
+const OfficialRelayURL = tailcat.DefaultDERPMapURL
 
 // maxRelayConfigSize bounds a DERP map, in bytes, before and after cleaning.
 const maxRelayConfigSize = 131072

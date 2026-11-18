@@ -73,19 +73,28 @@ func (vm *ViewModel) derpListPage(c *ui.Context) {
 func (vm *ViewModel) derpOfficialSection(c *ui.Context) {
 	theme := c.Theme()
 	components.Text(c, "官方默认").FontSize(13).Bold()
+	// A direct-ADB device has no DERP map at all, so counting it here would say
+	// the official map is in use when nothing is connected through it.
 	count := 0
 	for _, profile := range vm.Manager.AllProfiles() {
-		if profile.RelaySource == "" {
+		if !profile.DirectADB && profile.RelaySource == "" {
 			count++
 		}
+	}
+	usage := derpUsageLabel(count)
+	if count == 0 {
+		usage = "没有设备在用"
 	}
 	ui.Column(c).FillWidth().Gap(2).Padding(theme.Space(1.5), theme.Space(2)).
 		Border(1, theme.Border).Radius(theme.Radius).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 			components.Text(c, "官方默认节点").Bold()
 			components.Badge(c, "内置", components.BadgeOptions{Tone: components.BadgeNeutral})
-			components.Text(c, "tailcat 内置公共地图").FontSize(11).TextColor(theme.TextMuted).Grow(1)
-			components.Text(c, derpUsageLabel(count)).FontSize(11).TextColor(theme.TextMuted)
+			// Naming the map is the only way to answer "官方默认是哪一个": it is
+			// tailcat's own file, fetched by tailcat, not a map this app ships.
+			components.Tooltip(c, components.Text(c, core.OfficialRelayURL).FontSize(11).SingleLine(), core.OfficialRelayURL).Grow(1)
+			components.Text(c, "tailcat 内置公共地图").FontSize(11).TextColor(theme.TextMuted)
+			components.Text(c, usage).FontSize(11).TextColor(theme.TextMuted)
 		})
 	})
 }
@@ -590,11 +599,15 @@ func (vm *ViewModel) DerpEditorView(c *ui.Context) {
 			}
 			field(c, "名称", &draft.Name, false)
 
+			// segmentedChoice, not components.Tabs: Tabs keeps the chosen tab as
+			// an Element in its paint callback, and MyGo paints a closing dialog
+			// without rebuilding it, which panics with "element from pass N used
+			// in pass M" on 取消 or 保存.
 			tab := 0
 			if draft.Kind == "url" {
 				tab = 1
 			}
-			components.Tabs(c, &tab, components.TabsSegmented, "JSON", "链接")
+			segmentedChoice(c, &tab, "JSON", "链接")
 			if tab == 1 {
 				draft.Kind = "url"
 			} else {
@@ -604,10 +617,10 @@ func (vm *ViewModel) DerpEditorView(c *ui.Context) {
 				components.Text(c, "内容").FontSize(11)
 				if draft.Kind == "url" {
 					components.TextBox(c, &draft.Content, components.TextBoxOptions{}).
-						Label("内容").Placeholder("https://example.com/derpmap.json")
+						Label("DERP 地图链接").Placeholder("https://example.com/derpmap.json")
 				} else {
 					components.TextBox(c, &draft.Content, components.TextBoxOptions{Multiline: true}).
-						Label("内容").Lines(12, 12)
+						Label("DERP 地图 JSON").Lines(12, 12)
 				}
 			})
 			if draft.Error != "" {

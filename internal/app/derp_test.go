@@ -325,7 +325,7 @@ func TestDerpEditorSavesAnInlineMap(t *testing.T) {
 	}
 	focusField(t, tt, "名称")
 	tt.Type("公司自建")
-	focusField(t, tt, "内容")
+	focusField(t, tt, "DERP 地图 JSON")
 	tt.Type(derpTestMap)
 	if err := tt.Click("保存"); err != nil {
 		t.Fatalf("Click() error: %v", err)
@@ -349,7 +349,7 @@ func TestDerpEditorRejectsInvalidJSON(t *testing.T) {
 	tt := clickInList(t, vm, "新建 DERP 地图")
 	focusField(t, tt, "名称")
 	tt.Type("坏的")
-	focusField(t, tt, "内容")
+	focusField(t, tt, "DERP 地图 JSON")
 	tt.Type(`{"Regions":{}}`)
 	if err := tt.Click("保存"); err != nil {
 		t.Fatalf("Click() error: %v", err)
@@ -495,5 +495,109 @@ func TestDerpDetailScrollsLongMaps(t *testing.T) {
 	}
 	if !scrolled {
 		t.Fatalf("the detail page has no scroll area; access = %v", tt.AccessAll())
+	}
+}
+
+// TestDerpEditorClosesWithoutPanic pins the crash the device editor already
+// documents: components.Tabs keeps the chosen tab as an Element in its paint
+// callback, and MyGo paints a closing dialog without rebuilding it, so the
+// stale Element panics with "element from pass N used in pass M". Every way out
+// of the DERP editor has to survive the closing animation.
+func TestDerpEditorClosesWithoutPanic(t *testing.T) {
+	cases := []struct {
+		name string
+		open func(*ViewModel)
+		act  func(*testing.T, *ui.Tester)
+	}{
+		{"cancel on the JSON tab", func(vm *ViewModel) {
+			vm.OpenDerp()
+			vm.openDerpEditor(&DerpEditorDraft{Name: "a", Kind: "json"})
+		}, func(t *testing.T, tt *ui.Tester) { click(t, tt, "取消") }},
+		{"cancel on the URL tab", func(vm *ViewModel) {
+			vm.OpenDerp()
+			vm.openDerpEditor(&DerpEditorDraft{Name: "a", Kind: "url", Content: "https://relay.example.com/map.json"})
+		}, func(t *testing.T, tt *ui.Tester) {
+			click(t, tt, "JSON")
+			click(t, tt, "链接")
+			click(t, tt, "取消")
+		}},
+		{"save an inline map", func(vm *ViewModel) {
+			vm.OpenDerp()
+			vm.openDerpEditor(&DerpEditorDraft{Name: "公司自建", Kind: "json", Content: derpTestMap})
+		}, func(t *testing.T, tt *ui.Tester) { click(t, tt, "保存") }},
+		{"delete confirmation", func(vm *ViewModel) {
+			vm.OpenDerp()
+			preset := core.RelayPreset{ID: uuid.New(), Name: "公司自建", Source: "https://relay.example.com/map.json"}
+			vm.DerpConfirmDelete = &preset
+		}, func(t *testing.T, tt *ui.Tester) { click(t, tt, "取消") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vm := newTestViewModel(t)
+			tc.open(vm)
+			tt := ui.NewTester(vm.ContentView, 1000, 800)
+			tt.Frame()
+			tc.act(t, tt)
+			for i := 0; i < 12; i++ {
+				tt.Advance(20 * time.Millisecond)
+				tt.Frame()
+			}
+		})
+	}
+}
+
+// click drives one button and lets the frame it caused be built.
+func click(t *testing.T, tt *ui.Tester, name string) {
+	t.Helper()
+	if err := tt.Click(name); err != nil {
+		t.Fatalf("Click(%q) error: %v", name, err)
+	}
+	tt.Advance(20 * time.Millisecond)
+	tt.Frame()
+}
+
+// TestOfficialRowCountsOnlyTailcatDevices pins that a direct-ADB device, which
+// has no DERP map at all, is not counted as a user of the official one.
+func TestOfficialRowCountsOnlyTailcatDevices(t *testing.T) {
+	creds := core.NewMemoryCredentialStore()
+	m := core.NewManager(core.ManagerOptions{
+		Configuration: core.Configuration{
+			Profiles: []core.Profile{
+				{ID: uuid.New(), Name: "lynk08", RemotePort: 5555, RelaySource: "https://relay.example.com/map.json"},
+				{ID: uuid.New(), Name: "本地模拟器", DirectADB: true, DirectTarget: "127.0.0.1:5555"},
+			},
+			Tools: core.ToolSettings{ADB: os.Args[0]},
+		},
+		Credentials:     creds,
+		Identities:      core.NewIdentityStore(t.TempDir()),
+		Runner:          stubRunner{},
+		Locate:          func(string) (string, bool) { return "", false },
+		MonitorInterval: 3600 * 1e9,
+	})
+	vm := NewViewModel(m, func(string) (string, bool) { return "", false })
+	vm.OpenDerp()
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	if !tt.HasText("没有设备在用") {
+		t.Fatalf("the official map does not say it is unused; texts = %v", tt.Texts())
+	}
+
+	// A tailcat device on the official map is counted; the direct one never is.
+	if _, err := m.SaveDevice(core.SaveDeviceRequest{Name: "官方设备", Address: testAddress, RemotePort: 5555}); err != nil {
+		t.Fatalf("SaveDevice() error: %v", err)
+	}
+	tt.Frame()
+	if !tt.HasText("1 台设备") {
+		t.Fatalf("the official map does not count its one tailcat device; texts = %v", tt.Texts())
+	}
+}
+
+// TestOfficialRowNamesTheTailcatDefaultMap pins the answer to "which map is the
+// default": the user cannot judge a row that only says 内置公共地图.
+func TestOfficialRowNamesTheTailcatDefaultMap(t *testing.T) {
+	vm := newTestViewModel(t)
+	vm.OpenDerp()
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	if !tt.HasText(core.OfficialRelayURL) {
+		t.Fatalf("the official row does not name its map; texts = %v", tt.Texts())
 	}
 }
