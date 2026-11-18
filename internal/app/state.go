@@ -99,17 +99,17 @@ type ViewModel struct {
 
 	// CacheDevice is the device whose cached app metadata the page shows.
 	CacheDevice uuid.UUID
-	// CacheTable keeps the cache page's column layout across frames.
-	CacheTable components.TableState
+	// CacheTable keeps the cache page's column layout and scroll across frames.
+	CacheTable ui.ListState
 	// CacheConfirmOpen asks before dropping cached rows; an empty
 	// CacheConfirmPkg means the whole device.
 	CacheConfirmOpen  bool
 	CacheConfirmPkg   string
 	CacheConfirmError string
-	// DerpTable keeps the DERP list's column layout across frames.
-	DerpTable components.TableState
-	// DerpRegionTable keeps the detail page's region table layout.
-	DerpRegionTable components.TableState
+	// DerpTable keeps the DERP list's column layout and scroll across frames.
+	DerpTable ui.ListState
+	// DerpRegionTable keeps the detail page's region table layout and scroll.
+	DerpRegionTable ui.ListState
 	// DerpEditor is the DERP editor's draft; nil closes the dialog.
 	DerpEditor *DerpEditorDraft
 	// DerpConfirmDelete asks before removing this preset; nil closes it.

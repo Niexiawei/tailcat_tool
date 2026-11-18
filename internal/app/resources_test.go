@@ -239,18 +239,28 @@ func TestProcessTableMarksStaleMeta(t *testing.T) {
 	}
 }
 
-func TestProcessTableExpandsOnClick(t *testing.T) {
+// TestProcessGroupExpandsFromItsChevron pins the row's own affordance: the
+// group opens and closes from the arrow at the start of its row, which leaves
+// the table's keyboard navigation to the table itself.
+func TestProcessGroupExpandsFromItsChevron(t *testing.T) {
 	vm, _ := resourceFixture(t)
 	tt := ui.NewTester(vm.ContentView, 900, 900)
 	if tt.HasText("PID 100") {
 		t.Fatal("the process rows are visible before expanding the group")
 	}
-	if err := tt.Click("com.foo"); err != nil {
-		t.Fatalf("clicking the group row: %v", err)
+	if err := tt.Click("展开 com.foo"); err != nil {
+		t.Fatalf("the group row has no chevron: %v", err)
 	}
 	tt = ui.NewTester(vm.ContentView, 900, 900)
 	if !tt.HasText("PID 100") || !tt.HasText("com.foo:remote") {
 		t.Fatalf("the expanded group does not show its processes; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("收起 com.foo"); err != nil {
+		t.Fatalf("the expanded group offers no way back: %v", err)
+	}
+	tt = ui.NewTester(vm.ContentView, 900, 900)
+	if tt.HasText("PID 100") {
+		t.Fatal("the group did not collapse")
 	}
 }
 
@@ -747,5 +757,213 @@ func TestRowStillOffersResolveWhenNothingIsKnown(t *testing.T) {
 	tt := ui.NewTester(vm.ContentView, 900, 900)
 	if !tt.HasText("解析应用信息") {
 		t.Fatalf("a row nobody asked about lost its button; texts = %v", tt.Texts())
+	}
+}
+
+// TestProcessViewScrollsItsOwnTable pins the process view's layout: the table
+// takes the room the page leaves it and scrolls its own rows, instead of
+// spilling past the window's bottom edge.
+func TestProcessViewScrollsItsOwnTable(t *testing.T) {
+	vm := manyAppsViewModel(t, 40)
+	profile := vm.Manager.Profiles()[0]
+	vm.resourceStateFor(profile.ID).view = resourceViewProcesses
+	const window = 700
+	tt := ui.NewTester(vm.ContentView, 900, window)
+	tt.Frame()
+	rect, ok := tt.Find("按进程列出的进程表")
+	if !ok {
+		t.Fatalf("the process view has no table; texts = %v", tt.Texts())
+	}
+	if bottom := rect.Y + rect.H; bottom > window-20 {
+		t.Fatalf("the process table ends at %v, past the page's bottom padding", bottom)
+	}
+	if tt.HasText("PID 1039") {
+		t.Fatal("the table built a row past the ones it shows")
+	}
+}
+
+// samplingRoundTwoApps is one reading with two applications whose CPU order is
+// the opposite of their names: com.zzz burns the CPU and holds the memory,
+// com.aaa does not.
+func samplingRoundTwoApps(step int) string {
+	var b strings.Builder
+	b.WriteString("@@STAT\ncpu 200 0 200 1600 0 0 0 0 0 0\n")
+	b.WriteString("@@MEM\nMemTotal: 8000000 kB\nMemAvailable: 2000000 kB\n")
+	b.WriteString("@@GPU\n")
+	b.WriteString("@@PROC\n")
+	b.WriteString("@@P 300|1024|300 (comm) S 1 300 300 0 -1 0 0 0 0 0 " + itoa(step) + " 0 0 0 20 0 1 0 500 0 0|com.aaa\n")
+	b.WriteString("@@P 100|40960|100 (comm) S 1 100 100 0 -1 0 0 0 0 0 " + itoa(step*40) + " 0 0 0 20 0 1 0 600 0 0|com.zzz\n")
+	return b.String()
+}
+
+// twoAppFixture renders the resource tab over com.aaa and com.zzz.
+func twoAppFixture(t *testing.T) *ViewModel {
+	t.Helper()
+	step := 0
+	vm, _ := newRunnerViewModel(t, func(c core.Command) (core.Result, error) {
+		joined := strings.Join(c.Args, " ")
+		switch {
+		case strings.Contains(joined, "get-state"):
+			return core.Result{Output: "device\n"}, nil
+		case strings.Contains(joined, "@@CPU"):
+			return core.Result{Output: "@@CPU\n8\nHardware\t: CPU\n@@GPU\n"}, nil
+		case strings.Contains(joined, "@@STAT"):
+			step++
+			return core.Result{Output: samplingRoundTwoApps(step)}, nil
+		}
+		return core.Result{}, nil
+	})
+	t.Cleanup(func() { vm.Manager.Shutdown(context.Background()) })
+	profile := vm.Manager.Profiles()[0]
+	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := vm.Manager.SampleResources(context.Background(), profile.ID); err != nil {
+			t.Fatalf("SampleResources() error: %v", err)
+		}
+	}
+	vm.DetailTab = detailResources
+	vm.OpenDevice(profile.ID)
+	return vm
+}
+
+// clickColumnHeader clicks the header of the sortable column named title: the
+// header is the only RoleColumnHeader with that name, which keeps it apart from
+// a cell, a tab or a label with the same words.
+func clickColumnHeader(t *testing.T, tt *ui.Tester, title string) {
+	t.Helper()
+	info, ok := tt.AccessByRole(ui.RoleColumnHeader, title)
+	if !ok {
+		t.Fatalf("no %q column header; access = %v", title, tt.AccessAll())
+	}
+	tt.ClickAt(info.Bounds.X+info.Bounds.W/2, info.Bounds.Y+info.Bounds.H/2)
+	tt.Frame()
+}
+
+// textIndex is where a text sits in the frame, or -1: rows are read in the order
+// they are laid out.
+func textIndex(tt *ui.Tester, want string) int {
+	for i, text := range tt.Texts() {
+		if text == want {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestSortAppsPutsTheApplicationNameFirst(t *testing.T) {
+	rows := []filteredApp{
+		{app: core.AppUsage{Package: "com.zzz", CPUPercent: 90, MemBytes: 40960}},
+		{app: core.AppUsage{Package: "com.aaa", CPUPercent: 1, MemBytes: 1024}},
+	}
+	sortApps(rows, ui.SortOrder{})
+	if rows[0].app.Package != "com.aaa" || rows[1].app.Package != "com.zzz" {
+		t.Fatalf("order = %s, %s; want com.aaa first by name", rows[0].app.Package, rows[1].app.Package)
+	}
+}
+
+func TestSortAppsOrdersNumbersBothWays(t *testing.T) {
+	rows := func() []filteredApp {
+		return []filteredApp{
+			{app: core.AppUsage{Package: "com.zzz", Label: "zzz", MemBytes: 40960}},
+			{app: core.AppUsage{Package: "com.aaa", Label: "aaa", MemBytes: 1024}},
+		}
+	}
+	up := rows()
+	sortApps(up, ui.SortOrder{Column: "memory"})
+	if up[0].app.Package != "com.aaa" {
+		t.Fatalf("ascending memory order = %s first, want com.aaa", up[0].app.Package)
+	}
+	down := rows()
+	sortApps(down, ui.SortOrder{Column: "memory", Descending: true})
+	if down[0].app.Package != "com.zzz" {
+		t.Fatalf("descending memory order = %s first, want com.zzz", down[0].app.Package)
+	}
+}
+
+func TestSortProcessesKeepsAnAppsProcessesTogether(t *testing.T) {
+	rows := []processRow{
+		{process: core.ProcessUsage{PID: 1, Name: "zzz:remote", CPUPercent: 50}, app: "com.zzz", pkg: "com.zzz"},
+		{process: core.ProcessUsage{PID: 2, Name: "aaa:remote", CPUPercent: 40}, app: "com.aaa", pkg: "com.aaa"},
+		{process: core.ProcessUsage{PID: 3, Name: "zzz", CPUPercent: 30}, app: "com.zzz", pkg: "com.zzz"},
+		{process: core.ProcessUsage{PID: 4, Name: "aaa", CPUPercent: 20}, app: "com.aaa", pkg: "com.aaa"},
+	}
+	sortProcessRows(rows, ui.SortOrder{Column: "app"})
+	want := []int{4, 2, 3, 1}
+	for i, row := range rows {
+		if row.process.PID != want[i] {
+			t.Fatalf("order = %v, want %v", pids(rows), want)
+		}
+	}
+}
+
+func pids(rows []processRow) []int {
+	out := make([]int, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.process.PID)
+	}
+	return out
+}
+
+func TestSortProcessesPutsAnUnavailableGPULast(t *testing.T) {
+	rows := []processRow{
+		{process: core.ProcessUsage{PID: 1, Name: "aaa", GPUOk: false}, app: "com.aaa"},
+		{process: core.ProcessUsage{PID: 2, Name: "bbb", GPUOk: true, GPUPercent: 5}, app: "com.bbb"},
+	}
+	sortProcessRows(rows, ui.SortOrder{Column: "gpu"})
+	if rows[0].process.PID != 2 || rows[1].process.PID != 1 {
+		t.Fatalf("ascending GPU order = %v, want the unavailable one last", pids(rows))
+	}
+}
+
+func TestProcessTableStartsSortedByAppName(t *testing.T) {
+	vm := twoAppFixture(t)
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	tt.Frame()
+	if a, z := textIndex(tt, "com.aaa"), textIndex(tt, "com.zzz"); a < 0 || z < 0 || a > z {
+		t.Fatalf("positions com.aaa=%d com.zzz=%d; want the application name order", a, z)
+	}
+}
+
+func TestProcessViewStartsSortedByAppName(t *testing.T) {
+	vm := twoAppFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	vm.resourceStateFor(profile.ID).view = resourceViewProcesses
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	tt.Frame()
+	if a, z := textIndex(tt, "com.aaa"), textIndex(tt, "com.zzz"); a < 0 || z < 0 || a > z {
+		t.Fatalf("positions com.aaa=%d com.zzz=%d; want the application name order", a, z)
+	}
+}
+
+func TestClickingAMemoryHeaderSortsTheTable(t *testing.T) {
+	vm := twoAppFixture(t)
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	tt.Frame()
+	// The first click sorts ascending, the second descending: com.zzz holds the
+	// memory, so it is the one that moves to the top.
+	clickColumnHeader(t, tt, "内存")
+	clickColumnHeader(t, tt, "内存")
+	if a, z := textIndex(tt, "com.aaa"), textIndex(tt, "com.zzz"); a < 0 || z < 0 || z > a {
+		t.Fatalf("positions com.aaa=%d com.zzz=%d; want the memory order with com.zzz first", a, z)
+	}
+}
+
+func TestSortKeepsTheExpandedGroup(t *testing.T) {
+	vm := twoAppFixture(t)
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	tt.Frame()
+	if err := tt.Click("展开 com.zzz"); err != nil {
+		t.Fatalf("no chevron on com.zzz: %v", err)
+	}
+	tt.Frame()
+	if !tt.HasText("PID 100") {
+		t.Fatalf("the group did not open; texts = %v", tt.Texts())
+	}
+	clickColumnHeader(t, tt, "内存")
+	clickColumnHeader(t, tt, "内存")
+	if !tt.HasText("PID 100") {
+		t.Fatalf("sorting closed the group the user opened; texts = %v", tt.Texts())
 	}
 }

@@ -21,9 +21,14 @@ type resourceState struct {
 	// view is which of the two tables the page shows; each keeps its own table
 	// state so columns and scroll do not carry over.
 	view           int
-	tableApps      components.TableState
-	tableProcesses components.TableState
-	expanded       map[string]bool
+	tableApps      ui.ListState
+	tableProcesses ui.ListState
+	// appSort and procSort are what each table's header writes; the rows are
+	// ordered by them before the table is built, so the order is ours to
+	// explain and to test.
+	appSort  ui.SortOrder
+	procSort ui.SortOrder
+	expanded map[string]bool
 	// batch is what a manual refresh is reading, and batchAt is when it
 	// started: a package counts as done once its status changed after that, so
 	// the toolbar can say how far along it is instead of guessing from a timer.
@@ -41,7 +46,16 @@ func (vm *ViewModel) resourceStateFor(device uuid.UUID) *resourceState {
 	}
 	state, ok := vm.resources[device]
 	if !ok {
-		state = &resourceState{expanded: map[string]bool{}}
+		state = &resourceState{
+			expanded: map[string]bool{},
+			// Both views open on the application name: the page is about
+			// which application is doing the work, not which process burns
+			// the most CPU this second.
+			appSort:  ui.SortOrder{Column: "app"},
+			procSort: ui.SortOrder{Column: "app"},
+		}
+		state.tableApps.Sort = &state.appSort
+		state.tableProcesses.Sort = &state.procSort
 		vm.resources[device] = state
 	}
 	return state
@@ -336,41 +350,53 @@ const batchGiveUpAfter = 90 * time.Second
 // user is looking for is a process inside one of them.
 func (vm *ViewModel) processTable(c *ui.Context, state *resourceState, device uuid.UUID, snapshot core.ResourceSnapshot) {
 	filtering := filtering(state)
-	kept := filterApps(snapshot.Apps, state.filter)
-	components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).MinHeight(0).Label("按应用分组的进程表").Children(func() {
-		if filtering && len(kept) == 0 {
-			vm.noFilterMatch(c, "没有匹配的应用")
+	kept := sortApps(filterApps(snapshot.Apps, state.filter), state.appSort)
+	if filtering && len(kept) == 0 {
+		vm.noFilterMatch(c, "没有匹配的应用")
+		return
+	}
+	rows := visibleRows(kept, filtering, state.expanded)
+	tableCard(c, &state.tableApps, processColumns(), len(rows), tableOptions{
+		Label: "按应用分组的进程表", Grow: true,
+	}, func(row, col int) {
+		line := rows[row]
+		if line.process == nil {
+			vm.appCell(c, col, state, device, line.app, appLabel(line.app), line.expanded)
 			return
 		}
-		components.Table(c, &state.tableApps, processColumns(), func() {
-			for _, item := range kept {
-				app := item.app
-				label := appLabel(app)
-				// A query opens every group it kept: the row that matched is
-				// a process underneath it, or the whole application the user
-				// asked for.
-				expanded := filtering || state.expanded[app.Package]
-				row := components.TableRow(c, app.Package, label, expanded, func(col int) {
-					vm.appCell(c, col, state, device, app, label)
-				})
-				if row.Clicked() {
-					state.expanded[app.Package] = !state.expanded[app.Package]
-				}
-				if !expanded {
-					continue
-				}
-				processes := item.app.Processes
-				if filtering && !item.full {
-					processes = item.processes
-				}
-				for _, process := range processes {
-					components.TableRow(c, app.Package+"#"+itoa(process.PID), "  "+process.Name, false, func(col int) {
-						vm.processCell(c, col, process)
-					})
-				}
-			}
-		})
+		vm.processCell(c, col, *line.process)
 	})
+}
+
+// appRow is one row of the grouped table: an application, or one of its
+// processes when the group is open.
+type appRow struct {
+	app      core.AppUsage
+	process  *core.ProcessUsage
+	expanded bool
+}
+
+// visibleRows flattens the kept applications into the table's rows. A query
+// opens every group it kept: the row that matched is a process underneath it,
+// or the whole application the user asked for.
+func visibleRows(kept []filteredApp, filtering bool, expanded map[string]bool) []appRow {
+	rows := make([]appRow, 0, len(kept))
+	for _, item := range kept {
+		app := item.app
+		open := filtering || expanded[app.Package]
+		rows = append(rows, appRow{app: app, expanded: open})
+		if !open {
+			continue
+		}
+		processes := app.Processes
+		if filtering && !item.full {
+			processes = item.processes
+		}
+		for i := range processes {
+			rows = append(rows, appRow{app: app, process: &processes[i], expanded: open})
+		}
+	}
+	return rows
 }
 
 // filtering reports whether the box holds a question, as opposed to blanks the
@@ -412,19 +438,26 @@ func viewCounts(state *resourceState, snapshot core.ResourceSnapshot) (apps, pro
 // CPU, so a click on a header would fight the next reading.
 func processColumns() []ui.TableColumn {
 	return []ui.TableColumn{
-		{Title: "应用", ID: "app", MinWidth: 200},
-		{Title: "进程", ID: "procs", Width: 80, Align: ui.End},
-		{Title: "CPU", ID: "cpu", Width: 72, Align: ui.End},
-		{Title: "GPU", ID: "gpu", Width: 72, Align: ui.End},
-		{Title: "内存", ID: "memory", Width: 88, Align: ui.End},
+		{Title: "应用", ID: "app", MinWidth: 200, Sortable: true},
+		{Title: "进程", ID: "procs", Width: 80, Align: ui.End, Sortable: true},
+		{Title: "CPU", ID: "cpu", Width: 72, Align: ui.End, Sortable: true},
+		{Title: "GPU", ID: "gpu", Width: 72, Align: ui.End, Sortable: true},
+		{Title: "内存", ID: "memory", Width: 88, Align: ui.End, Sortable: true},
 	}
 }
 
-func (vm *ViewModel) appCell(c *ui.Context, col int, state *resourceState, device uuid.UUID, app core.AppUsage, label string) {
+func (vm *ViewModel) appCell(c *ui.Context, col int, state *resourceState, device uuid.UUID, app core.AppUsage, label string, expanded bool) {
 	theme := c.Theme()
 	switch col {
 	case 0:
 		ui.Row(c).FillWidth().MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
+			icon, action := lucide.ChevronRight(), "展开 "+label
+			if expanded {
+				icon, action = lucide.ChevronDown(), "收起 "+label
+			}
+			if components.IconButton(c, icon, action, components.IconButtonCompact).Clicked() {
+				state.expanded[app.Package] = !expanded
+			}
 			components.Avatar(c, label, components.AvatarOptions{Image: vm.appIcon(device, app.Package), Size: 20})
 			components.Text(c, label).FontSize(12).SingleLine()
 			if app.MetaStale {
@@ -579,19 +612,15 @@ func (vm *ViewModel) appIcon(device uuid.UUID, pkg string) ui.ImageSource {
 // processList lists one process per row: the same numbers as the grouped view,
 // without folding them under the application.
 func (vm *ViewModel) processList(c *ui.Context, state *resourceState, snapshot core.ResourceSnapshot) {
-	rows := filterProcessRows(processRows(snapshot), state.filter)
-	components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).MinHeight(0).Label("按进程列出的进程表").Children(func() {
-		if filtering(state) && len(rows) == 0 {
-			vm.noFilterMatch(c, "没有匹配的进程")
-			return
-		}
-		components.Table(c, &state.tableProcesses, processViewColumns(), func() {
-			for _, row := range rows {
-				components.TableRow(c, row.id, row.process.Name, false, func(col int) {
-					vm.processRowCell(c, col, row)
-				})
-			}
-		})
+	rows := sortProcessRows(filterProcessRows(processRows(snapshot), state.filter), state.procSort)
+	if filtering(state) && len(rows) == 0 {
+		vm.noFilterMatch(c, "没有匹配的进程")
+		return
+	}
+	tableCard(c, &state.tableProcesses, processViewColumns(), len(rows), tableOptions{
+		Label: "按进程列出的进程表", Grow: true,
+	}, func(row, col int) {
+		vm.processRowCell(c, col, rows[row])
 	})
 }
 
@@ -600,11 +629,11 @@ func (vm *ViewModel) processList(c *ui.Context, state *resourceState, snapshot c
 // first, because that is what the rows are about.
 func processViewColumns() []ui.TableColumn {
 	return []ui.TableColumn{
-		{Title: "进程", ID: "proc", MinWidth: 200},
-		{Title: "应用", ID: "app", MinWidth: 160},
-		{Title: "CPU", ID: "cpu", Width: 72, Align: ui.End},
-		{Title: "GPU", ID: "gpu", Width: 72, Align: ui.End},
-		{Title: "内存", ID: "memory", Width: 88, Align: ui.End},
+		{Title: "进程", ID: "proc", MinWidth: 200, Sortable: true},
+		{Title: "应用", ID: "app", MinWidth: 160, Sortable: true},
+		{Title: "CPU", ID: "cpu", Width: 72, Align: ui.End, Sortable: true},
+		{Title: "GPU", ID: "gpu", Width: 72, Align: ui.End, Sortable: true},
+		{Title: "内存", ID: "memory", Width: 88, Align: ui.End, Sortable: true},
 	}
 }
 
@@ -616,8 +645,9 @@ type processRow struct {
 	pkg     string
 }
 
-// processRows flattens the grouped reading into one row per process, ordered by
-// CPU so the most expensive process is the first thing the page shows.
+// processRows flattens the grouped reading into one row per process. The order
+// is the page's: sortProcessRows puts the rows in the order the table's header
+// asks for.
 func processRows(snapshot core.ResourceSnapshot) []processRow {
 	rows := make([]processRow, 0, len(snapshot.Apps))
 	for _, app := range snapshot.Apps {
@@ -630,12 +660,6 @@ func processRows(snapshot core.ResourceSnapshot) []processRow {
 			})
 		}
 	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		if rows[i].process.CPUPercent != rows[j].process.CPUPercent {
-			return rows[i].process.CPUPercent > rows[j].process.CPUPercent
-		}
-		return rows[i].process.PID < rows[j].process.PID
-	})
 	return rows
 }
 
@@ -656,4 +680,143 @@ func (vm *ViewModel) processRowCell(c *ui.Context, col int, row processRow) {
 	default:
 		components.Text(c, core.FormatBytes(row.process.MemBytes)).FontSize(11).TextColor(theme.Text)
 	}
+}
+
+// sortApps orders the grouped rows by order: application name ascending when it
+// names no column of the application view. A descending order turns only the
+// column's own key; the name each row falls back to stays ascending, so the
+// rows an application groups stay together.
+func sortApps(rows []filteredApp, order ui.SortOrder) []filteredApp {
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		primary := 0
+		switch order.Column {
+		case "procs":
+			primary = compareInts(len(a.app.Processes), len(b.app.Processes))
+		case "cpu":
+			primary = compareFloats(a.app.CPUPercent, b.app.CPUPercent)
+		case "gpu":
+			// 不可用 is not a number: it stays last whichever way the column
+			// sorts, so a device without counters never reads as 0%.
+			if cmp := compareGPUs(a.app.GPUOk, a.app.GPUPercent, b.app.GPUOk, b.app.GPUPercent); cmp != 0 {
+				return cmp < 0
+			}
+			return compareAppNames(a, b) < 0
+		case "memory":
+			primary = compareUints(a.app.MemBytes, b.app.MemBytes)
+		default:
+			primary = compareAppNames(a, b)
+		}
+		if primary == 0 {
+			return compareAppNames(a, b) < 0
+		}
+		return (primary < 0) != order.Descending
+	})
+	return rows
+}
+
+// sortProcessRows orders the flat rows by order: application name ascending when
+// it names no column of the process view. The application is the first key under
+// every column, so one application's processes stay together.
+func sortProcessRows(rows []processRow, order ui.SortOrder) []processRow {
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		primary := 0
+		switch order.Column {
+		case "proc":
+			primary = compareProcessNames(a, b)
+		case "cpu":
+			primary = compareFloats(a.process.CPUPercent, b.process.CPUPercent)
+		case "gpu":
+			if cmp := compareGPUs(a.process.GPUOk, a.process.GPUPercent, b.process.GPUOk, b.process.GPUPercent); cmp != 0 {
+				return cmp < 0
+			}
+			return compareRows(a, b) < 0
+		case "memory":
+			primary = compareUints(a.process.MemBytes, b.process.MemBytes)
+		default:
+			primary = compareRowApps(a, b)
+		}
+		if primary == 0 {
+			return compareRows(a, b) < 0
+		}
+		return (primary < 0) != order.Descending
+	})
+	return rows
+}
+
+// compareGPUs orders a device without GPU counters after the ones with them,
+// whatever the direction: the cell reads 不可用, and putting that above a
+// measured 0% would claim a usage the device does not report.
+func compareGPUs(okA bool, a float64, okB bool, b float64) int {
+	switch {
+	case !okA && !okB:
+		return 0
+	case !okA:
+		return 1
+	case !okB:
+		return -1
+	}
+	return compareFloats(a, b)
+}
+
+// compareAppNames puts applications in the order their names read.
+func compareAppNames(a, b filteredApp) int {
+	if cmp := strings.Compare(strings.ToLower(appLabel(a.app)), strings.ToLower(appLabel(b.app))); cmp != 0 {
+		return cmp
+	}
+	return strings.Compare(a.app.Package, b.app.Package)
+}
+
+// compareProcessNames puts processes in the order their names read.
+func compareProcessNames(a, b processRow) int {
+	return strings.Compare(strings.ToLower(a.process.Name), strings.ToLower(b.process.Name))
+}
+
+// compareRowApps keeps one application's rows together, then puts them in name
+// order inside it.
+func compareRowApps(a, b processRow) int {
+	if cmp := strings.Compare(strings.ToLower(a.app), strings.ToLower(b.app)); cmp != 0 {
+		return cmp
+	}
+	return compareProcessNames(a, b)
+}
+
+// compareRows is the last tie-breaker: the row's own name, then its process id,
+// so equal numbers never swap places between samples.
+func compareRows(a, b processRow) int {
+	if cmp := compareProcessNames(a, b); cmp != 0 {
+		return cmp
+	}
+	return compareInts(a.process.PID, b.process.PID)
+}
+
+func compareInts(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
+}
+
+func compareUints(a, b uint64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
+}
+
+func compareFloats(a, b float64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
 }

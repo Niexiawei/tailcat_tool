@@ -475,9 +475,10 @@ func manyRegionMap(count int) string {
 	return b.String()
 }
 
-// TestDerpDetailScrollsLongMaps pins that a 60-region map is reachable: the
-// page content has to scroll, not spill past the window.
-func TestDerpDetailScrollsLongMaps(t *testing.T) {
+// TestDerpRegionTableScrollsItsOwnRows pins that a 60-region map is reachable:
+// the region table takes a bounded height and scrolls its own rows, while the
+// page keeps its scroll area for everything around it.
+func TestDerpRegionTableScrollsItsOwnRows(t *testing.T) {
 	vm := newTestViewModel(t)
 	id, err := vm.Manager.SaveRelayPreset(core.SaveRelayPresetRequest{Name: "大国", Source: manyRegionMap(60)})
 	if err != nil {
@@ -485,7 +486,19 @@ func TestDerpDetailScrollsLongMaps(t *testing.T) {
 	}
 	vm.OpenDerpDetail(id)
 	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	waitForText(t, tt, "relay1.example.com")
+	if tt.HasText("relay60.example.com") {
+		t.Fatal("the region table built a row it does not show")
+	}
+	region, ok := tt.Find("区域表")
+	if !ok {
+		t.Fatalf("the detail page has no region table; texts = %v", tt.Texts())
+	}
+	tt.Scroll(region.X+region.W/2, region.Y+region.H/2, 0, 4000)
+	tt.Advance(500 * time.Millisecond)
+	tt.Frame()
 	waitForText(t, tt, "relay60.example.com")
+	// The page still scrolls around the table: 原始 JSON sits below it.
 	scrolled := false
 	for _, info := range tt.AccessAll() {
 		if info.Role == ui.RoleScroll {

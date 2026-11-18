@@ -77,28 +77,28 @@ func reachabilityTable(c *ui.Context, results []core.ReachabilityResult) {
 		{Title: "延迟", ID: "latency", Width: 80, Align: ui.End},
 		{Title: "路径 / 详情", ID: "detail", MinWidth: 220},
 	}
-	components.Table(c, nil, columns, func() {
-		for _, result := range results {
-			result := result
-			components.TableRow(c, result.ID, result.Name+" "+result.State.Label(), false, func(col int) {
-				switch col {
-				case 0:
-					components.Tooltip(c, components.Text(c, result.Name).SingleLine(), result.Name)
-				case 1:
-					icon, color := reachStatus(theme, result.State)
-					ui.Row(c).AlignItems(ui.Center).Gap(theme.Space(1)).Children(func() {
-						components.Icon(c, icon).Size(theme.Rem(.875), theme.Rem(.875)).TextColor(color)
-						components.Text(c, result.State.Label()).FontSize(11).TextColor(color).SingleLine()
-					})
-				case 2:
-					components.Text(c, result.Latency).SingleLine()
-				case 3:
-					// The column is narrow and the probe messages are long, so
-					// the full text belongs in a tooltip.
-					detail := reachDetail(result)
-					components.Tooltip(c, components.Text(c, detail).SingleLine(), detail)
-				}
+	tableCard(c, nil, columns, len(results), tableOptions{
+		// The dialog is as tall as its content, so the card makes room for a
+		// handful of devices and the rest scroll inside it.
+		Label: "连通测试结果", Rows: len(results),
+	}, func(row, col int) {
+		result := results[row]
+		switch col {
+		case 0:
+			components.Tooltip(c, components.Text(c, result.Name).SingleLine(), result.Name)
+		case 1:
+			icon, color := reachStatus(theme, result.State)
+			ui.Row(c).AlignItems(ui.Center).Gap(theme.Space(1)).Children(func() {
+				components.Icon(c, icon).Size(theme.Rem(.875), theme.Rem(.875)).TextColor(color)
+				components.Text(c, result.State.Label()).FontSize(11).TextColor(color).SingleLine()
 			})
+		case 2:
+			components.Text(c, result.Latency).SingleLine()
+		case 3:
+			// The column is narrow and the probe messages are long, so the
+			// full text belongs in a tooltip.
+			detail := reachDetail(result)
+			components.Tooltip(c, components.Text(c, detail).SingleLine(), detail)
 		}
 	})
 }

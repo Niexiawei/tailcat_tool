@@ -243,6 +243,17 @@ func shotCases() []shotCase {
 			settle: 12,
 		},
 		{
+			name: "13b-reachability-results",
+			build: func(t *testing.T) *ViewModel {
+				vm := shotConnected(t, readFixture)
+				vm.openReachability()
+				vm.Manager.TestAllDevices()
+				vm.Manager.Reachability().Wait()
+				return vm
+			},
+			settle: 12,
+		},
+		{
 			name:  "15-logs-page",
 			build: shotLogsPage,
 		},

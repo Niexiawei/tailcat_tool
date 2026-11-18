@@ -51,7 +51,13 @@ type fileState struct {
 	// paths, which are unique; labels are not, and two folders called DCIM
 	// would otherwise share one row's state.
 	tree  components.TreeVirtualizedState[string]
-	table components.TableState
+	table ui.ListState
+	// chosen is the row the table highlights, and chosenPath is the directory
+	// its index belongs to. They live here rather than in the build pass
+	// because the table writes the choice between frames, as the arrow keys
+	// move it; recomputing it from selected every frame would undo that.
+	chosen     int
+	chosenPath string
 }
 
 // fileStateFor returns one device's page state, creating it on first use.
@@ -424,24 +430,44 @@ func (vm *ViewModel) fileTable(c *ui.Context, profile core.Profile, state *fileS
 		if listing.Truncated {
 			components.Text(c, "只显示前 2000 项，请进入子文件夹查看其余内容").FontSize(11).TextColor(theme.Danger)
 		}
-		components.ScrollView(c, components.ScrollViewOptions{}).FillWidth().Grow(1).MinHeight(0).
-			Label("设备文件列表").Children(func() {
-			if len(listing.Entries) == 0 {
-				components.Text(c, "这个文件夹是空的").FontSize(11).TextColor(theme.TextMuted)
-				return
-			}
-			components.Table(c, &state.table, fileColumns(), func() {
-				for _, entry := range listing.Entries {
-					entry := entry
-					row := components.TableRow(c, entry.Path, entry.Name, state.selected == entry.Path, func(col int) {
-						vm.fileCell(c, col, entry)
-					})
-					if row.Clicked() {
-						vm.activateEntry(profile, state, entry)
-					}
+		if len(listing.Entries) == 0 {
+			components.Text(c, "这个文件夹是空的").FontSize(11).TextColor(theme.TextMuted).Grow(1)
+			return
+		}
+		// The chosen row is the path the page selected: a click on another row
+		// reports Changed, which is what opens it.
+		if state.chosenPath != state.path {
+			// A new directory: the highlight starts on the row the page
+			// selected, if this listing holds it.
+			state.chosenPath = state.path
+			state.chosen = -1
+			for i, entry := range listing.Entries {
+				if entry.Path == state.selected {
+					state.chosen = i
+					break
 				}
+			}
+		}
+		state.table.Selected = &state.chosen
+		// A click opens the entry; the arrow keys only move the highlight, as a
+		// file manager's do. Changed reports both, RowClicked only the
+		// pointer's click.
+		opened := -1
+		tableCard(c, &state.table, fileColumns(), len(listing.Entries), tableOptions{
+			// The pane is already inside the browser's 1 DIP frame.
+			Label: "设备文件列表", Grow: true, Unframed: true,
+		}, func(row, col int) {
+			entry := listing.Entries[row]
+			cell := ui.Row(c).FillWidth().MinWidth(0).Children(func() {
+				vm.fileCell(c, col, entry)
 			})
+			if cell.RowClicked() && opened < 0 {
+				opened = row
+			}
 		})
+		if opened >= 0 && opened < len(listing.Entries) {
+			vm.activateEntry(profile, state, listing.Entries[opened])
+		}
 	})
 }
 

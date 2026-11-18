@@ -661,3 +661,54 @@ func TestFileTreeMirrorsTheDeviceFilesystemFromOneRoot(t *testing.T) {
 		seen[row] = true
 	}
 }
+
+// TestFileRowStaysChosenAfterOpeningIt pins that a click both opens the entry
+// and leaves its row chosen: the table's choice is the path the page selected.
+func TestFileRowStaysChosenAfterOpeningIt(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "Download")
+	if err := tt.Click("Download"); err != nil {
+		t.Fatalf("Click(Download) error: %v", err)
+	}
+	tt.Frame()
+	profile := vm.Manager.Profiles()[0]
+	if got := vm.fileStateFor(profile.ID).selected; got != "/sdcard/Download" {
+		t.Fatalf("selected = %q, want /sdcard/Download", got)
+	}
+}
+
+// TestFileTableKeyboardMovesTheChoice pins that the table's choice lives in the
+// page's state, not in a variable that dies with the frame: the arrow keys must
+// move the highlight between frames.
+func TestFileTableKeyboardMovesTheChoice(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "Download")
+	profile := vm.Manager.Profiles()[0]
+	state := vm.fileStateFor(profile.ID)
+	rect, ok := tt.Find("设备文件列表")
+	if !ok {
+		t.Fatalf("the table is not labelled; texts = %v", tt.Texts())
+	}
+	// The empty area under the last row focuses the table without opening a
+	// row, which is how a user gets to the arrow keys.
+	tt.ClickAt(rect.X+rect.W/2, rect.Y+rect.H-20)
+	tt.Frame()
+	if !tt.Focused("设备文件列表") {
+		t.Fatalf("the table does not take the keyboard; access = %v", tt.AccessAll())
+	}
+	tt.KeyDown(ui.KeyDown)
+	tt.Frame()
+	if state.chosen != 0 {
+		t.Fatalf("the choice = %d after Down, want the first row", state.chosen)
+	}
+	tt.KeyDown(ui.KeyDown)
+	tt.Frame()
+	if state.chosen != 1 {
+		t.Fatalf("the choice = %d after two Downs, want the second row", state.chosen)
+	}
+	if state.selected != "/sdcard" {
+		t.Fatalf("moving the choice opened %q; keys must not activate a folder", state.selected)
+	}
+}

@@ -384,7 +384,7 @@ func TestLogsPageKeepsTheReaderAtTheTail(t *testing.T) {
 	waitForText(t, tt, "最新一行")
 	// The newest row is at the top, so "at the tail" means the table still
 	// shows the top of the list rather than staying where the reader was.
-	if first, _ := filter.table.List.Visible(); first != 0 {
+	if first, _ := filter.table.Visible(); first != 0 {
 		t.Fatalf("the followed table starts at row %d, want the newest row", first)
 	}
 }
@@ -613,7 +613,7 @@ func TestDeviceLogTabKeepsFollowTheTail(t *testing.T) {
 	vm.followLogs(filter)
 	tt.Frame()
 	waitForText(t, tt, "又一行")
-	if first, _ := filter.table.List.Visible(); first != 0 {
+	if first, _ := filter.table.Visible(); first != 0 {
 		t.Fatalf("the followed tab starts at row %d, want the newest row", first)
 	}
 }
@@ -787,5 +787,78 @@ func TestLogFootRowHoldsRefreshLeftOfClear(t *testing.T) {
 	rows, ok := tt.Find("级别")
 	if ok && refresh.Y < rows.Y+rows.H {
 		t.Fatalf("刷新 is still up with the filters at y=%0.0f", refresh.Y)
+	}
+}
+
+// TestLogTimelineIsItsOwnScrollArea pins the timeline's layout: it is a labelled
+// table that scrolls its own rows, so a long text column scrolls sideways
+// instead of pushing the header out of reach.
+func TestLogTimelineIsItsOwnScrollArea(t *testing.T) {
+	vm, reader, base := deviceLogFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	var rows []core.TimelineEntry
+	for i := 0; i < 80; i++ {
+		rows = append(rows, core.TimelineEntry{
+			At: base.Add(time.Duration(-i) * time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+			DeviceID: profile.ID, DeviceName: "E245", Text: "第" + itoa(i) + "行日志",
+		})
+	}
+	reader.add(rows...)
+
+	tt := ui.NewTester(vm.ContentView, 900, 700)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	waitForText(t, tt, "第0行日志")
+	timeline, ok := tt.Find("日志时间线")
+	if !ok {
+		t.Fatalf("the timeline is not a labelled table; texts = %v", tt.Texts())
+	}
+	if tt.HasText("第79行日志") {
+		t.Fatal("the timeline built a row it does not show")
+	}
+	tt.Scroll(timeline.X+timeline.W/2, timeline.Y+timeline.H/2, 0, 4000)
+	tt.Advance(500 * time.Millisecond)
+	tt.Frame()
+	waitForText(t, tt, "第79行日志")
+}
+
+// TestLogTimelineKeysDoNotOpenATaskRow pins that the arrow keys only move the
+// choice: a task row opens its output on a click, as a log line does nothing,
+// so walking the timeline with the keyboard must not open dialogs.
+func TestLogTimelineKeysDoNotOpenATaskRow(t *testing.T) {
+	vm, reader, base := logsPageFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	taskID := uuid.New()
+	reader.outputs[taskID] = "output"
+	reader.add(core.TimelineEntry{
+		At: base.Add(-time.Minute), Level: core.LogInfo, Source: core.LogTask,
+		DeviceID: profile.ID, DeviceName: "E245", TaskID: taskID,
+		Text: "adb pull /sdcard/x · 失败",
+	})
+	// A channel line above the task row: clicking it focuses the table and
+	// opens nothing, so the key can then walk down to the task row.
+	reader.add(core.TimelineEntry{
+		At: base.Add(-2 * time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+		DeviceID: profile.ID, DeviceName: "E245", Text: "一行通道日志",
+	})
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	waitForText(t, tt, "一行通道日志")
+	if err := tt.Click("一行通道日志"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	tt.Frame()
+	filter := vm.pageLogFilter()
+	// The channel line sits under the task row, which is the newest; walking up
+	// to the task row must not open its output.
+	tt.KeyDown(ui.KeyUp)
+	tt.Frame()
+	entries, _, _, _, _ := vm.logSnapshot(filter)
+	if filter.selected != 0 || len(entries) == 0 || entries[0].Source != core.LogTask {
+		t.Fatalf("the choice = %d, entries = %d; want the task row", filter.selected, len(entries))
+	}
+	if vm.LogOutput != nil {
+		t.Fatal("moving the choice with the keyboard opened a task's output")
 	}
 }
