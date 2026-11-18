@@ -399,6 +399,18 @@ func TestClosingTheEditorDoesNotPanic(t *testing.T) {
 	tt := ui.NewTester(vm.ContentView, 900, 900)
 	tt.Frame()
 	tt.Frame()
+	// The relay dropdown is an overlay of its own; closing the dialog with it
+	// closed, then with it open, must both survive MyGo's closing animation.
+	if err := tt.Click("自定义"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if err := tt.Click("DERP 节点来源"); err != nil {
+		t.Fatalf("opening the relay menu: %v", err)
+	}
+	tt.Frame()
+	// Esc closes the dropdown first; the dialog's own close comes next.
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
 	if err := tt.Click("取消"); err != nil {
 		t.Fatalf("Click() error: %v", err)
 	}
@@ -494,14 +506,103 @@ func TestEditorPicksAPresetFromTheMergedMenu(t *testing.T) {
 	if err := tt.Click("DERP 节点来源"); err != nil {
 		t.Fatalf("opening the menu: %v", err)
 	}
-	if err := tt.ChooseMenuItem("预设 · 公司自建"); err != nil {
-		t.Fatalf("ChooseMenuItem() error: %v", err)
+	if err := tt.Click("预设 · 公司自建"); err != nil {
+		t.Fatalf("choosing the preset: %v", err)
 	}
 	if vm.EditorDraft.RelaySource != preset.Source {
 		t.Fatalf("RelaySource = %q, want the preset's %q", vm.EditorDraft.RelaySource, preset.Source)
 	}
 	if vm.EditorDraft.RelayPick != preset.Source {
 		t.Fatalf("RelayPick = %q", vm.EditorDraft.RelayPick)
+	}
+	// The source belongs to the preset now: the box shows it and takes no edits.
+	box, ok := tt.AccessByRole(ui.RoleTextField, "DERP JSON 链接或内容")
+	if !ok {
+		t.Fatalf("the source box is missing; access = %v", tt.AccessAll())
+	}
+	if !box.ReadOnly {
+		t.Fatal("the source box stays editable after picking a preset")
+	}
+	if box.Multiline {
+		t.Fatal("the locked box is a read-only line, not a text area")
+	}
+	if !strings.HasPrefix(box.Value, "内联 JSON") {
+		t.Fatalf("locked box value = %q, want the inline summary", box.Value)
+	}
+	if !tt.HasText("来源由所选预设提供；要自己填，请在上方选「自定义」") {
+		t.Fatalf("no hint on why the box is locked; texts = %v", tt.Texts())
+	}
+}
+
+func TestEditorRelayCustomRowUnlocksTheBox(t *testing.T) {
+	vm, preset := newDerpViewModel(t)
+	vm.openEditor(&EditorRequest{})
+	tt := ui.NewTester(vm.ContentView, 900, 1000)
+	if err := tt.Click("自定义"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if err := tt.Click("DERP 节点来源"); err != nil {
+		t.Fatalf("opening the menu: %v", err)
+	}
+	if err := tt.Click("预设 · 公司自建"); err != nil {
+		t.Fatalf("choosing the preset: %v", err)
+	}
+	// Clearing the pick is how a preset is abandoned: the box empties and
+	// becomes editable again.
+	if err := tt.Click("DERP 节点来源"); err != nil {
+		t.Fatalf("reopening the menu: %v", err)
+	}
+	if err := tt.Click(relayPickCustom); err != nil {
+		t.Fatalf("choosing custom: %v", err)
+	}
+	if vm.EditorDraft.RelayPick != "" || vm.EditorDraft.RelaySource != "" {
+		t.Fatalf("pick = %q, source = %q; clearing must empty both", vm.EditorDraft.RelayPick, vm.EditorDraft.RelaySource)
+	}
+	box, ok := tt.AccessByRole(ui.RoleTextField, "DERP JSON 链接或内容")
+	if !ok {
+		t.Fatalf("the source box is missing; access = %v", tt.AccessAll())
+	}
+	if box.ReadOnly {
+		t.Fatal("the source box is still locked after clearing the preset")
+	}
+	if !box.Multiline {
+		t.Fatal("the custom source box is not a text area")
+	}
+	focusField(t, tt, "DERP JSON 链接或内容")
+	tt.Type("https://relay.example.com/other.json")
+	if vm.EditorDraft.RelaySource != "https://relay.example.com/other.json" {
+		t.Fatalf("typed source = %q; the cleared box must accept custom content", vm.EditorDraft.RelaySource)
+	}
+	_ = preset
+}
+
+func TestEditorRelayMenuStartsItemsAtTheLeftEdge(t *testing.T) {
+	vm, _ := newDerpViewModel(t)
+	vm.openEditor(&EditorRequest{})
+	tt := ui.NewTester(vm.ContentView, 900, 1000)
+	if err := tt.Click("自定义"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	if err := tt.Click("DERP 节点来源"); err != nil {
+		t.Fatalf("opening the menu: %v", err)
+	}
+	var option ui.AccessInfo
+	found := false
+	for _, info := range tt.AccessAll() {
+		if info.Role == ui.RoleOption && info.Name == "预设 · 公司自建" {
+			option, found = info, true
+		}
+	}
+	if !found {
+		t.Fatalf("the option is not in the popup; access = %v", tt.AccessAll())
+	}
+	label, ok := tt.Find("预设 · 公司自建")
+	if !ok {
+		t.Fatal("the option label is not laid out")
+	}
+	// Centered items would start around a third of the popup's width in.
+	if offset := label.X - option.Bounds.X; offset > 30 {
+		t.Fatalf("the option label starts %0.0f px in; items must be left aligned", offset)
 	}
 }
 

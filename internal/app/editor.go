@@ -302,52 +302,116 @@ func raisedFace(theme *ui.Theme) (face, shadow ui.Color) {
 
 // relayHistoryOptions turns the recorded sources into the editor's history
 // menu. Values are the canonical sources, so picking one fills the field.
+// relaySourceOption is one row of the merged picker.
+type relaySourceOption struct {
+	Label string
+	Value string
+}
+
 // relaySourceOptions merges the saved presets and the sources devices have used
 // into one menu, presets first. A source that is both appears once, under the
 // name the user gave it: two rows with one source would make the choice
 // ambiguous.
-func relaySourceOptions(presets []core.RelayPreset, history []core.RelayHistoryEntry) []components.NativeSelectOption[string] {
-	options := make([]components.NativeSelectOption[string], 0, len(presets)+len(history))
+func relaySourceOptions(presets []core.RelayPreset, history []core.RelayHistoryEntry) []relaySourceOption {
+	options := make([]relaySourceOption, 0, len(presets)+len(history))
 	seen := make(map[string]bool, len(presets)+len(history))
 	for _, preset := range presets {
 		if preset.Source == "" || seen[preset.Source] {
 			continue
 		}
 		seen[preset.Source] = true
-		options = append(options, components.NativeSelectOption[string]{
-			Value: preset.Source,
-			Label: "预设 · " + preset.Name,
-		})
+		options = append(options, relaySourceOption{Value: preset.Source, Label: "预设 · " + preset.Name})
 	}
 	for _, entry := range history {
 		if entry.Source == "" || seen[entry.Source] {
 			continue
 		}
 		seen[entry.Source] = true
-		options = append(options, components.NativeSelectOption[string]{
-			Value: entry.Source,
-			Label: "历史 · " + entry.Name,
-		})
+		options = append(options, relaySourceOption{Value: entry.Source, Label: "历史 · " + entry.Name})
 	}
 	return options
 }
 
-// relaySourceFields renders the merged picker and the free-form source box. The
-// picker writes its choice into the box, so a user can pick a preset, adjust it
-// once, and see exactly what the device will store.
+// relayPickCustom is the picker row that unlocks the source box. Choosing it
+// clears both the pick and the box, so the user starts a custom source from
+// empty rather than from a preset they just abandoned.
+const relayPickCustom = "自定义（不用预设，可输入内容）"
+
+// relaySourceFields renders the merged picker and the source box.
+//
+// Picking a preset locks the box: the source belongs to the preset, and editing
+// it here would store a different map under the preset's label — the device
+// would then quietly stop matching the preset the list names. Choosing 自定义
+// clears the box and unlocks it, which is also how a preset is un-picked.
 func (vm *ViewModel) relaySourceFields(c *ui.Context) {
 	options := relaySourceOptions(vm.Manager.RelayPresets(), vm.Manager.RelayHistory())
-	if len(options) > 0 {
-		ui.Column(c).Gap(3).Children(func() {
-			components.Text(c, "从预设或历史选择").FontSize(11)
-			pick := components.NativeSelect(c, &vm.EditorDraft.RelayPick, options)
-			if pick.Changed() {
+	ui.Column(c).Gap(3).Children(func() {
+		components.Text(c, "从预设或历史选择").FontSize(11)
+		pick := components.Select(c, &vm.EditorDraft.RelayPick)
+		pick.Trigger.FillWidth().Label("DERP 节点来源")
+		pick.Trigger.Children(func() {
+			components.Text(c, vm.relayPickLabel(options)).SingleLine()
+		})
+		pick.Popup(func(ui.Element) {
+			// 自定义 comes first: clearing a preset is a normal choice, not a
+			// hidden gesture.
+			item := pick.Item("")
+			item.FillWidth().Justify(ui.Start)
+			item.Children(func() { components.Text(c, relayPickCustom).SingleLine() })
+			for _, option := range options {
+				value := option.Value
+				item := pick.Item(value)
+				item.FillWidth().Justify(ui.Start)
+				item.Children(func() { components.Text(c, option.Label).SingleLine() })
+			}
+		})
+		if pick.Trigger.Changed() {
+			if vm.EditorDraft.RelayPick == "" {
+				vm.EditorDraft.RelaySource = ""
+			} else {
 				vm.EditorDraft.RelaySource = vm.EditorDraft.RelayPick
 			}
-			pick.Trigger.Label("DERP 节点来源").FillWidth()
-		})
+		}
+	})
+	locked := vm.EditorDraft.RelayPick != ""
+	ui.Column(c).Gap(3).Children(func() {
+		components.Text(c, "DERP JSON 链接或内容").FontSize(11)
+		if locked {
+			// A read-only dump of an inline map opens scrolled to its last line,
+			// which reads like a broken field. The locked box shows what the
+			// device will store in one line instead; the full text comes back
+			// the moment the user chooses 自定义.
+			display := vm.relaySourceDisplay(vm.EditorDraft.RelaySource)
+			components.TextBox(c, &display, components.TextBoxOptions{ReadOnly: true}).
+				Label("DERP JSON 链接或内容").FillWidth()
+			components.Text(c, "来源由所选预设提供；要自己填，请在上方选「自定义」").FontSize(11).TextColor(c.Theme().TextMuted)
+			return
+		}
+		components.TextBox(c, &vm.EditorDraft.RelaySource, components.TextBoxOptions{Multiline: true}).
+			Label("DERP JSON 链接或内容").FillWidth().Lines(4, 8)
+	})
+}
+
+// relaySourceDisplay is the locked box's one line: the URL itself, or what the
+// inline map holds.
+func (vm *ViewModel) relaySourceDisplay(source string) string {
+	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
+		return source
 	}
-	field(c, "DERP JSON 链接或内容", &vm.EditorDraft.RelaySource, false)
+	return "内联 JSON · " + vm.derpInfoFor(source).summary
+}
+
+// relayPickLabel names the chosen option; an empty pick is the custom row.
+func (vm *ViewModel) relayPickLabel(options []relaySourceOption) string {
+	if vm.EditorDraft.RelayPick == "" {
+		return relayPickCustom
+	}
+	for _, option := range options {
+		if option.Value == vm.EditorDraft.RelayPick {
+			return option.Label
+		}
+	}
+	return relayPickCustom
 }
 
 // field renders one labelled text input.

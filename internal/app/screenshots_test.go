@@ -318,6 +318,17 @@ func shotCases() []shotCase {
 			settle: 12,
 		},
 		{
+			name: "25-device-editor-relay-custom",
+			build: func(t *testing.T) *ViewModel {
+				vm, _ := newDerpViewModel(t)
+				vm.openEditor(&EditorRequest{})
+				vm.EditorDraft.RelayTab = 1
+				vm.EditorDraft.RelaySource = `{"Regions":{"901":{"RegionID":901,"RegionCode":"test","Nodes":[{"Name":"901a","RegionID":901,"HostName":"relay.example.com","DERPPort":443}]}}}`
+				return vm
+			},
+			settle: 12,
+		},
+		{
 			name: "22-appmeta-cache",
 			build: func(t *testing.T) *ViewModel {
 				cache := &stubAppMetaCache{entries: map[string][]core.AppMetaEntry{}}

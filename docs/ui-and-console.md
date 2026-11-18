@@ -426,7 +426,7 @@ TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v
 | 路由、页面、概览、页签 | `internal/app/detail.go` |
 | 日志页与设备日志标签（共享 `logView`、筛选、跟随、输出、清空） | `internal/app/logs.go` |
 | 内嵌终端、`lineConsole` | `internal/app/terminal.go` |
-| 表单（连接方式单选、中继分段与「预设 + 历史」合并选择） | `internal/app/editor.go` |
+| 表单（连接方式单选、中继分段与「预设 + 历史」合并选择；选中预设后来源框锁定，选「自定义」解锁为多行输入） | `internal/app/editor.go` |
 | 上传/下载表单 | `internal/app/transfer.go` |
 | 连通测试表（`components.Table`、状态图标） | `internal/app/reachability.go` |
 | 错误回流（连接、探测、终端） | `internal/app/detail.go`、`internal/app/actions.go`、`internal/app/app.go` |
