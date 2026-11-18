@@ -71,3 +71,25 @@ func TestOnlyFilesLeavesTheTableUnframed(t *testing.T) {
 		}
 	}
 }
+
+// TestTablesAreBuiltOnlyByTableCard keeps the framing, height and label rules
+// in one place: a page that writes ui.Table itself looks like the others but
+// silently loses the border, the height cap and the label.
+func TestTablesAreBuiltOnlyByTableCard(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("Glob() error: %v", err)
+	}
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") || path == "table.go" {
+			continue
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		if strings.Contains(string(source), "ui.Table(") {
+			t.Fatalf("%s builds a table itself; build it with tableCard", path)
+		}
+	}
+}

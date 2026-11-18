@@ -114,6 +114,21 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 
 **布局约定**：`shells/sidebar` 的 `Left` / `Content` 必须用 `sidebar.HeaderHeight(c)` 作上内边距（否则被浮动标题栏压住）；固定底栏用 `LeftToolbar`，不要让列表和 footer 抢高度；行式元素用 `FillWidth()`，**`Fill()` 会同时占满高度**，行高失控通常就是它。
 
+### 表格（全部统一为 `ui.Table` 之后）
+
+表格只有一条路：`tableCard`。以下每条都是踩过的坑，别重犯。
+
+1. **只调 `internal/app/table.go` 的 `tableCard`**：页面里不许直接写 `ui.Table`，更不许再用 onevra 的 `components.Table` / `TableVirtualized`。两条守卫分别在 `internal/app/table_test.go`（`TestTablesAreBuiltOnlyByTableCard`：`ui.Table(` 只允许出现在 `table.go`）和 `internal/app/style_test.go`（`TestNoOnevraTableComponentsAnywhere`：onevra 表格组件全仓清零）。
+2. **表格自己滚，外面不要再套滚动容器**。`components.Table` 自己不滚、要求调用方套 `ScrollView`，而我们套的是竖滚容器——列一调宽，最右列的调整抓手就被裁在可视区外且没有横向滚动能过去。`ui.Table` 的表头与行在同一个横向滚动区里，所以：
+   - 表格是本屏主体（资源、缓存、日志、文件）→ `tableOptions{Grow: true}`，占满剩余高度；
+   - 页面本身要滚（DERP 列表、DERP 详情、连通测试对话框）→ 给 `tableOptions{Rows: n}` 定高，最多 `maxTableRows` 行，超出在表内滚。
+3. **行激活用 `RowClicked()`，不要用 `Changed()`**。`Changed()` 对上下键移动选中也报，用它会在用户只是按键浏览时进目录、弹任务输出（两次都是真 bug）。
+4. **选中行（`ListState.Selected`）必须指向状态字段**，不能指向构建函数里的局部变量：列表在帧与帧之间写它，局部变量活不到下一帧，箭头键的写入会丢。文件页为此存 `fileState.chosen` + `chosenPath`（`TestFileTableKeyboardMovesTheChoice` 钉住）。
+5. **`ListState.Key` 必须是稳定身份**（日志用 `logRowKey`：两行日志可以时间、来源、文本全同）。
+6. **表格是虚拟化的**：屏幕外的行根本不存在，测试必须滚动之后再断言（`TestCacheTableKeepsTheClearActionInView`、`TestDerpRegionTableScrollsItsOwnRows`、`TestLogTimelineIsItsOwnScrollArea`）。任何「第 40 行在不在」的旧断言都要改写，不是删掉。
+7. **排序由页面算**：把 `&state.Sort` 交给表，建表前用 `Sort` 里的列自己排好行序（资源页 `sortApps` / `sortProcessRows`）。列上要 `Sortable: true`；默认值写成一个 `ui.SortOrder{Column: "app"}`；降序只翻主键，并列键永远升序（同一应用的行不许散开）；`不可用` 的 GPU 双向都排在数字后面。
+8. **每个表格都有边框**（`tableCard` 默认 1 DIP 圆角框）。唯一例外是文件页右栏——整页浏览区已经是一个框，那里传 `Unframed: true`，由 `TestOnlyFilesLeavesTheTableUnframed` 钉住。
+
 ## 常见改动 cookbook
 
 **给设备加一个字段**：`internal/core/session.go` 的 `Profile`（JSON tag 用 camelCase，可空加 `omitempty`）→ `SaveDeviceRequest`/`SaveTemporaryDeviceRequest` → `SaveDevice`/`saveDirectDevice` 赋值 → 编辑器 `EditorInput`/`EditorValues` 与 `Validate` → `internal/app/editor.go` 的字段与 `openEditor`。迁移兼容：未知字段被忽略，不需要写升级代码。
@@ -126,6 +141,8 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 
 **加一个对话框**：在 `ViewModel` 加 `XxxOpen bool` 与草稿字段，`internal/app/xxx.go` 里用 `components.Dialog(c, &open, ...)`，在 `ContentView` 末尾调用。校验逻辑抽成**纯函数**（如 `EditorInput.Validate`）并单测，不要只测视图。
 
+**加一个表格 / 一列排序**：`ui.ListState` 放进页面状态（`internal/app/state.go` 或该页自己的 `xxxState`）→ 页面用 `tableCard(c, &state.table, columns, len(rows), tableOptions{Label: "……表", Grow: true}, cell)` → 行级动作用单元格上的 `.RowClicked()` → 需要排序时列加 `Sortable: true`、状态里放 `sort ui.SortOrder` 并把 `&sort` 交给 `table.Sort`，建表前用纯函数按 `sort` 排好行 → 补一个「点表头换顺序」和一个「默认顺序」的测试 → 表格页在 `screenshots_test.go` 里要有用例，改完自己看一眼。
+
 ## 绝不能碰的红线
 
 - **`needsAction` 状态下不要自动重试或自动 `adb connect`。** 用户刚在终端断开，我们就不能偷偷连回去（`TestAttentionStopsRetry` 钉住）。
@@ -133,7 +150,9 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 - **不要用别人的本地端口**：`portChanged` 里的 P2 只作线索展示，不接管。
 - **不要删/覆盖已存在的身份文件**（`TestIdentityNeverReplacesCorruptFile`）。
 - **不要在持有 `m.mu` 时调用会再上锁的方法**（`detectInterference`、`recordTask`、`validateTarget` 之类），历史上这里死锁过两次。
-- **不要自己实现 onevra 已有的组件**（radio、accordion、switch、tabs、table、dialog…）。见「GUI 组件优先级」。
+- **不要自己实现 onevra 已有的组件**（radio、accordion、switch、tabs、dialog…）。见「GUI 组件优先级」。表格是例外：一律 `ui.Table`，经 `tableCard`（见「表格」一节）。
+- **不要再用 onevra 的表格组件，也不要把表格塞进 `ScrollView` / `ui.Scroll`**：那正是列宽抓手滚出可视区的原因（`TestNoOnevraTableComponentsAnywhere`）。
+- **表格的行激活不要用 `Changed()`**：上下键移动也会报它，用户按键浏览就会进目录 / 弹输出。用 `RowClicked()`。
 - **行式元素不要用 `Fill()`**：它同时占满宽高，会让列表行被拉伸。用 `FillWidth()`。
 - **不要 `panic` 来表达用户错误**：用 `core.Error` / `core.Errorf`，它们是面向用户的文案。
 
