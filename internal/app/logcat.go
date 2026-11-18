@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo/ui"
@@ -299,7 +300,7 @@ func (vm *ViewModel) logcatBox(c *ui.Context, f *logcatState) {
 		switch {
 		case len(f.rows) > 0:
 			vm.logcatTable(c, f)
-		case f.received > 0 && !f.Paused:
+		case f.received > 0 && !f.Paused && logcatFilterActive(f.Filter):
 			placeholder(c, "没有符合筛选条件的日志", 16)
 		case f.exited:
 			placeholder(c, "日志流已结束，没有可显示的行", 16)
@@ -362,13 +363,50 @@ func logcatTone(level core.LogcatLevel) components.BadgeTone {
 	}
 }
 
-// logcatFootRow says what the stream is doing: how much came, how much is shown
-// and whether the ring had to drop lines.
+// logcatFootRow says what the stream is doing and offers what can be done with
+// what it kept. It is drawn even when the box is empty, so the actions keep
+// their place.
 func (vm *ViewModel) logcatFootRow(c *ui.Context, f *logcatState) {
 	theme := c.Theme()
-	ui.Row(c).FillWidth().Shrink(0).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+	ui.Row(c).FillWidth().Shrink(0).AlignItems(ui.Center).Justify(ui.SpaceBetween).Gap(theme.Space(2)).Children(func() {
 		components.Text(c, logcatStatusText(f)).FontSize(11).TextColor(theme.TextMuted)
+		ui.Row(c).Shrink(0).Gap(theme.Space(1.5)).AlignItems(ui.Center).Children(func() {
+			if components.Button(c, "清空缓冲", components.ButtonOutline).Height(26).Clicked() {
+				vm.clearLogcat(f)
+			}
+			if f.exited && components.Button(c, "重新开始", components.ButtonPrimary).Height(26).Clicked() {
+				vm.restartLogcat(f)
+			}
+		})
 	})
+}
+
+// clearLogcat drops the kept lines. The counters keep counting: "this stream
+// received N lines" stays true after the reader emptied it.
+func (vm *ViewModel) clearLogcat(f *logcatState) {
+	f.rows = nil
+	f.version = 0
+	if f.stream != nil {
+		f.stream.Clear()
+	}
+}
+
+// restartLogcat starts a fresh stream after the last one ended. It is a user
+// action on purpose: a device that went away must not be re-read behind the
+// user's back.
+func (vm *ViewModel) restartLogcat(f *logcatState) {
+	vm.stopLogcatStream(f)
+	f.rows = nil
+	f.version = 0
+	f.filterKey = ""
+	f.exited = false
+	f.err = ""
+	f.received, f.dropped = 0, 0
+}
+
+// logcatFilterActive reports whether the user narrowed what the page shows.
+func logcatFilterActive(filter core.LogcatFilter) bool {
+	return filter.MinLevel != "" || strings.TrimSpace(filter.Tags) != "" || strings.TrimSpace(filter.Terms) != ""
 }
 
 // logcatStatusText is the foot row's sentence; tests assert it verbatim.

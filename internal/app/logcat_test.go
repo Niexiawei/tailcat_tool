@@ -317,3 +317,49 @@ func TestLogcatPageExplainsAnEmptyFilter(t *testing.T) {
 	vm.Logcat.Filter.Terms = "nothing-matches-this"
 	waitForText(t, tt, "没有符合筛选条件的日志")
 }
+
+func TestLogcatClearEmptiesTheTable(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.123  1  1 I Tag: will be cleared\n")
+	waitForText(t, tt, "will be cleared")
+	if err := tt.Click("清空缓冲"); err != nil {
+		t.Fatalf("Click(清空缓冲) error: %v", err)
+	}
+	tt.Frame()
+	if tt.HasText("will be cleared") {
+		t.Fatalf("the cleared line is still on screen; texts = %v", tt.Texts())
+	}
+	if !tt.HasText("已接收 1 行") {
+		t.Fatalf("clearing forgot how many lines came; texts = %v", tt.Texts())
+	}
+}
+
+func TestLogcatPageRebuildsAnEndedStream(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.end(0)
+	waitForText(t, tt, "日志流已结束")
+	if err := tt.Click("重新开始"); err != nil {
+		t.Fatalf("Click(重新开始) error: %v", err)
+	}
+	waitForText(t, tt, "正在接收日志…")
+	if calls := runner.logcatCalls(); len(calls) != 2 {
+		t.Fatalf("restarting started %d streams, want a second one: %v", len(calls), calls)
+	}
+}
+
+func TestDemoLogcatStreamFeedsSyntheticLines(t *testing.T) {
+	vm := newDemoViewModel(t, func(vm *ViewModel) {
+		profile := vm.Manager.Profiles()[0]
+		if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
+			t.Fatalf("Connect() error: %v", err)
+		}
+		t.Cleanup(func() { vm.Manager.Disconnect(context.Background(), profile.ID) })
+		vm.OpenLogcat()
+	})
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	waitForText(t, tt, "演示日志")
+}

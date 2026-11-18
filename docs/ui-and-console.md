@@ -95,6 +95,7 @@ ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
 | `/devices` | 设备列表页 | 卡片式列表（状态点 / 名称 / 连接方式与地址 / 状态），空态给出"添加设备"；页面标题在窗口标题栏里，正文不再重复 |
 | `/devices/{id}` | 设备页 | 面包屑 + 标题行（编辑 / 连接 / 断开）+ 页签（概览 / 资源 / 终端 / 文件 / 日志） |
 | `/logs` | 日志页 | 应用错误 / 通道日志 / 任务的统一时间线，四个筛选项（见 §14）；面包屑「首页 › 日志」；入口在侧栏设备列表之下 |
+| `/logcat` | Logcat 页 | 一台已连接设备的 `adb logcat` 实时流，可按级别 / 标签 / 内容筛选、暂停、跟随、清空与导出（见 §15）；面包屑「首页 › Logcat」；入口紧跟在「日志」之后 |
 | `/manage/appmeta` | 缓存管理页 | 按设备列出已缓存的应用名称与图标（包名、大小、读取时间、是否过期），可删除单条或清空这台设备；面包屑「首页 › 缓存管理」 |
 | `/manage/derp` | DERP 节点页 | 上半部固定（新建 / 默认节点），下半部把预设与最近用过合成一个滚动框，可新建、编辑、删除（在用不可删）；入口在侧栏设备列表之下 |
 | `/manage/derp/{id}` | DERP 节点详情页 | 区域与节点表、原始 JSON、使用设备；面包屑「首页 › DERP 节点 › 名称」，点中间一级回到列表；URL 型可强制重新获取 |
@@ -433,6 +434,9 @@ TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v
 | 侧栏、分组、底栏、提示队列、标题栏面包屑 | `internal/app/state.go` |
 | 路由、页面、概览、页签 | `internal/app/detail.go` |
 | 日志页与设备日志标签（共享 `logView`、筛选、跟随、输出、清空） | `internal/app/logs.go` |
+| Logcat 页（设备选择、筛选、表格、暂停/跟随、清空、流的生命周期） | `internal/app/logcat.go` |
+| logcat 拆行、解析、环形缓冲、过滤（纯逻辑，不启进程） | `internal/core/logcat.go` |
+| logcat 流的启动与按设备登记（`StartLogcat` / `StopLogcat`） | `internal/core/manager_logcat.go` |
 | 内嵌终端、`lineConsole` | `internal/app/terminal.go` |
 | 表单（连接方式单选、中继分段与「预设 + 历史」合并选择；选中预设后来源框锁定，选「自定义」解锁为多行输入） | `internal/app/editor.go` |
 | 上传/下载表单 | `internal/app/transfer.go` |
@@ -448,6 +452,7 @@ TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v
 | 对话框关闭动画回归 | `internal/app/dialog_test.go` |
 | 视图测试 | `internal/app/app_test.go`、`internal/app/forms_test.go`、`internal/app/terminal_test.go`、`internal/app/files_test.go` |
 | 页面截图（人工核对） | `internal/app/screenshots_test.go`（`TAILCAT_SHOT_DIR` 打开） |
+| Logcat 页的视图测试与假 runner（`logcatRunner`） | `internal/app/logcat_test.go` |
 | 锁不阻塞测试 | `internal/core/manager_test.go`（`TestSlowRecorderNeverBlocksTheManager`） |
 
 ## 13. 设备文件页（「文件」页签）
@@ -605,3 +610,28 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 **空态**：`这段时间没有日志`；还没读完时显示 `正在读取日志…`。
 
 **`--demo`**：`demoHistory`（`internal/app/demo.go`）是内存版 `Recorder` + `HistoryReader`，预置一条错误、一条警告、每台一条通道日志与一条失败任务，所以 `--demo` 的日志页与截图不会是空的。
+
+---
+
+## 15. Logcat 页（实时日志流）
+
+侧栏「Logcat」（`lucide.Activity`）→ 路由 `/logcat`，面包屑「首页 › Logcat」。名字保留英文：它就是 logcat，翻译成「实时日志」反而要用户多猜一次这两个页面有什么区别——`/logs`（§14）是**应用与设备的历史时间线**，`/logcat` 是**一台设备此刻的日志流**，两者不共享任何数据。
+
+**布局固定三段**：设备选择器、筛选行、表格 box、底部状态行。
+
+- 设备选择器**只列已连接的设备**（`session.State == StateOnline` 且有 serial）。没连上的设备不在这里出现：一个离线 serial 会让 `adb logcat` 挂住或反复报错。一台都没有时整页只有一句「没有已连接的设备，先到设备页连接一台。」，不起任何进程。
+- 筛选行：第一行是「级别」灰字标签 + 5 段 `components.Tabs`（全部 / 调试 / 信息 / 警告 / 错误，是**最低级别**语义：选「警告」留 W/E/F），右侧「跟随最新」开关与「暂停 / 继续」；第二行是「标签」「内容」两个 `components.TextBox`，空格分隔多个词、全部命中才算、大小写不敏感——与 §14 的关键词规则相同。
+- 表格 `Grow` 占满剩余高度，空态也不塌陷：还没收到行时「正在接收日志…」，有筛选条件且没命中时「没有符合筛选条件的日志」。
+- 状态行：`已接收 N 行 · 显示 M 行`，丢弃过再加 `· 缓冲已满，丢弃 K 行`，暂停时加 `· 已暂停`；右侧「清空缓冲」「导出…」，流结束后多一个「重新开始」。
+
+**行序旧→新（与 §14 的时间线正相反）**：流就是往下滚的读法，新行出现在底部。`ui.ListState.FollowEnd` 正好是这个语义——`FollowEnd = 跟随最新`，用户往上滚就自动停止跟随、滚回底部又继续。表格的行身份是 `LogcatEntry.Seq`：两行日志可以时间、级别、标签、正文全同，只有序号能区分。
+
+**数据来源**：`core.LogcatStream`（`internal/core/logcat.go`），不是任务、不进 SQLite、没有超时、不占任务面板。`Manager.StartLogcat` 用 `Runner.Start` 跑 `adb -s SERIAL logcat -v threadtime`，输出在管道协程里拆行 → 解析 → 进一个 5000 行的环形缓冲；页面每帧只调 `Snapshot(filter)`，取最新的 2000 条匹配行。一台设备同时只有一条流，换设备先关旧的。
+
+**筛选全在本机**：级别 / 标签 / 关键词都不过设备（不重开进程、不丢行）。代价是 V/D 行照样从设备经 Tailnet 传到本机，一台刷屏设备可能占带宽；真要压带宽，升级路径是给 `StartLogcat` 加 `*:W` 这样的 spec，代价是切换级别会重开进程。
+
+**流的生命周期**：`routedPage` 每帧先 `beginLogcatFrame()`、再 `defer settleLogcat()`；`logcatPage` 一进来就 `logcatDrawn = true`。一帧没画这个页面就说明用户走了，`settleLogcat` 立刻 `Manager.StopLogcat`。**不自动重启**：流结束（设备断开、adb 退出）后页面显示「日志流已结束」与「重新开始」，必须由用户点——断开后偷偷连回去是红线。
+
+**`-v threadtime` 的年份**：threadtime 不打印年份与时区。解析时用「当前年」，若算出的时间晚于现在 24 小时则减一年（1 月读到的 12 月日志属于刚过去的那年）。续行（不以时间戳开头的缩进行）拼到上一条的正文里；`--------- beginning of main` 这类分隔行丢弃；单行超过 8 KiB 截断并加「（已截断）」，否则一条跑飞的二进制行会把缓冲撑爆。
+
+**`--demo`**：`demoRunner.Start` 见到 `logcat` 就按 150ms 打印一条演示行，直到 ctx 取消（`--demo` 没有真实进程，`ExecRunner` 忽略 ctx，演示版遵守它）。所以演示环境里这一页有内容、筛选也能试。

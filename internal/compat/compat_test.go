@@ -80,6 +80,9 @@ var (
 	_                                                                                    = ui.ListState{}.Key
 	_                                                                                    = ui.Element.Changed
 	_                                                                                    = ui.Element.Submitted
+	_                                                                                    = ui.ListState{}.FollowEnd
+	_                                                                                    = (*ui.ListState).ScrollToEnd
+	_                                                                                    = (*ui.Element).RowClicked
 )
 
 // onevra: shells, theme, components and icons.
@@ -144,6 +147,7 @@ var (
 	_                                                                                                                       = components.TreeItemWithLeading
 	_                                                                                                                       = components.FileIcon
 	_                                                                                                                       = mygo.Dialog.Save
+	_                                                                                                                       = mygo.FileFilter{}.Extensions
 	_ func(*ui.Context, *float32, func(), func(), ...components.SplitOptions) *components.SplitControl                      = components.Split
 	_ func(*ui.Context, string) ui.Element                                                                                  = components.FileIcon
 	_ func(*ui.Context, func()) ui.Element                                                                                  = components.Tree
