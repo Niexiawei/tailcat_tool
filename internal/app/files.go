@@ -64,8 +64,7 @@ func (vm *ViewModel) fileStateFor(device uuid.UUID) *fileState {
 		state = &fileState{treeWidth: 240, path: "/sdcard", selected: "/sdcard", crumb: -1}
 		// Open the way down to the folder the page starts on, so the tree shows
 		// where that folder lives instead of a single closed row.
-		state.tree.Open.Add("/")
-		state.tree.Open.Add("/sdcard")
+		openTreeTo(state, state.path)
 		vm.files[device] = state
 	}
 	return state
@@ -211,10 +210,45 @@ func (vm *ViewModel) showDir(profile core.Profile, state *fileState, dir string)
 	state.path = dir
 	state.selected = dir
 	state.crumb = -1
+	openTreeTo(state, dir)
+	vm.ensureDirs(profile, dir)
+}
+
+// openTreeTo opens every row from the root down to dir.
+//
+// The root is part of the path, so it opens too. Leaving it out is what made
+// the two panes stop agreeing: once / was collapsed by hand, the table could
+// walk all the way down to /sdcard/Android/data while the tree stayed on one
+// collapsed row.
+func openTreeTo(state *fileState, dir string) {
+	state.tree.Open.Add("/")
 	for path := dir; path != "" && path != "/"; path = core.RemoteParent(path) {
 		state.tree.Open.Add(path)
 	}
-	vm.ensureDirs(profile, dir)
+}
+
+// revealInTree puts the tree's highlight and scroll on the folder the right
+// pane shows. The table is the source of truth: without this the tree keeps its
+// cursor on whichever row was chosen first — usually / — and the highlight
+// contradicts the breadcrumbs. It runs after the rows are built for the frame,
+// so the target row is known. Setting the cursor directly, instead of choosing
+// it, keeps OnChange from navigating back where the user just came from.
+func revealInTree(state *fileState) {
+	if state.tree.List.Selected == nil {
+		return
+	}
+	row := -1
+	for i := 0; i < state.tree.Rows(); i++ {
+		if state.tree.Item(i) == state.path {
+			row = i
+			break
+		}
+	}
+	if row < 0 || row == *state.tree.List.Selected {
+		return
+	}
+	*state.tree.List.Selected = row
+	state.tree.List.ScrollIntoView(row)
 }
 
 // filesPage draws the file tab: the folder tree on the left, the entries of the
@@ -268,9 +302,13 @@ func (vm *ViewModel) folderTree(c *ui.Context, profile core.Profile, state *file
 	}
 	state.tree.List.OnChange = func() { vm.followTreeCursor(profile, state) }
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(6, 4).Children(func() {
-		components.TreeVirtualized(c, &state.tree, fileRoots, children, func(path string) {
+		tree := components.TreeVirtualized(c, &state.tree, fileRoots, children, func(path string) {
 			vm.folderRow(c, profile, state, path)
-		}).FillWidth().Grow(1).MinHeight(0)
+		})
+		// The rows exist now, so the highlight can be moved onto the folder the
+		// right pane is showing. Building the tree does not do it by itself.
+		revealInTree(state)
+		tree.FillWidth().Grow(1).MinHeight(0)
 	})
 }
 

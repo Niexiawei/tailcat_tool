@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -519,6 +520,99 @@ func TestFileTreeOpensTheFolderTheTableNavigatedTo(t *testing.T) {
 	waitForRow(t, vm, tt, "/sdcard/Download")
 	if !vm.fileStateFor(vm.Selection).tree.Open.Has("/sdcard/Download") {
 		t.Fatalf("the tree did not open the folder the table navigated to; rows = %v", treeRows(vm))
+	}
+}
+
+// TestFileTreeReopensTheRootTheTableNavigatedFrom pins the user's report: after
+// collapsing / by hand, opening a folder in the table left the tree sitting on
+// one collapsed row while the breadcrumbs moved deeper, so the two panes
+// stopped agreeing. Navigating from the table is the user asking to see that
+// folder, so the root opens again.
+func TestFileTreeReopensTheRootTheTableNavigatedFrom(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "照片.jpg")
+
+	state := vm.fileStateFor(vm.Selection)
+	state.tree.Open.Remove("/")
+	tt.Frame()
+	if rows := treeRows(vm); len(rows) != 1 || rows[0] != "/" {
+		t.Fatalf("a collapsed root should be the tree's only row; rows = %v", rows)
+	}
+
+	if err := tt.Click("Download"); err != nil {
+		t.Fatalf("Click(Download) error: %v", err)
+	}
+	waitForText(t, tt, "update.zip")
+	waitForRow(t, vm, tt, "/sdcard/Download")
+}
+
+// TestFileTreeHighlightsTheFolderTheTableOpened keeps one highlight in the
+// page: the tree's selected row moves with the breadcrumbs instead of staying
+// on whichever row happened to be chosen first, usually /.
+//
+// The click itself is not used here because both panes label a folder with its
+// base name, so a label click can land on either; activateEntry is the call the
+// table row makes, and the tree half is what this pins.
+func TestFileTreeHighlightsTheFolderTheTableOpened(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "照片.jpg")
+
+	profile := vm.Manager.Profiles()[0]
+	state := vm.fileStateFor(profile.ID)
+	vm.activateEntry(profile, state, core.RemoteEntry{Name: "Download", Path: "/sdcard/Download", Dir: true})
+	waitForText(t, tt, "update.zip")
+	waitForRow(t, vm, tt, "/sdcard/Download")
+
+	if state.tree.List.Selected == nil {
+		t.Fatal("the tree never built a selection")
+	}
+	row := *state.tree.List.Selected
+	if row < 0 || row >= state.tree.Rows() {
+		t.Fatalf("the tree highlights row %d of %d; rows = %v", row, state.tree.Rows(), treeRows(vm))
+	}
+	if got := state.tree.Item(row); got != "/sdcard/Download" {
+		t.Fatalf("the tree highlights %q while the table shows %q", got, state.path)
+	}
+}
+
+// TestFileTreeScrollsTheFolderIntoView covers the case the highlight test
+// cannot: a folder below the fold. Selecting a row nobody can see is the same
+// as not selecting it.
+func TestFileTreeScrollsTheFolderIntoView(t *testing.T) {
+	// / holds enough folders to push /sdcard past the bottom of the pane.
+	read := func(dir string) (core.Result, error) {
+		if dir == "/" {
+			var out strings.Builder
+			for i := 0; i < 40; i++ {
+				fmt.Fprintf(&out, "directory|4096|755|drwxr-xr-x|1700000000|./a%02d\n", i)
+			}
+			out.WriteString("symbolic link|4|777|lrwxrwxrwx|1700000000|./sdcard\n")
+			return core.Result{Output: out.String()}, nil
+		}
+		return readFixture(dir)
+	}
+	vm, _ := newFilesViewModel(t, read)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "照片.jpg")
+	waitForRow(t, vm, tt, "/sdcard")
+
+	state := vm.fileStateFor(vm.Selection)
+	row := -1
+	for i := 0; i < state.tree.Rows(); i++ {
+		if state.tree.Item(i) == "/sdcard" {
+			row = i
+			break
+		}
+	}
+	if row < 0 {
+		t.Fatalf("the tree never showed /sdcard; rows = %v", treeRows(vm))
+	}
+	// Visible reports both ends inclusively.
+	first, last := state.tree.List.Visible()
+	if row < first || row > last {
+		t.Fatalf("row %d (/sdcard) is outside the visible range %d..%d; the tree did not scroll to the folder it highlights", row, first, last)
 	}
 }
 

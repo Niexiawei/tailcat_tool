@@ -475,7 +475,14 @@ ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(1).
 
 组件按 `children(path)` 是否为 `nil` 决定画不画箭头，所以「键为空切片」和「键为 `nil`」是两种意思，别写反。
 
-树只有一个根 `/`，默认展开到 `/sdcard`（`state.tree.Open.Add("/")` + `Add("/sdcard")`），右侧默认列出 `/sdcard`。所以启动时会预取 `/` 下十几个目录——这是「点进去不用等」的价格，跳过 `/proc`、`/sys`、`/dev`、`/acct`。
+树只有一个根 `/`，默认展开到 `/sdcard`（`openTreeTo(state, "/sdcard")`），右侧默认列出 `/sdcard`。所以启动时会预取 `/` 下十几个目录——这是「点进去不用等」的价格，跳过 `/proc`、`/sys`、`/dev`、`/acct`。
+
+**左侧必须跟着右侧走**（`showDir` + `revealInTree`），两件事缺一件用户就会觉得树没反应：
+
+1. `openTreeTo` 把路径上的**每一级都展开，包括根 `/`**。漏掉根就会在用户手动收起 `/` 之后，右侧越点越深、左侧永远只剩一个折叠的 `/`。
+2. 树建完当帧的 rows 之后，`revealInTree` 把 `state.tree.List.Selected` 移到 `state.path` 那一行并 `ScrollIntoView`；目标在屏幕外时也要滚过去（`TestFileTreeScrollsTheFolderIntoView`）。
+
+`revealInTree` **直接改 `Selected`，不走 `ListState.choose`**：`choose` 会触发 `OnChange` → `followTreeCursor` → `showDir`，等于让树把右侧刚去过的地方再导航一遍（点一次面包屑会跳两次）。只有 `row != *Selected` 时才动，因此也不会每帧把用户手动滚走的树拽回来。
 
 ### 13.2 取数：一次 `stat` 往返，静默执行
 
@@ -519,7 +526,7 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 ### 13.4 交互与弹窗
 
 - 点树节点：右侧列该目录 + 展开该节点。
-- 点表格里的**目录**行：进入（`showDir`：右侧切换、树上选中并展开）。
+- 点表格里的**目录**行：进入（`showDir`：右侧切换 + `openTreeTo` 展开到该目录，含根；`revealInTree` 把树的高亮与滚动移到那一行）。
 - 右侧上方的路径是 `components.Breadcrumbs` 面包屑：祖先可点，一路点回上层；`state.crumb` 是它的绑定，`showDir` 会把它重置为 -1。
 - 文件列表区域的「正在读取」和「读取失败」都是**居中**的一整块（`AlignItems(Center).Justify(Center)`），不是贴在左上角的一行字——它们是这一栏的全部内容，不是它的一行。
 - 点**文件**行：打开 `FileDetailView` —— 属性四行（文件名 / 文件大小 / 最后修改时间 / 文件权限 `%A (八进制)`）+ 主按钮「下载到本地…」+ 次按钮「上传到此文件夹…」。目录行改成「下载此文件夹…」。
@@ -542,6 +549,8 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 | 失败后不刷命令 | 让读取返回退出码 9，断言出现「读取失败：…」后再 `Frame()` 二十次，同一目录的命令数仍是 1 |
 | 展开箭头也会读 | 直接把 `*state.openAt("/system")` 置真（等价于点箭头），断言发出了 `/system` 的命令 |
 | 面包屑能回退 | 进入 `Download` 后点面屑里的 `sdcard`，断言回到了 `/sdcard` 的内容 |
+| 树跟着右侧走 | 手动收起 `/` 再从表格进 `Download`，断言 `/sdcard/Download` 重新成为树里的一行（`TestFileTreeReopensTheRootTheTableNavigatedFrom`） |
+| 高亮跟着走 | 从表格进 `Download` 后断言 `*state.tree.List.Selected` 指向 `/sdcard/Download`（不是 `/`）；`/` 下塞 40 个目录让 `/sdcard` 落在屏幕外，断言它落在 `List.Visible()` 里（`Visible` 两端都是闭区间） |
 | 箭头规则 | 纯函数 `treeChildren` 的五个分支：没读过 / 读过有子目录 / 读过没子目录 / 空但已展开 |
 | 同名目录不串状态 | 让 `/sdcard` 与 `/system` 都有 `Download`，展开两者：抓 `log.SetOutput` 断言没有 `have the key`，并断言树里没有重复行 |
 | 树的实际内容 | `treeRows(vm)` 读 `TreeVirtualizedState` 的 `Rows()` / `Item(i)` 得到路径列表，比按标签找元素可靠（同名目录不会歧义） |

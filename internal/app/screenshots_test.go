@@ -140,6 +140,20 @@ func shotCases() []shotCase {
 			settle: 20,
 		},
 		{
+			// Both panes must agree: the breadcrumbs, the table and the tree
+			// highlight all on the folder the user entered from the table.
+			name: "05b-device-files-navigated",
+			build: func(t *testing.T) *ViewModel {
+				vm := shotDevice(t, readFixture, detailFiles)
+				profile := vm.Manager.Profiles()[0]
+				vm.activateEntry(profile, vm.fileStateFor(profile.ID), core.RemoteEntry{
+					Name: "Download", Path: "/sdcard/Download", Dir: true,
+				})
+				return vm
+			},
+			settle: 20,
+		},
+		{
 			name: "06-device-files-failed",
 			build: func(t *testing.T) *ViewModel {
 				return shotDevice(t, func(dir string) (core.Result, error) {
