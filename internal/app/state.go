@@ -267,6 +267,9 @@ const DeviceIndexRoute = "/devices"
 // every task into one searchable timeline.
 const LogsRoute = "/logs"
 
+// CacheRoute is the management page for cached application names and icons.
+const CacheRoute = "/manage/appmeta"
+
 // DerpRoute lists every DERP map source; DerpDetailRoute shows one preset.
 const DerpRoute = "/manage/derp"
 
@@ -287,6 +290,13 @@ func (vm *ViewModel) OpenDevice(id uuid.UUID) {
 	}
 	if target := DeviceRoute(id); vm.Router.Path() != target {
 		vm.Router.Push(target)
+	}
+}
+
+// OpenCache shows the application metadata cache page.
+func (vm *ViewModel) OpenCache() {
+	if vm.Router != nil && vm.Router.Path() != CacheRoute {
+		vm.Router.Push(CacheRoute)
 	}
 }
 

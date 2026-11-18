@@ -47,6 +47,10 @@ func (vm *ViewModel) routedPage(c *ui.Context) {
 	}
 	vm.Router.View(c, func(r *ui.Route) {
 		switch {
+		case r.Match(CacheRoute):
+			r.Title("缓存管理")
+			vm.cachePage(c)
+			return
 		case r.Match(LogsRoute):
 			r.Title("日志")
 			vm.logsPage(c)

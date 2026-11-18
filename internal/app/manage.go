@@ -12,9 +12,10 @@ import (
 // manageEntries is the browsing group under the device list: pages, not window
 // actions, so they live inside the scrolling sidebar and scroll with it.
 //
-// The cache and DERP pages add their own rows here once they exist; today the
-// group holds the log page only.
+// The three management pages (cache, DERP, logs) add their rows here; the
+// device groups come first because the user asked for these below them.
 func (vm *ViewModel) manageEntries(c *ui.Context) {
+	vm.manageEntry(c, lucide.Database, "缓存管理", CacheRoute)
 	vm.manageEntry(c, lucide.Server, "DERP 节点", DerpRoute)
 	vm.manageEntry(c, lucide.ScrollText, "日志", LogsRoute)
 }
@@ -46,6 +47,8 @@ func (vm *ViewModel) manageEntry(c *ui.Context, icon func() *ui.SVG, label, rout
 // title bar without the route changing.
 func (vm *ViewModel) managePageTitle(path string) (string, bool) {
 	switch path {
+	case CacheRoute:
+		return "缓存管理", true
 	case LogsRoute:
 		return "日志", true
 	case DerpRoute:
