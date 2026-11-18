@@ -106,10 +106,10 @@ type ViewModel struct {
 	CacheConfirmOpen  bool
 	CacheConfirmPkg   string
 	CacheConfirmError string
-	// DerpTable keeps the DERP list's column layout across frames.
-	DerpTable components.TableState
-	// DerpRegionTable keeps the detail page's region table layout.
-	DerpRegionTable components.TableState
+	// DerpTable keeps the DERP list's column layout and scroll across frames.
+	DerpTable ui.ListState
+	// DerpRegionTable keeps the detail page's region table layout and scroll.
+	DerpRegionTable ui.ListState
 	// DerpEditor is the DERP editor's draft; nil closes the dialog.
 	DerpEditor *DerpEditorDraft
 	// DerpConfirmDelete asks before removing this preset; nil closes it.

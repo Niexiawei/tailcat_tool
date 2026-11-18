@@ -109,13 +109,12 @@ func (vm *ViewModel) derpPresetSection(c *ui.Context) {
 		components.Text(c, "还没有保存的 DERP 节点").FontSize(11).TextColor(theme.TextMuted)
 		return
 	}
-	components.Table(c, &vm.DerpTable, derpColumns(), func() {
-		for _, preset := range presets {
-			preset := preset
-			components.TableRow(c, preset.ID.String(), preset.Name, false, func(col int) {
-				vm.derpPresetCell(c, col, preset)
-			})
-		}
+	tableCard(c, &vm.DerpTable, derpColumns(), len(presets), tableOptions{
+		// The page scrolls around this table, so the card makes room for a
+		// handful of rows and lets the rest scroll inside it.
+		Label: "DERP 节点预设列表", Rows: len(presets),
+	}, func(row, col int) {
+		vm.derpPresetCell(c, col, presets[row])
 	})
 }
 
@@ -346,20 +345,19 @@ func (vm *ViewModel) derpRegionTable(c *ui.Context, preview core.RelayMapPreview
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	components.Table(c, &vm.DerpRegionTable, []ui.TableColumn{
+	tableCard(c, &vm.DerpRegionTable, []ui.TableColumn{
 		{Title: "区域", ID: "region", Width: 68},
 		{Title: "代码", ID: "code", Width: 110},
 		{Title: "名称", ID: "name", MinWidth: 140},
 		{Title: "节点", ID: "nodes", MinWidth: 200},
 		{Title: "STUN 端口", ID: "stun", Width: 100},
 		{Title: "仅 STUN", ID: "stunonly", Width: 80},
-	}, func() {
-		for _, id := range ids {
-			region := preview.Map.Regions[id]
-			components.TableRow(c, id, itoa(int(region.RegionID)), false, func(col int) {
-				vm.derpRegionCell(c, col, region)
-			})
-		}
+	}, len(ids), tableOptions{
+		// A map can hold 128 regions: the table scrolls them and the page keeps
+		// its room for 原始 JSON.
+		Label: "区域表", Rows: len(ids),
+	}, func(row, col int) {
+		vm.derpRegionCell(c, col, preview.Map.Regions[ids[row]])
 	})
 }
 
