@@ -41,6 +41,12 @@ type tableOptions struct {
 // maxTableRows caps how many rows a fixed-height card makes room for.
 const maxTableRows = 8
 
+// tableDividerHeight is the 1 DIP line ui.Table draws between its header and its
+// rows. A card sized to its rows has to count it: one DIP short of the content
+// is enough for the table to scroll its own rows by that DIP and to lay a
+// scrollbar over its last column.
+const tableDividerHeight float32 = 1
+
 // tableCard builds the one table of a page and returns it, so the page can read
 // Changed and Submitted; the card around it draws the border.
 func tableCard(c *ui.Context, state *ui.ListState, columns []ui.TableColumn, rows int, opts tableOptions, cell func(row, col int)) ui.Element {
@@ -78,6 +84,9 @@ func tableRowsHeight(c *ui.Context, rows int, fit bool) float32 {
 	shown := max(rows, 1)
 	if !fit {
 		shown = min(shown, maxTableRows)
+		return c.Theme().Space(8) * float32(shown+1)
 	}
-	return c.Theme().Space(8) * float32(shown+1)
+	// Fit: the card is exactly the content, header and divider included, so the
+	// table has nothing of its own to scroll.
+	return c.Theme().Space(8)*float32(shown+1) + tableDividerHeight
 }

@@ -166,7 +166,12 @@ func derpColumns() []ui.TableColumn {
 		{Title: "类型", ID: "kind", Width: 72},
 		{Title: "来源", ID: "source", MinWidth: 200},
 		{Title: "使用设备", ID: "usage", Width: 88},
-		{Title: "操作", ID: "actions", Width: 168},
+		// The three two-character buttons and their gaps need 184: 200 keeps
+		// 删除 clear of the cell's edge. It shares the room left rather than
+		// fixing its width, because a fixed last column makes ui.Table draw a
+		// resize grip on the table's own edge — a 1 DIP line that reads as a
+		// scrollbar next to the buttons.
+		{Title: "操作", ID: "actions", MinWidth: 200},
 	}
 }
 

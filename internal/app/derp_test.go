@@ -706,3 +706,57 @@ func TestDerpListPinsTheCreateActionAndDefaultNode(t *testing.T) {
 		t.Fatalf("the default-node row scrolled with the list: y=%.0f → %.0f", builtIn.Y, after.Y)
 	}
 }
+
+// TestDerpPresetTableDoesNotScrollItsOwnRows pins the last DIP: a card sized to
+// its rows has to count the divider ui.Table draws under its header, or the
+// content is one DIP taller than the card and the table lays a scrollbar over
+// its own last column.
+func TestDerpPresetTableDoesNotScrollItsOwnRows(t *testing.T) {
+	vm := newTestViewModel(t)
+	saveDerpPresets(t, vm, 12)
+	vm.OpenDerp()
+	// Tall enough that the box around the list has room: anything that moves
+	// here is the table scrolling inside its own card.
+	tt := ui.NewTester(vm.ContentView, 1000, 1600)
+	table, ok := tt.Find("DERP 节点预设列表")
+	if !ok {
+		t.Fatalf("the page has no preset table; texts = %v", tt.Texts())
+	}
+	before, _ := tt.Find("预设1")
+	tt.Scroll(table.X+table.W/2, table.Y+table.H/2, 0, 200)
+	tt.Advance(300 * time.Millisecond)
+	tt.Frame()
+	after, ok := tt.Find("预设1")
+	if !ok || after.Y != before.Y {
+		t.Fatalf("the card scrolled its own rows: 预设1 %.1f → %.1f", before.Y, after.Y)
+	}
+}
+
+// TestDerpPresetActionsFitTheirColumn pins the 操作 column's initial width: the
+// three buttons were wider than it, so 删除 was clipped at the table's edge —
+// and the vertical scrollbar the one-DIP overflow laid there sat on top of it.
+func TestDerpPresetActionsFitTheirColumn(t *testing.T) {
+	vm, _ := newDerpViewModel(t)
+	tt := ui.NewTester(vm.ContentView, 1000, 1600)
+	table, ok := tt.Find("DERP 节点预设列表")
+	if !ok {
+		t.Fatalf("the page has no preset table; texts = %v", tt.Texts())
+	}
+	edit, ok := tt.Find("编辑")
+	if !ok {
+		t.Fatalf("the row has no 编辑 button; texts = %v", tt.Texts())
+	}
+	remove, ok := tt.Find("删除")
+	if !ok {
+		t.Fatalf("the row has no 删除 button; texts = %v", tt.Texts())
+	}
+	// Both labels are two characters in the same font, so a narrower one was
+	// cut off by its cell.
+	if remove.W != edit.W {
+		t.Fatalf("删除 is %.1f wide and 编辑 %.1f: the column clips it", remove.W, edit.W)
+	}
+	if remove.X+remove.W >= table.X+table.W {
+		t.Fatalf("删除 ends at the table's edge (%.1f >= %.1f), where the scrollbar is drawn",
+			remove.X+remove.W, table.X+table.W)
+	}
+}
