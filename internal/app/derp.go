@@ -105,8 +105,13 @@ func (vm *ViewModel) derpHistorySection(c *ui.Context) {
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 				ui.Column(c).Gap(1).Grow(1).Children(func() {
 					components.Text(c, entry.Name).SingleLine()
-					source := derpSourceSummary(entry.Source)
-					components.Tooltip(c, components.Text(c, source).FontSize(11).SingleLine(), entry.Source)
+					// A URL is worth reading in full here; an inline map is not,
+					// so it keeps the region/node summary.
+					line := entry.Source
+					if kindOfRelay(entry.Source) != core.RelayURL {
+						line = derpSourceSummary(entry.Source)
+					}
+					components.Tooltip(c, components.Text(c, line).FontSize(11).SingleLine(), entry.Source)
 				})
 				if components.Button(c, "存为预设", components.ButtonOutline).Clicked() {
 					vm.openDerpEditor(&DerpEditorDraft{Content: entry.Source})

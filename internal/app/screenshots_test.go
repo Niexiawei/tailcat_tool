@@ -269,6 +269,57 @@ func shotCases() []shotCase {
 			},
 			settle: 12,
 		},
+		{
+			name: "18-derp-list",
+			build: func(t *testing.T) *ViewModel {
+				vm, _ := newDerpViewModel(t)
+				if _, err := vm.Manager.SaveRelayPreset(core.SaveRelayPresetRequest{
+					Name: "备用地图", Source: "https://relay2.example.com/map.json",
+				}); err != nil {
+					t.Fatalf("SaveRelayPreset() error: %v", err)
+				}
+				return vm
+			},
+		},
+		{
+			name: "19-derp-detail",
+			build: func(t *testing.T) *ViewModel {
+				vm := newTestViewModel(t)
+				id, err := vm.Manager.SaveRelayPreset(core.SaveRelayPresetRequest{Name: "公司自建", Source: derpTestMap})
+				if err != nil {
+					t.Fatalf("SaveRelayPreset() error: %v", err)
+				}
+				vm.OpenDerpDetail(id)
+				vm.DerpJSONOpen = true
+				return vm
+			},
+			settle: 6,
+		},
+		{
+			name: "20-derp-editor",
+			build: func(t *testing.T) *ViewModel {
+				vm := newTestViewModel(t)
+				vm.OpenDerp()
+				vm.openDerpEditor(&DerpEditorDraft{Name: "公司自建", Kind: "json", Content: derpTestMap})
+				return vm
+			},
+			settle: 12,
+		},
+		{
+			name: "21-derp-delete",
+			build: func(t *testing.T) *ViewModel {
+				vm, preset := newDerpViewModel(t)
+				if _, err := vm.Manager.SaveDevice(core.SaveDeviceRequest{
+					Name: "客厅", Address: testAddress, RemotePort: 5555, RelaySource: preset.Source,
+				}); err != nil {
+					t.Fatalf("SaveDevice() error: %v", err)
+				}
+				wanted := preset
+				vm.DerpConfirmDelete = &wanted
+				return vm
+			},
+			settle: 12,
+		},
 	}
 }
 
