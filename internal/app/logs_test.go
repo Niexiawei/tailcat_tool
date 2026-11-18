@@ -700,3 +700,92 @@ func TestFollowKeepsAnIdenticalNewLine(t *testing.T) {
 		t.Fatalf("after following the page shows %d rows, want 2", got)
 	}
 }
+
+func TestFollowSwitchCanBeTurnedOff(t *testing.T) {
+	vm, reader, base := deviceLogFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	reader.add(core.TimelineEntry{At: base.Add(-time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+		DeviceID: profile.ID, DeviceName: "E245", Text: "一行"})
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	filter := vm.logFilterFor(profile.ID)
+	if !filter.Follow {
+		t.Fatal("the device tab must follow by default")
+	}
+	if err := tt.Click("跟随最新"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	tt.Frame()
+	if filter.Follow {
+		t.Fatal("跟随最新 cannot be turned off")
+	}
+	if err := tt.Click("跟随最新"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	tt.Frame()
+	if !filter.Follow {
+		t.Fatal("跟随最新 cannot be turned back on")
+	}
+}
+
+func TestLogPageFillsTheTimelineBoxWhenEmpty(t *testing.T) {
+	vm, reader, _ := logsPageFixture(t)
+	const window = 760
+	tt := ui.NewTester(vm.ContentView, 1100, window)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	waitForText(t, tt, "这段时间没有日志")
+
+	note, ok := tt.Find("这段时间没有日志")
+	if !ok {
+		t.Fatalf("no empty note; texts = %v", tt.Texts())
+	}
+	if note.H < 20 {
+		t.Fatalf("the empty note is %0.0f high; it must be larger than body text", note.H)
+	}
+	// Centred in the box: the note's middle is near the middle of the space
+	// between the filter rows and the footer.
+	footer, ok := tt.Find("清空日志…")
+	if !ok {
+		t.Fatalf("no footer row; texts = %v", tt.Texts())
+	}
+	if middle := note.Y + note.H/2; middle < window*0.3 || middle > window*0.8 {
+		t.Fatalf("the empty note sits at y=%0.0f, not in the middle of the box", middle)
+	}
+	// The footer stays at the bottom even when there is nothing to show.
+	if bottom := footer.Y + footer.H; bottom < window-60 {
+		t.Fatalf("清空日志 ends at y=%0.0f, want it pinned to the bottom", bottom)
+	}
+}
+
+func TestLogFootRowHoldsRefreshLeftOfClear(t *testing.T) {
+	vm, reader, base := deviceLogFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	reader.add(core.TimelineEntry{At: base.Add(-time.Minute), Level: core.LogInfo, Source: core.LogChannel,
+		DeviceID: profile.ID, DeviceName: "E245", Text: "一行"})
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+	waitForText(t, tt, "一行")
+
+	refresh, ok := tt.Find("刷新")
+	if !ok {
+		t.Fatalf("no refresh button; texts = %v", tt.Texts())
+	}
+	clear, ok := tt.Find("清空日志…")
+	if !ok {
+		t.Fatalf("no clear button; texts = %v", tt.Texts())
+	}
+	if refresh.Y < clear.Y-2 || refresh.Y > clear.Y+2 {
+		t.Fatalf("刷新 is at y=%0.0f and 清空日志 at y=%0.0f; they share the footer row", refresh.Y, clear.Y)
+	}
+	if refresh.X+refresh.W > clear.X+1 {
+		t.Fatalf("刷新 (x=%0.0f..%0.0f) must sit left of 清空日志 (x=%0.0f)", refresh.X, refresh.X+refresh.W, clear.X)
+	}
+	// The filter rows no longer carry the primary action.
+	rows, ok := tt.Find("级别")
+	if ok && refresh.Y < rows.Y+rows.H {
+		t.Fatalf("刷新 is still up with the filters at y=%0.0f", refresh.Y)
+	}
+}

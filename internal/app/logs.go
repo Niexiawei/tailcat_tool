@@ -157,52 +157,58 @@ func sameLogQuery(shown, query core.LogQuery) bool {
 
 // logView is the only log UI. The page and the device tab differ only in the
 // filter they pass and whether the device picker is shown.
+//
+// The layout is fixed: filters, a timeline box that always takes the space the
+// table would use, and a footer with 刷新 and 清空日志 at the bottom. An empty
+// range must not collapse the page — the box stays where the rows would be.
 func (vm *ViewModel) logView(c *ui.Context, f *logFilter, opts logViewOptions) {
 	vm.markLogVisible(f)
 	vm.ensureLogQuery(f)
 	vm.ensureLogFollow(f)
-	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(8).Children(func() {
+	theme := c.Theme()
+	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(theme.Space(2)).Children(func() {
 		vm.logFiltersRow(c, f, opts)
 		vm.logTimeline(c, f)
 		vm.logFootRow(c, f, opts)
 	})
 }
 
-// logFiltersRow is three rows: the device picker with 刷新, the level and range
-// tabs together, then the search box with the follow switch. The tabs share a
-// row because they are the two smallest controls on the page.
+// logFiltersRow is the filters: the device picker when this view has one, then
+// the level and range tabs on one line, then the search box with the follow
+// switch. The tabs share a row because they are the two smallest controls.
 func (vm *ViewModel) logFiltersRow(c *ui.Context, f *logFilter, opts logViewOptions) {
 	theme := c.Theme()
 	ui.Column(c).FillWidth().Shrink(0).Gap(theme.Space(1.5)).Children(func() {
-		ui.Row(c).FillWidth().Gap(theme.Space(2)).AlignItems(ui.Center).Children(func() {
-			if opts.ShowDevicePicker {
-				ui.Column(c).Grow(1).MinWidth(0).Children(func() { vm.logDeviceSelect(c, f) })
-			}
-			if actionButton(c, lucide.RefreshCw, "刷新", components.ButtonPrimary).Clicked() {
-				vm.refreshLogs(f)
-			}
-		})
+		if opts.ShowDevicePicker {
+			vm.logDeviceSelect(c, f)
+		}
 		ui.Row(c).FillWidth().Gap(theme.Space(2)).AlignItems(ui.Center).Children(func() {
 			// Each group carries its name: two tabs in a row both starting
 			// with 全部 would otherwise be a guess.
 			components.Text(c, "级别").FontSize(11).TextColor(theme.TextMuted).Shrink(0)
+			// The chosen value is read back from the widget rather than from
+			// Changed(): a toggle can land a frame before the flag does.
 			level := logLevelIndex(f.Level)
-			if components.Tabs(c, &level, components.TabsSegmented, "全部", "错误", "警告", "信息").List.Changed() {
-				f.Level = logLevelAt(level)
+			components.Tabs(c, &level, components.TabsSegmented, "全部", "错误", "警告", "信息")
+			if picked := logLevelAt(level); picked != f.Level {
+				f.Level = picked
 			}
 			components.Text(c, "时间").FontSize(11).TextColor(theme.TextMuted).Shrink(0)
 			rng := f.Range
-			if components.Tabs(c, &rng, components.TabsSegmented, logRangeLabels...).List.Changed() {
+			components.Tabs(c, &rng, components.TabsSegmented, logRangeLabels...)
+			if rng != f.Range {
 				f.Range = rng
 			}
 		})
 		ui.Row(c).FillWidth().Gap(theme.Space(2)).AlignItems(ui.Center).Children(func() {
 			components.TextBox(c, &f.Search, components.TextBoxOptions{}).
 				FillWidth().Grow(1).Placeholder("搜索日志：空格分隔的多个关键词都要匹配")
-			// The follow goroutine reads the switch under logMu, so the
-			// widget writes a local copy and the filter takes it under the lock.
+			// The switch writes its own copy; comparing it to the stored value
+			// is what catches the toggle, whatever frame it lands on. The
+			// goroutine that follows reads the stored value under logMu.
 			follow := f.Follow
-			if components.Switch(c, &follow, "跟随最新").Changed() {
+			components.Switch(c, &follow, "跟随最新")
+			if follow != f.Follow {
 				vm.logMu.Lock()
 				f.Follow = follow
 				vm.logMu.Unlock()
@@ -311,21 +317,35 @@ func logColumns() []ui.TableColumn {
 	}
 }
 
-// logTimeline is the merged rows, newest first.
+// logTimeline is the merged rows, newest first, inside the box the page keeps
+// for them whether or not there is anything to show.
 func (vm *ViewModel) logTimeline(c *ui.Context, f *logFilter) {
 	entries, loaded, loading, _, errText := vm.logSnapshot(f)
-	if errText != "" {
-		components.Text(c, "日志读取失败："+errText).FontSize(11)
-		return
-	}
-	if len(entries) == 0 {
-		note := "正在读取日志…"
-		if loaded && !loading {
-			note = "这段时间没有日志"
+	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
+		switch {
+		case errText != "":
+			logPlaceholder(c, "日志读取失败："+errText, 13)
+		case len(entries) == 0:
+			note := "正在读取日志…"
+			if loaded && !loading {
+				note = "这段时间没有日志"
+			}
+			logPlaceholder(c, note, 16)
+		default:
+			vm.logTable(c, f, entries)
 		}
-		components.Text(c, note).FontSize(11)
-		return
-	}
+	})
+}
+
+// logPlaceholder centres a message in the timeline box.
+func logPlaceholder(c *ui.Context, text string, size float32) {
+	ui.Column(c).Fill().Center().Children(func() {
+		components.Text(c, text).FontSize(size).TextColor(c.Theme().TextMuted)
+	})
+}
+
+// logTable fills the box with the rows.
+func (vm *ViewModel) logTable(c *ui.Context, f *logFilter, entries []core.TimelineEntry) {
 	state := &f.table
 	vm.logMu.Lock()
 	jump := f.jumpToTop
@@ -347,22 +367,20 @@ func (vm *ViewModel) logTimeline(c *ui.Context, f *logFilter) {
 		}
 	}
 	state.List.Key = func(row int) any { return logRowKey(entries[row], row) }
-	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
-		components.TableVirtualized(c, state, logColumns(), len(entries), func(row, col int) {
-			entry := entries[row]
-			switch col {
-			case 0:
-				components.Text(c, entry.At.Format("2006-01-02 15:04:05")).FontSize(11).SingleLine()
-			case 1:
-				components.Badge(c, entry.Level.Label(), components.BadgeOptions{Tone: logLevelTone(entry.Level)})
-			case 2:
-				components.Text(c, entry.Source.Label()).FontSize(11).SingleLine()
-			case 3:
-				components.Text(c, logDeviceCell(entry)).FontSize(11).SingleLine()
-			default:
-				components.Tooltip(c, components.Text(c, entry.Text).FontSize(11).SingleLine(), entry.Text)
-			}
-		})
+	components.TableVirtualized(c, state, logColumns(), len(entries), func(row, col int) {
+		entry := entries[row]
+		switch col {
+		case 0:
+			components.Text(c, entry.At.Format("2006-01-02 15:04:05")).FontSize(11).SingleLine()
+		case 1:
+			components.Badge(c, entry.Level.Label(), components.BadgeOptions{Tone: logLevelTone(entry.Level)})
+		case 2:
+			components.Text(c, entry.Source.Label()).FontSize(11).SingleLine()
+		case 3:
+			components.Text(c, logDeviceCell(entry)).FontSize(11).SingleLine()
+		default:
+			components.Tooltip(c, components.Text(c, entry.Text).FontSize(11).SingleLine(), entry.Text)
+		}
 	})
 }
 
@@ -378,17 +396,20 @@ func logDeviceCell(entry core.TimelineEntry) string {
 	return entry.DeviceID.String()
 }
 
-// logFootRow reports a truncated timeline below the table.
+// logFootRow is the bottom row: the truncation note on the left, the two
+// actions on the right. It is drawn even when the box is empty, so 清空日志 sits
+// in the same place whatever the range holds.
 func (vm *ViewModel) logFootRow(c *ui.Context, f *logFilter, opts logViewOptions) {
+	theme := c.Theme()
 	_, _, _, tooMany, _ := vm.logSnapshot(f)
-	if !tooMany && !opts.AllowClear {
-		return
-	}
-	ui.Row(c).FillWidth().Shrink(0).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Shrink(0).Gap(theme.Space(2)).AlignItems(ui.Center).Children(func() {
 		if tooMany {
 			components.Text(c, "只显示最近 "+itoa(core.DefaultLogLimit)+" 条，请缩小时间范围").FontSize(11)
 		}
 		ui.Row(c).Grow(1).Children(func() {})
+		if actionButton(c, lucide.RefreshCw, "刷新", components.ButtonPrimary).Clicked() {
+			vm.refreshLogs(f)
+		}
 		if opts.AllowClear {
 			if warningButton(c, lucide.Trash, "清空日志…").Clicked() {
 				vm.openLogClear(f)
