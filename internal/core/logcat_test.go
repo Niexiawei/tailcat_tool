@@ -150,3 +150,213 @@ func TestLogcatSplitterFlushesWhatIsLeft(t *testing.T) {
 		t.Fatalf("lines = %q, want the leftover line", lines)
 	}
 }
+
+// logcatText is the short form of a line logcat prints, for tests that do not
+// care about the timestamp.
+func logcatText(level, tag, text string) string {
+	return "11-18 09:30:01.123  1234  1250 " + level + " " + tag + ": " + text + "\n"
+}
+
+// newTestLogcatStream builds a stream with a small ring and a notify counter.
+func newTestLogcatStream(limit int) (*LogcatStream, *int) {
+	noted := 0
+	return newLogcatStream(limit, func() { noted++ }), &noted
+}
+
+func TestLogcatBufferKeepsTheNewestLines(t *testing.T) {
+	stream, _ := newTestLogcatStream(3)
+	for _, text := range []string{"one", "two", "three", "four", "five"} {
+		stream.append(logcatText("I", "Tag", text))
+	}
+	snap := stream.Snapshot(LogcatFilter{})
+	if len(snap.Entries) != 3 {
+		t.Fatalf("kept %d lines, want 3", len(snap.Entries))
+	}
+	if snap.Entries[0].Text != "three" || snap.Entries[2].Text != "five" {
+		t.Fatalf("kept %q…%q, want the three newest", snap.Entries[0].Text, snap.Entries[2].Text)
+	}
+	if snap.Dropped != 2 {
+		t.Fatalf("Dropped = %d, want 2", snap.Dropped)
+	}
+	if snap.Received != 5 {
+		t.Fatalf("Received = %d, want 5", snap.Received)
+	}
+}
+
+func TestLogcatContinuationLineJoinsThePreviousEntry(t *testing.T) {
+	stream, _ := newTestLogcatStream(10)
+	stream.append(logcatText("E", "AndroidRuntime", "FATAL EXCEPTION: main"))
+	stream.append("  at com.demo.Main.main(Main.java:12)\n")
+	stream.append("\tCaused by: boom\n")
+	snap := stream.Snapshot(LogcatFilter{})
+	if len(snap.Entries) != 1 {
+		t.Fatalf("kept %d lines, want one entry with the continuation folded in", len(snap.Entries))
+	}
+	want := "FATAL EXCEPTION: main\n  at com.demo.Main.main(Main.java:12)\n\tCaused by: boom"
+	if snap.Entries[0].Text != want {
+		t.Fatalf("Text = %q, want %q", snap.Entries[0].Text, want)
+	}
+}
+
+func TestLogcatContinuationWithoutAPreviousLineIsDropped(t *testing.T) {
+	stream, _ := newTestLogcatStream(10)
+	stream.append("  orphan continuation\n")
+	stream.append("--------- beginning of main\n")
+	if snap := stream.Snapshot(LogcatFilter{}); len(snap.Entries) != 0 {
+		t.Fatalf("kept %d lines, want none", len(snap.Entries))
+	}
+}
+
+func TestLogcatLevelRankOrdersEveryLevel(t *testing.T) {
+	ordered := []LogcatLevel{LogcatVerbose, LogcatDebug, LogcatInfo, LogcatWarn, LogcatError, LogcatFatal}
+	for i := 1; i < len(ordered); i++ {
+		if ordered[i].Rank() <= ordered[i-1].Rank() {
+			t.Fatalf("%q ranks %d, not above %q (%d)", ordered[i], ordered[i].Rank(), ordered[i-1], ordered[i-1].Rank())
+		}
+	}
+	if LogcatLevel("?").Rank() > LogcatVerbose.Rank() {
+		t.Fatalf("an unknown level ranks above verbose: a filter would hide it")
+	}
+}
+
+func TestLogcatLevelLabelsAreChinese(t *testing.T) {
+	want := map[LogcatLevel]string{
+		LogcatVerbose: "详细", LogcatDebug: "调试", LogcatInfo: "信息",
+		LogcatWarn: "警告", LogcatError: "错误", LogcatFatal: "致命",
+	}
+	for level, label := range want {
+		if got := level.Label(); got != label {
+			t.Fatalf("%q label = %q, want %q", level, got, label)
+		}
+	}
+}
+
+func TestLogcatFilterKeepsMinimumLevelAndAbove(t *testing.T) {
+	stream, _ := newTestLogcatStream(10)
+	stream.append(logcatText("V", "Tag", "verbose"))
+	stream.append(logcatText("D", "Tag", "debug"))
+	stream.append(logcatText("I", "Tag", "info"))
+	stream.append(logcatText("W", "Tag", "warn"))
+	stream.append(logcatText("E", "Tag", "error"))
+	stream.append(logcatText("F", "Tag", "fatal"))
+	snap := stream.Snapshot(LogcatFilter{MinLevel: LogcatWarn})
+	if len(snap.Entries) != 3 {
+		t.Fatalf("kept %d lines, want warn, error and fatal", len(snap.Entries))
+	}
+	for _, entry := range snap.Entries {
+		if entry.Level.Rank() < LogcatWarn.Rank() {
+			t.Fatalf("kept a %q line under a warn floor", entry.Level)
+		}
+	}
+}
+
+func TestLogcatFilterAnEmptyMinLevelKeepsEveryLevel(t *testing.T) {
+	stream, _ := newTestLogcatStream(10)
+	for _, level := range []string{"V", "D", "I", "W", "E", "F"} {
+		stream.append(logcatText(level, "Tag", "line "+level))
+	}
+	if snap := stream.Snapshot(LogcatFilter{}); len(snap.Entries) != 6 {
+		t.Fatalf("kept %d lines, want all six", len(snap.Entries))
+	}
+}
+
+func TestLogcatFilterMatchesEveryTermAcrossTagAndText(t *testing.T) {
+	stream, _ := newTestLogcatStream(10)
+	stream.append(logcatText("I", "ActivityManager", "Started proc on display 0"))
+	stream.append(logcatText("I", "OpenGLRenderer", "draw frame 12"))
+	if snap := stream.Snapshot(LogcatFilter{Tags: "activity", Terms: "started display"}); len(snap.Entries) != 1 {
+		t.Fatalf("kept %d lines, want only the ActivityManager one", len(snap.Entries))
+	}
+	if snap := stream.Snapshot(LogcatFilter{Tags: "activity draw"}); len(snap.Entries) != 0 {
+		t.Fatalf("kept %d lines, want none: no line matches both tags", len(snap.Entries))
+	}
+}
+
+func TestLogcatFilterIsCaseInsensitive(t *testing.T) {
+	entry := LogcatEntry{Level: LogcatInfo, Tag: "AndroidRuntime", Text: "FATAL EXCEPTION"}
+	if !(LogcatFilter{Tags: "androidruntime", Terms: "fatal"}).Match(entry) {
+		t.Fatal("the filter is case sensitive")
+	}
+}
+
+func TestLogcatSnapshotCopiesTheBuffer(t *testing.T) {
+	stream, _ := newTestLogcatStream(10)
+	stream.append(logcatText("I", "Tag", "original"))
+	snap := stream.Snapshot(LogcatFilter{})
+	snap.Entries[0].Text = "tampered"
+	if again := stream.Snapshot(LogcatFilter{}); again.Entries[0].Text != "original" {
+		t.Fatalf("the snapshot shared the stream's buffer: %q", again.Entries[0].Text)
+	}
+}
+
+func TestLogcatSnapshotKeepsTheNewestMatchingRows(t *testing.T) {
+	stream, _ := newTestLogcatStream(LogcatMaxLines)
+	// One non-matching line at the very end proves the cap is applied to the
+	// matches, not to the buffer.
+	for i := 0; i < 3000; i++ {
+		stream.append(logcatText("I", "Tag", "line"))
+	}
+	stream.append(logcatText("V", "Tag", "quiet"))
+	snap := stream.Snapshot(LogcatFilter{MinLevel: LogcatInfo})
+	if len(snap.Entries) != LogcatMaxRows {
+		t.Fatalf("kept %d rows, want %d", len(snap.Entries), LogcatMaxRows)
+	}
+	if snap.Entries[len(snap.Entries)-1].Text != "line" {
+		t.Fatalf("the newest row = %q, want the newest match", snap.Entries[len(snap.Entries)-1].Text)
+	}
+}
+
+func TestLogcatClearKeepsTheCounters(t *testing.T) {
+	stream, _ := newTestLogcatStream(10)
+	for i := 0; i < 3; i++ {
+		stream.append(logcatText("I", "Tag", "line"))
+	}
+	stream.Clear()
+	snap := stream.Snapshot(LogcatFilter{})
+	if len(snap.Entries) != 0 {
+		t.Fatalf("kept %d lines after Clear", len(snap.Entries))
+	}
+	if snap.Received != 3 {
+		t.Fatalf("Received = %d, want 3: clearing is not forgetting how much came", snap.Received)
+	}
+	stream.append(logcatText("I", "Tag", "after"))
+	if seq := stream.Snapshot(LogcatFilter{}).Entries[0].Seq; seq <= 3 {
+		t.Fatalf("Seq = %d, want it to keep counting after Clear", seq)
+	}
+}
+
+func TestLogcatNotifyIsThrottled(t *testing.T) {
+	stream, noted := newTestLogcatStream(10)
+	for i := 0; i < 100; i++ {
+		stream.append(logcatText("I", "Tag", "line"))
+	}
+	// The first chunk notifies; the rest are inside the throttle window.
+	if *noted > 2 {
+		t.Fatalf("notified %d times for one burst, want at most 2", *noted)
+	}
+}
+
+func TestLogcatVersionMovesWhenLinesArrive(t *testing.T) {
+	stream, _ := newTestLogcatStream(10)
+	before := stream.Version()
+	stream.append(logcatText("I", "Tag", "line"))
+	if after := stream.Version(); after == before {
+		t.Fatal("Version did not move although a line arrived")
+	}
+	stream.Clear()
+	if cleared := stream.Version(); cleared == before {
+		t.Fatal("Version did not move although the buffer was cleared")
+	}
+}
+
+func TestLogcatCloseIsIdempotent(t *testing.T) {
+	stream, _ := newTestLogcatStream(10)
+	if stream.Closed() {
+		t.Fatal("a fresh stream reports itself closed")
+	}
+	stream.Close()
+	stream.Close()
+	if !stream.Closed() {
+		t.Fatal("Close did not close the stream")
+	}
+}

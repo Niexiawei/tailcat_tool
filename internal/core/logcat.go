@@ -2,8 +2,10 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -183,4 +185,264 @@ func logcatTruncate(line []byte) string {
 		cut = logcatMaxLineBytes
 	}
 	return string(line[:cut]) + logcatLineTruncated
+}
+
+// Rank orders the levels so a filter can ask for "this and above". A level it
+// cannot name ranks below Verbose, so an odd letter never hides a line.
+func (l LogcatLevel) Rank() int {
+	switch l {
+	case LogcatVerbose:
+		return 0
+	case LogcatDebug:
+		return 1
+	case LogcatInfo:
+		return 2
+	case LogcatWarn:
+		return 3
+	case LogcatError:
+		return 4
+	case LogcatFatal:
+		return 5
+	}
+	return -1
+}
+
+// Label is the Chinese name the page's level badges show.
+func (l LogcatLevel) Label() string {
+	switch l {
+	case LogcatVerbose:
+		return "详细"
+	case LogcatDebug:
+		return "调试"
+	case LogcatInfo:
+		return "信息"
+	case LogcatWarn:
+		return "警告"
+	case LogcatError:
+		return "错误"
+	case LogcatFatal:
+		return "致命"
+	}
+	return string(l)
+}
+
+// LogcatMaxLines is how many lines one stream keeps: how far back the page can
+// scroll, and the only bound on the stream's memory.
+const LogcatMaxLines = 5000
+
+// LogcatMaxRows is how many of them one frame hands the table. The table is
+// virtualized, but the rows are rebuilt whenever the page reloads them, so they
+// are capped well below what the ring holds.
+const LogcatMaxRows = 2000
+
+// logcatNotifyInterval is the least time between two frame requests. A device
+// can print thousands of lines a second, and one repaint per line would spend
+// the whole frame budget on a table nobody can read that fast.
+var logcatNotifyInterval = 100 * time.Millisecond
+
+// LogcatFilter is what the page shows of a stream. It never changes what the
+// device is asked for, so switching it loses no lines.
+type LogcatFilter struct {
+	// MinLevel keeps MinLevel and above; "" keeps every level.
+	MinLevel LogcatLevel
+	// Tags hits the tag, Terms hits the message. Both are space-separated and
+	// case-insensitive, and every term must hit.
+	Tags  string
+	Terms string
+}
+
+// Match reports whether one line passes the filter.
+func (f LogcatFilter) Match(entry LogcatEntry) bool {
+	if f.MinLevel != "" && entry.Level.Rank() < f.MinLevel.Rank() {
+		return false
+	}
+	return logcatContainsAll(entry.Tag, f.Tags) && logcatContainsAll(entry.Text, f.Terms)
+}
+
+// logcatContainsAll reports whether every space-separated term appears in text.
+func logcatContainsAll(text, query string) bool {
+	terms := strings.Fields(strings.ToLower(query))
+	if len(terms) == 0 {
+		return true
+	}
+	lower := strings.ToLower(text)
+	for _, term := range terms {
+		if !strings.Contains(lower, term) {
+			return false
+		}
+	}
+	return true
+}
+
+// LogcatSnapshot is what one frame draws.
+type LogcatSnapshot struct {
+	// Entries is oldest first, newest last, at most LogcatMaxRows of them.
+	Entries []LogcatEntry
+	// Received counts parsed lines since the stream started, Clear included.
+	Received uint64
+	// Dropped counts lines the ring had to evict.
+	Dropped uint64
+	// Version changes whenever the buffer did: a page compares it with what it
+	// drew last frame and skips the copy when nothing came.
+	Version uint64
+	// Exited reports the process ended; Err says why (empty for a clean end).
+	Exited bool
+	Err    string
+}
+
+// LogcatStream is one running `adb logcat`: the process, a ring of its parsed
+// lines, and the filter the page applies to them. It is not a Task on purpose:
+// a log stream has no timeout, no output history and no place in the task
+// panel.
+type LogcatStream struct {
+	mu       sync.Mutex
+	entries  []LogcatEntry
+	limit    int
+	splitter logcatSplitter
+	seq      uint64
+	received uint64
+	dropped  uint64
+	version  uint64
+	exited   bool
+	err      string
+	closed   bool
+	notify   func()
+	lastNote time.Time
+	clock    func() time.Time
+	proc     *Proc
+	cancel   context.CancelFunc
+}
+
+// newLogcatStream builds a stream that keeps limit lines and calls notify at
+// most every logcatNotifyInterval when lines arrive. It starts no process:
+// StartLogcat wires that.
+func newLogcatStream(limit int, notify func()) *LogcatStream {
+	if limit <= 0 {
+		limit = LogcatMaxLines
+	}
+	return &LogcatStream{limit: limit, notify: notify, clock: time.Now}
+}
+
+// Version is cheap enough to ask every frame.
+func (s *LogcatStream) Version() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.version
+}
+
+// Clear drops the kept lines; the counters keep counting, because "this stream
+// has received N lines" stays true after the reader emptied it.
+func (s *LogcatStream) Clear() {
+	s.mu.Lock()
+	s.entries = nil
+	s.version++
+	s.mu.Unlock()
+}
+
+// Closed reports whether Close has run.
+func (s *LogcatStream) Closed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+// Close stops the process and cancels its context. Both are needed: the real
+// runner stops on the process, the demo one on the context.
+func (s *LogcatStream) Close() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	proc, cancel := s.proc, s.cancel
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if proc != nil {
+		proc.Stop()
+	}
+}
+
+// Snapshot copies the newest lines that pass f. It runs on the render path, so
+// it copies structs (the strings are shared) and never parses.
+func (s *LogcatStream) Snapshot(f LogcatFilter) LogcatSnapshot {
+	s.mu.Lock()
+	entries := make([]LogcatEntry, 0, min(len(s.entries), LogcatMaxRows))
+	for i := len(s.entries) - 1; i >= 0 && len(entries) < LogcatMaxRows; i-- {
+		if f.Match(s.entries[i]) {
+			entries = append(entries, s.entries[i])
+		}
+	}
+	snap := LogcatSnapshot{
+		Received: s.received,
+		Dropped:  s.dropped,
+		Version:  s.version,
+		Exited:   s.exited,
+		Err:      s.err,
+	}
+	s.mu.Unlock()
+	// The page reads a stream top down, oldest line first.
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+	snap.Entries = entries
+	return snap
+}
+
+// append takes one pipe chunk: split it into lines, parse them, keep them.
+func (s *LogcatStream) append(chunk string) {
+	s.mu.Lock()
+	s.splitter.feed(chunk, s.appendLineLocked)
+	fire := s.noteLocked()
+	s.mu.Unlock()
+	if fire {
+		s.notify()
+	}
+}
+
+// appendLineLocked keeps one line, or folds it into the line before it. It runs
+// with mu held.
+func (s *LogcatStream) appendLineLocked(line string) {
+	if entry, ok := ParseLogcatLine(line, s.clock()); ok {
+		s.pushLocked(entry)
+		return
+	}
+	// A multi-line message prints its timestamp only on the first line; the
+	// rest arrive indented and belong to the entry before them.
+	if line != "" && (line[0] == ' ' || line[0] == '\t') && len(s.entries) > 0 {
+		last := &s.entries[len(s.entries)-1]
+		last.Text += "\n" + line
+		s.version++
+	}
+}
+
+// pushLocked appends one parsed line and evicts the oldest when the ring is
+// full.
+func (s *LogcatStream) pushLocked(entry LogcatEntry) {
+	s.seq++
+	entry.Seq = s.seq
+	s.entries = append(s.entries, entry)
+	s.received++
+	if excess := len(s.entries) - s.limit; excess > 0 {
+		s.entries = append(s.entries[:0], s.entries[excess:]...)
+		s.dropped += uint64(excess)
+	}
+	s.version++
+}
+
+// noteLocked reports whether this is a good moment to ask for a frame. It runs
+// with mu held and never calls notify itself: the window's invalidate is safe
+// off the render thread, but not while the buffer is locked.
+func (s *LogcatStream) noteLocked() bool {
+	if s.notify == nil {
+		return false
+	}
+	now := s.clock()
+	if !s.lastNote.IsZero() && now.Sub(s.lastNote) < logcatNotifyInterval {
+		return false
+	}
+	s.lastNote = now
+	return true
 }
