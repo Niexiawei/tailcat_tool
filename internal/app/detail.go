@@ -37,6 +37,10 @@ func (vm *ViewModel) routedPage(c *ui.Context) {
 	// Nothing is following until a log view says so this frame; that is how a
 	// page left behind stops polling.
 	vm.clearActiveLog()
+	vm.beginLogcatFrame()
+	// A stream left behind by a frame that did not draw it must stop: it reads
+	// the device channel. The defer runs on every return of this function.
+	defer vm.settleLogcat()
 	if vm.Router == nil {
 		if profile, ok := vm.SelectedProfile(); ok {
 			vm.devicePage(c, profile)
@@ -70,6 +74,10 @@ func (vm *ViewModel) routedPage(c *ui.Context) {
 		case r.Match(LogsRoute):
 			r.Title("日志")
 			vm.logsPage(c)
+			return
+		case r.Match(LogcatRoute):
+			r.Title("Logcat")
+			vm.logcatPage(c)
 			return
 		case r.Match(DerpRoute):
 			r.Title("DERP 节点")

@@ -139,6 +139,12 @@ type ViewModel struct {
 	// derpInfo caches what the list shows about a source, for the same reason.
 	derpInfo map[string]derpSourceInfo
 
+	// Logcat is the streaming log page's state; nil until the page is opened.
+	Logcat *logcatState
+	// logcatDrawn reports that the page built this frame; settleLogcat closes
+	// the stream when it did not.
+	logcatDrawn bool
+
 	// PageLogFilter is the log page's filter; nil means it was never opened.
 	PageLogFilter *logFilter
 	// LogOutput is the task whose output dialog is open; nil closes it.
@@ -279,6 +285,9 @@ const DeviceIndexRoute = "/devices"
 // every task into one searchable timeline.
 const LogsRoute = "/logs"
 
+// LogcatRoute is the page that streams a connected device's logcat output.
+const LogcatRoute = "/logcat"
+
 // CacheRoute is the management page for cached application names and icons.
 const CacheRoute = "/manage/appmeta"
 
@@ -337,6 +346,13 @@ func (vm *ViewModel) OpenDerpDetail(id uuid.UUID) {
 func (vm *ViewModel) OpenLogs() {
 	if vm.Router != nil && vm.Router.Path() != LogsRoute {
 		vm.Router.Push(LogsRoute)
+	}
+}
+
+// OpenLogcat shows the streaming log page.
+func (vm *ViewModel) OpenLogcat() {
+	if vm.Router != nil && vm.Router.Path() != LogcatRoute {
+		vm.Router.Push(LogcatRoute)
 	}
 }
 

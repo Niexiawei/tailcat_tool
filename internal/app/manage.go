@@ -18,6 +18,7 @@ func (vm *ViewModel) manageEntries(c *ui.Context) {
 	vm.manageEntry(c, lucide.Database, "缓存管理", CacheRoute)
 	vm.manageEntry(c, lucide.Server, "DERP 节点", DerpRoute)
 	vm.manageEntry(c, lucide.ScrollText, "日志", LogsRoute)
+	vm.manageEntry(c, lucide.Activity, "Logcat", LogcatRoute)
 	// The last row is the one thing that configures the app itself rather than
 	// showing its data; it sits at the end so the data pages stay first.
 	vm.manageEntry(c, lucide.Settings, "工具设置", SettingsRoute)
@@ -54,6 +55,8 @@ func (vm *ViewModel) managePageTrail(path string) ([]string, bool) {
 		return []string{"缓存管理"}, true
 	case LogsRoute:
 		return []string{"日志"}, true
+	case LogcatRoute:
+		return []string{"Logcat"}, true
 	case SettingsRoute:
 		return []string{"工具设置"}, true
 	case DerpRoute:
