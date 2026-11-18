@@ -68,6 +68,7 @@ type Manager struct {
 	checker     *Checker
 
 	appMeta          AppMetaSource
+	appMetaCache     AppMetaCache
 	resourceInterval time.Duration
 	resources        map[uuid.UUID]ResourceSnapshot
 	sampleCounters   map[uuid.UUID]*resourceCounters
@@ -112,6 +113,9 @@ type ManagerOptions struct {
 	// AppMeta supplies application names and icons; nil means the resource
 	// page shows package names.
 	AppMeta AppMetaSource
+	// AppMetaCache is the same store seen through the cache page's narrow
+	// interface; nil makes the page say the cache is unavailable.
+	AppMetaCache AppMetaCache
 	// ResourceInterval is how often an open resource page re-reads a device.
 	ResourceInterval time.Duration
 	MonitorInterval  time.Duration
@@ -168,6 +172,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		monitorInterval:     interval,
 		resourceInterval:    resourceInterval,
 		appMeta:             opts.AppMeta,
+		appMetaCache:        opts.AppMetaCache,
 		connectPoll:         pollInterval,
 		ctx:                 ctx,
 		cancel:              cancel,

@@ -57,6 +57,9 @@ type Store struct {
 type job struct {
 	device, adb, serial, pkg string
 	force                    bool
+	// epoch is the device's purge epoch when the job was queued. A job whose
+	// epoch is stale ran across a 清空 and must not write its result back.
+	epoch uint64
 }
 
 // New opens the store over dir, which it creates when missing. workers bounds
@@ -157,6 +160,7 @@ func (s *Store) waitIdle() { s.wg.Wait() }
 
 func (s *Store) enqueue(device, adbPath, serial string, pkgs []string, force bool) {
 	now := s.now()
+	epoch := s.cache.epochOf(device)
 	// One package is the row the user is looking at; a long list is background
 	// work that must not hold that row up.
 	interactive := len(pkgs) == 1
@@ -185,7 +189,7 @@ func (s *Store) enqueue(device, adbPath, serial string, pkgs []string, force boo
 			}
 		}
 		s.status[key] = core.AppMetaStatus{State: core.AppMetaPending, At: now}
-		jobs = append(jobs, job{device: device, adb: adbPath, serial: serial, pkg: pkg, force: force})
+		jobs = append(jobs, job{device: device, adb: adbPath, serial: serial, pkg: pkg, force: force, epoch: epoch})
 	}
 	s.wg.Add(len(jobs))
 	s.mu.Unlock()
@@ -221,6 +225,13 @@ func (s *Store) work() {
 func (s *Store) handle(queued job) {
 	key := entryKey(queued.device, queued.pkg)
 	stored, failure := s.fetchSafely(queued)
+	if s.cache.epochOf(queued.device) != queued.epoch {
+		// The user cleared this device's cache while the read ran; Purge has
+		// already forgotten its statuses, so publishing this one would put a
+		// name (or a spinner) back that the user just removed.
+		s.wg.Done()
+		return
+	}
 	status := core.AppMetaStatus{State: core.AppMetaReady, At: s.now()}
 	if !stored {
 		status = core.AppMetaStatus{State: core.AppMetaFailed, Reason: failure.reason, Final: failure.final, At: s.now()}
@@ -264,8 +275,13 @@ func (s *Store) fetch(queued job) (bool, fetchFailure) {
 	if failure.reason != "" {
 		return false, failure
 	}
-	if err := s.cache.putAt(queued.device, queued.pkg, key, label, icon, s.now()); err != nil {
+	stored, err := s.cache.putAt(queued.device, queued.pkg, key, label, icon, s.now(), queued.epoch)
+	if err != nil {
 		return false, fetchFailure{reason: core.ReasonAPKUnreadable}
+	}
+	if !stored {
+		// Purged after the read started: handled as a discard by handle.
+		return false, fetchFailure{}
 	}
 	return true, fetchFailure{}
 }

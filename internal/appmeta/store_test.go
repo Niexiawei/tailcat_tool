@@ -652,3 +652,30 @@ func TestStoreFallsBackToPMPathWhenTheListingFails(t *testing.T) {
 		t.Fatalf("pm path fallback calls = %d, want 1", got)
 	}
 }
+
+// TestPurgeDiscardsAnInFlightFetch pins the epoch rule: a read that was already
+// running when the user cleared the cache must not write its result back, or the
+// resource page shows the same name again right after clearing.
+func TestPurgeDiscardsAnInFlightFetch(t *testing.T) {
+	apk := buildTestAPK(t, "微信", "res/mipmap-xxhdpi/ic.png", testPNG)
+	runner := apkRunner(apk, "4096 1700000000")
+	runner.holdOn = "-f com.foo"
+	runner.gate = make(chan struct{})
+	runner.held = make(chan struct{})
+	s := newTestStore(t, runner)
+
+	s.Request("dev", "/usr/bin/adb", "emulator-5554", []string{"com.foo"})
+	<-runner.held
+	if err := s.Purge("dev"); err != nil {
+		t.Fatalf("Purge() error: %v", err)
+	}
+	close(runner.gate)
+	s.waitIdle()
+
+	if entries := s.Entries("dev"); len(entries) != 0 {
+		t.Fatalf("entries = %+v; a fetch in flight at purge time must be discarded", entries)
+	}
+	if _, ok := s.Lookup("dev", "com.foo"); ok {
+		t.Fatal("the discarded fetch left a cached name behind")
+	}
+}
