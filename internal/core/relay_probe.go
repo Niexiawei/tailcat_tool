@@ -94,6 +94,36 @@ func (p RelayNodeProbe) Available() bool {
 	return p.HTTP.Ran && p.HTTP.OK
 }
 
+// relayProbeBudget caps one cycle. A map can hold 128 regions of 32 nodes;
+// without a cap a slow map would keep the next cycle from starting. A variable
+// rather than an option, because tests are the only thing that changes it.
+var relayProbeBudget = 2 * time.Minute
+
+// relayProbeWorkers is how many nodes one cycle checks at a time.
+const relayProbeWorkers = 8
+
+// RelayProbe is one source's whole map as it was last probed.
+type RelayProbe struct {
+	Source    string
+	Nodes     []RelayNodeProbe
+	CheckedAt time.Time
+	// Err says the map itself could not be loaded, which the UI shows instead
+	// of a count: "0/12" would read as twelve dead nodes.
+	Err string
+}
+
+// Available counts the nodes a device could use. A map that failed to load has
+// no count at all.
+func (p RelayProbe) Available() (ok, total int) {
+	for _, node := range p.Nodes {
+		total++
+		if node.Available() {
+			ok++
+		}
+	}
+	return ok, total
+}
+
 // NodeProber runs the two checks on one node. Tests inject a fake so no packet
 // leaves the machine.
 type NodeProber interface {

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,9 +38,12 @@ func httpOnlyTarget() RelayProbeTarget {
 // /derp/latency-check is what tailscale's own netcheck treats as "this node's
 // relay works", and the report carries no failure note.
 func TestHTTPProbeAcceptsALatencyCheckReply(t *testing.T) {
+	var mu sync.Mutex
 	var path string
 	prober := latencyCheckServer(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		path = r.URL.Path
+		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	})
 	check, _ := prober.ProbeNode(context.Background(), httpOnlyTarget())
@@ -52,8 +56,11 @@ func TestHTTPProbeAcceptsALatencyCheckReply(t *testing.T) {
 	if check.Note != "" {
 		t.Fatalf("a passing check carries a note %q", check.Note)
 	}
-	if path != "/derp/latency-check" {
-		t.Fatalf("probe asked for %q, want /derp/latency-check", path)
+	mu.Lock()
+	got := path
+	mu.Unlock()
+	if got != "/derp/latency-check" {
+		t.Fatalf("probe asked for %q, want /derp/latency-check", got)
 	}
 }
 

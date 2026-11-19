@@ -61,7 +61,17 @@ type Manager struct {
 	// only on purpose: a map changes, and a stale copy on disk would look
 	// current.
 	relayPreviews map[string]RelayMapPreview
-	tools         ToolSettings
+	// relayProbes is each source's last node probe, keyed by canonical source
+	// (an empty key is the default node list). Memory only, for the same
+	// reason: a node that answers today may not tomorrow.
+	relayProbes        map[string]RelayProbe
+	relayProbeRunning  bool
+	relayNodeProber    NodeProber
+	relayProbeInterval time.Duration
+	// defaultNodeListURL is where the default node list is fetched from. It is
+	// a field, not the constant, so a test can serve its own copy.
+	defaultNodeListURL string
+	tools              ToolSettings
 
 	generations map[uuid.UUID]uuid.UUID
 	runtimes    map[uuid.UUID]*runtimeState
@@ -117,6 +127,17 @@ type ManagerOptions struct {
 	// Prober replaces the link probe; tests inject a fake so no network is
 	// touched.
 	Prober Prober
+	// RelayProber runs the two node checks behind the DERP page; nil means the
+	// real prober. Tests inject a fake so no packet leaves the machine.
+	RelayProber NodeProber
+	// RelayProbeInterval is how often every DERP node is probed again. Zero
+	// runs no loop at all, which is what tests and --demo want: without it a
+	// test run would start sending packets the moment a manager is built.
+	RelayProbeInterval time.Duration
+	// DefaultNodeListURL replaces the built-in address of the default node
+	// list; empty keeps the constant. Tests point it at their own server so a
+	// probe cycle never reaches tailcat's real list.
+	DefaultNodeListURL string
 	// Recorder persists tasks, logs and reachability results; nil keeps
 	// everything in memory.
 	Recorder Recorder
@@ -182,6 +203,10 @@ func NewManager(opts ManagerOptions) *Manager {
 		dirListings:         map[dirKey]DirListing{},
 		samplers:            map[uuid.UUID]context.CancelFunc{},
 		nextTemporaryNumber: 1,
+		relayProbes:         map[string]RelayProbe{},
+		relayNodeProber:     opts.RelayProber,
+		relayProbeInterval:  opts.RelayProbeInterval,
+		defaultNodeListURL:  DefaultNodeListURL,
 		monitorInterval:     interval,
 		resourceInterval:    resourceInterval,
 		appMeta:             opts.AppMeta,
@@ -209,6 +234,17 @@ func NewManager(opts ManagerOptions) *Manager {
 		prober = m.pinger
 	}
 	m.checker = NewChecker(prober).WithRecorder(opts.Recorder)
+	if opts.DefaultNodeListURL != "" {
+		m.defaultNodeListURL = opts.DefaultNodeListURL
+	}
+	if m.relayNodeProber == nil {
+		m.relayNodeProber = &RelayProber{}
+	}
+	if m.relayProbeInterval > 0 {
+		// One cycle right away: a user who opens the DERP page should see an
+		// answer, not "未检测" for the first five minutes.
+		go m.relayProbeLoop()
+	}
 	for _, p := range m.profiles {
 		m.sessions[p.ID] = NewSession()
 	}
