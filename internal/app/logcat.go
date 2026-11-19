@@ -522,12 +522,20 @@ func logcatStatusText(f *logcatState) string {
 	// print several lines and they are one entry.
 	text := "已接收 " + itoa(int(f.received)) + " 行 · 显示 " + itoa(len(f.rows)) + " 条"
 	if f.dropped > 0 {
-		text += " · 缓冲已满，丢弃 " + itoa(int(f.dropped)) + " 条"
+		// The limit belongs next to the number: "丢弃 29800 条" alone reads as
+		// data loss, and the user has to ask what the buffer even holds.
+		text += " · 缓冲已满，丢弃 " + itoa(int(f.dropped)) + " 条（上限 " + logcatBufferLimit() + "）"
 	}
 	if f.Paused {
 		text += " · 已暂停"
 	}
 	return text
+}
+
+// logcatBufferLimit is what the foot row says the ring holds: both bounds,
+// because either one can be the one that evicted.
+func logcatBufferLimit() string {
+	return itoa(core.LogcatMaxLines) + " 条 / " + itoa(core.LogcatMaxBytes>>20) + " MB"
 }
 
 // logcatLevelIndex and logcatLevelAt convert between the filter's floor and the

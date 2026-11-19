@@ -11,7 +11,7 @@ import (
 type LogcatOptions struct {
 	// Buffers selects logcat -b buffers; empty keeps logcat's default.
 	Buffers []string
-	// Limit caps the kept lines; 0 means LogcatMaxLines.
+	// Limit caps the kept entries; 0 means LogcatMaxLines.
 	Limit int
 	// OnLines is called, throttled inside the stream, after lines arrive, so
 	// the window repaints without one frame per pipe read. Nil is allowed.

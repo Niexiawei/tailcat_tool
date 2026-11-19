@@ -324,7 +324,9 @@ func TestLogcatFootRowCountsReceivedAndDropped(t *testing.T) {
 		burst.WriteString(fmt.Sprintf("11-18 09:30:01.%03d  1  1 I Tag: line\n", i%1000))
 	}
 	runner.feed(burst.String())
-	waitForText(t, tt, "丢弃 2 条")
+	// The foot row names the buffer, so "丢弃" is a number with a reason and
+	// not a mystery.
+	waitForText(t, tt, "丢弃 2 条（上限 20000 条 / 8 MB）")
 }
 
 func TestLogcatPageExplainsAnEmptyFilter(t *testing.T) {

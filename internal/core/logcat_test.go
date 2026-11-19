@@ -298,19 +298,24 @@ func TestLogcatSnapshotCopiesTheBuffer(t *testing.T) {
 }
 
 func TestLogcatSnapshotKeepsTheNewestMatchingRows(t *testing.T) {
-	stream, _ := newTestLogcatStream(LogcatMaxLines)
-	// One non-matching line at the very end proves the cap is applied to the
-	// matches, not to the buffer.
+	// Room for all 3001 lines, so nothing is evicted behind the test's back.
+	stream, _ := newTestLogcatStream(4000)
+	// Every tenth line matches: the snapshot returns the matches in reading
+	// order, and a non-matching line at the very end does not hide them.
 	for i := 0; i < 3000; i++ {
-		stream.append(logcatTextMS(i, "I", "Tag", "line"))
+		text := "skip"
+		if i%10 == 0 {
+			text = "keep"
+		}
+		stream.append(logcatTextMS(i, "I", "Tag", text))
 	}
-	stream.append(logcatTextMS(999, "V", "Tag", "quiet"))
-	snap := stream.Snapshot(LogcatFilter{MinLevel: LogcatInfo})
-	if len(snap.Entries) != LogcatMaxRows {
-		t.Fatalf("kept %d rows, want %d", len(snap.Entries), LogcatMaxRows)
+	stream.append(logcatTextMS(999, "V", "Tag", "skip"))
+	snap := stream.Snapshot(LogcatFilter{Terms: "keep"})
+	if len(snap.Entries) != 300 {
+		t.Fatalf("kept %d rows, want the 300 matches", len(snap.Entries))
 	}
-	if snap.Entries[len(snap.Entries)-1].Text != "line" {
-		t.Fatalf("the newest row = %q, want the newest match", snap.Entries[len(snap.Entries)-1].Text)
+	if oldest, newest := snap.Entries[0].Seq, snap.Entries[len(snap.Entries)-1].Seq; oldest >= newest {
+		t.Fatalf("Seq %d..%d, want oldest first", oldest, newest)
 	}
 }
 
@@ -423,4 +428,36 @@ func TestLogcatStreamCloseDoesNotWaitForTheProcess(t *testing.T) {
 		t.Fatal("Close() waited for the process: stopping one costs most of a second on Windows, and Close runs on the render thread")
 	}
 	close(release)
+}
+
+func TestLogcatBufferEvictsByBytes(t *testing.T) {
+	stream, _ := newTestLogcatStream(1000)
+	// Huge lines must not turn the ring into hundreds of megabytes: the budget
+	// is bytes as well as rows, and it evicts the oldest either way.
+	stream.maxBytes = 300
+	for i := 0; i < 20; i++ {
+		stream.append(logcatTextMS(i, "I", "Tag", strings.Repeat("x", 40)))
+	}
+	snap := stream.Snapshot(LogcatFilter{})
+	if len(snap.Entries) == 0 || len(snap.Entries) > 3 {
+		t.Fatalf("kept %d entries in a 300-byte ring, want a few", len(snap.Entries))
+	}
+	if snap.Dropped == 0 {
+		t.Fatal("Dropped = 0 although the byte budget forced evictions")
+	}
+	if newest := snap.Entries[len(snap.Entries)-1].Text; !strings.HasPrefix(newest, "x") {
+		t.Fatalf("the newest entry = %q", newest)
+	}
+}
+
+func TestLogcatSnapshotKeepsEveryKeptEntry(t *testing.T) {
+	stream, _ := newTestLogcatStream(3000)
+	for i := 0; i < 2500; i++ {
+		stream.append(logcatTextMS(i, "I", "Tag", "line"))
+	}
+	// The table is virtualized, so what the ring holds is what the page can
+	// scroll through: a second, smaller display cap only confused the counts.
+	if snap := stream.Snapshot(LogcatFilter{}); len(snap.Entries) != 2500 {
+		t.Fatalf("snapshot holds %d entries, want all 2500 the ring kept", len(snap.Entries))
+	}
 }

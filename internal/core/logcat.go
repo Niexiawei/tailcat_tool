@@ -226,14 +226,25 @@ func (l LogcatLevel) Label() string {
 	return string(l)
 }
 
-// LogcatMaxLines is how many lines one stream keeps: how far back the page can
-// scroll, and the only bound on the stream's memory.
-const LogcatMaxLines = 5000
+// LogcatMaxLines is how many entries one stream keeps: how far back the page can
+// scroll. What the ring holds is exactly what the table can scroll through — the
+// table is virtualized, so a second, smaller display cap would only make the
+// counts disagree.
+const LogcatMaxLines = 20000
 
-// LogcatMaxRows is how many of them one frame hands the table. The table is
-// virtualized, but the rows are rebuilt whenever the page reloads them, so they
-// are capped well below what the ring holds.
-const LogcatMaxRows = 2000
+// LogcatMaxBytes is the other half of the same bound. A device that prints huge
+// lines (or one binary blob) would otherwise fill the ring's row budget with
+// hundreds of megabytes.
+const LogcatMaxBytes = 8 << 20
+
+// logcatEntryBytes is what one entry costs on top of its strings: the struct,
+// its time and the slice slot.
+const logcatEntryBytes = 88
+
+// logcatBytes is how much memory one entry holds, near enough for a budget.
+func logcatBytes(entry LogcatEntry) int {
+	return len(entry.Tag) + len(entry.Text) + logcatEntryBytes
+}
 
 // logcatNotifyInterval is the least time between two frame requests. A device
 // can print thousands of lines a second, and one repaint per line would spend
@@ -276,7 +287,7 @@ func logcatContainsAll(text, query string) bool {
 
 // LogcatSnapshot is what one frame draws.
 type LogcatSnapshot struct {
-	// Entries is oldest first, newest last, at most LogcatMaxRows of them.
+	// Entries is oldest first, newest last, as many as the ring kept.
 	Entries []LogcatEntry
 	// Received counts parsed lines since the stream started, Clear included.
 	Received uint64
@@ -298,6 +309,8 @@ type LogcatStream struct {
 	mu       sync.Mutex
 	entries  []LogcatEntry
 	limit    int
+	maxBytes int
+	bytes    int
 	splitter logcatSplitter
 	seq      uint64
 	received uint64
@@ -322,7 +335,10 @@ func newLogcatStream(limit int, notify func()) *LogcatStream {
 	if limit <= 0 {
 		limit = LogcatMaxLines
 	}
-	return &LogcatStream{limit: limit, notify: notify, clock: time.Now, stopped: make(chan struct{})}
+	return &LogcatStream{
+		limit: limit, maxBytes: LogcatMaxBytes,
+		notify: notify, clock: time.Now, stopped: make(chan struct{}),
+	}
 }
 
 // Version is cheap enough to ask every frame.
@@ -337,6 +353,7 @@ func (s *LogcatStream) Version() uint64 {
 func (s *LogcatStream) Clear() {
 	s.mu.Lock()
 	s.entries = nil
+	s.bytes = 0
 	s.version++
 	s.mu.Unlock()
 }
@@ -388,8 +405,8 @@ func (s *LogcatStream) CloseAndWait() {
 // it copies structs (the strings are shared) and never parses.
 func (s *LogcatStream) Snapshot(f LogcatFilter) LogcatSnapshot {
 	s.mu.Lock()
-	entries := make([]LogcatEntry, 0, min(len(s.entries), LogcatMaxRows))
-	for i := len(s.entries) - 1; i >= 0 && len(entries) < LogcatMaxRows; i-- {
+	entries := make([]LogcatEntry, 0, len(s.entries))
+	for i := len(s.entries) - 1; i >= 0; i-- {
 		if f.Match(s.entries[i]) {
 			entries = append(entries, s.entries[i])
 		}
@@ -456,10 +473,14 @@ func (s *LogcatStream) pushLocked(entry LogcatEntry) {
 	s.seq++
 	entry.Seq = s.seq
 	s.entries = append(s.entries, entry)
+	s.bytes += logcatBytes(entry)
 	s.received++
-	if excess := len(s.entries) - s.limit; excess > 0 {
-		s.entries = append(s.entries[:0], s.entries[excess:]...)
-		s.dropped += uint64(excess)
+	// Both bounds evict from the oldest end; the last entry is never evicted,
+	// or one huge line would empty the page.
+	for len(s.entries) > s.limit || (s.bytes > s.maxBytes && len(s.entries) > 1) {
+		s.bytes -= logcatBytes(s.entries[0])
+		s.entries = s.entries[1:]
+		s.dropped++
 	}
 	s.version++
 }
