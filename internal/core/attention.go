@@ -315,11 +315,25 @@ func (m *Manager) Attentions() []Attention {
 // answer the user already gave.
 func (m *Manager) AckAttention(id uuid.UUID) {
 	m.mu.Lock()
+	answered := map[uuid.UUID]bool{}
 	if attention, ok := m.attentionForLocked(id); ok {
 		delete(m.attention, attention.DeviceID)
+		for _, member := range attention.Devices() {
+			answered[member] = true
+		}
 	} else {
 		delete(m.attention, id)
+		answered[id] = true
 	}
+	// The answered detachments leave the window too: a device that notices the
+	// same outage a second later must not rebuild the prompt around them.
+	kept := m.detachments[:0]
+	for _, detachment := range m.detachments {
+		if !answered[detachment.DeviceID] {
+			kept = append(kept, detachment)
+		}
+	}
+	m.detachments = kept
 	m.notify()
 	m.mu.Unlock()
 }

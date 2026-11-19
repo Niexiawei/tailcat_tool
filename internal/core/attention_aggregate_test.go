@@ -205,6 +205,32 @@ func TestAckAttentionClearsEveryDeviceInTheGroup(t *testing.T) {
 	}
 }
 
+// Acknowledging the fleet and then watching one more device fall must not bring
+// the acknowledged ones back: the dialog was answered for them.
+func TestAckAttentionDoesNotResurrectTheFleet(t *testing.T) {
+	f := newFleet(t, 3)
+	f.adbDown = true
+	f.detect(t, f.id[0])
+	f.detect(t, f.id[1])
+	if attentions := f.m.Attentions(); len(attentions) != 1 || len(attentions[0].DeviceIDs) != 2 {
+		t.Fatalf("attentions before the acknowledgement = %+v", attentions)
+	}
+	f.m.AckAttention(f.id[0])
+
+	// The third device notices the same outage a moment later, still inside the
+	// aggregation window.
+	f.detect(t, f.id[2])
+	attentions := f.m.Attentions()
+	if len(attentions) != 1 {
+		t.Fatalf("Attentions() = %d entries after the third detachment: %+v", len(attentions), attentions)
+	}
+	for _, id := range attentions[0].Devices() {
+		if id == f.id[0] || id == f.id[1] {
+			t.Fatalf("the acknowledged device %v came back in %+v", id, attentions[0].DeviceIDs)
+		}
+	}
+}
+
 func TestReconnectAllSkipsHealthyDevices(t *testing.T) {
 	f := newFleet(t, 2)
 	// One device reports itself online, the other is waiting for a decision.

@@ -14,6 +14,19 @@
 
 ---
 
+> **完成情况（2026-11-19，分支 `feat/release-closing`）**
+>
+> | 条目 | 状态 | 提交 |
+> |---|---|---|
+> | P1 发布打包与版本 | 完成 | `302973e`：`mygo.json`、`go tool mygo build`、`--version`、CI 打包 job、图标与托盘图标 |
+> | P6 真机验收与记录 | 部分（见 `docs/verification.md`） | `279ecb0`：USB 直连 / 网络直连 / `adb disconnect` 已在真机模拟器验过；其余场景缺第二台设备、Tailcat 对端或 scrcpy |
+> | P2 启动诊断页 | 完成 | `6dee526`：`core.Diagnose` + 启动问题页 + `platform.RevealDir` |
+> | P4 干预聚合 | 完成（真机多设备待验） | `4124ceb`：3 秒窗口聚合 + `AttentionServerRestart` +「全部重新连接」；同时修掉弹窗只画一帧的旧缺陷 |
+> | P5 托盘「待处理」提示 | 完成 | `f0777cc`：`trayBadge` + `SetTitle` / `SetToolTip` + 菜单首项 |
+> | P3 统一日志 / P7 缓存管理 / DERP 页 | 已在各自计划里完成 | `2026-11-19-logs-page.md`、`2026-11-19-appmeta-cache-page.md`、`2026-11-19-derp-map-page.md` |
+>
+> 剩下的都是**要人/要硬件**的部分：P1 的「干净机器装包」「CI artifact 体积」「断网开终端」，P6 的 3、4、6、7、8、10、12 号场景。执行账本（含每处裁决）在 `.superpowers/sdd/2026-11-16-remaining-work/progress.md`。
+
 ## 基线
 
 | 项 | 值 |
@@ -97,7 +110,7 @@ P1 与 P6 必须相邻（打出来的包才拿去验收）；P2/P4 互不依赖�
 
 ### 步骤
 
-- [ ] **步骤 1：声明 CLI 工具**
+- [x] **步骤 1：声明 CLI 工具**
 
 ```sh
 go get -tool github.com/egoist/mygo/cmd/mygo@v0.9.1
@@ -106,7 +119,7 @@ go tool mygo -h
 
 `go.mod` 出现 `tool github.com/egoist/mygo/cmd/mygo`，版本与 `require` 里的 v0.9.1 相同；之后一律 `go tool mygo build`，不在 CI 里 `go install` 到 `PATH`。
 
-- [ ] **步骤 2：写 `mygo.json`**
+- [x] **步骤 2：写 `mygo.json`**
 
 ```json
 {
@@ -122,11 +135,11 @@ go tool mygo -h
 
 `identifier` 必须与凭据库服务名 `cc.coauto.tailcat-manager.connections` 的前缀一致（`internal/credstore`），一次定死。`out` 用默认 `dist`（已被 `.gitignore` 忽略）。`version` 取 0.2.0：0.1.0 已发布，本轮包含文件页、资源页、缓存页。
 
-- [ ] **步骤 3：图标**
+- [x] **步骤 3：图标**
 
 `resources/icon.png`，1024×1024，方图、透明背景。现有 `cmd/tailcat-manager/resources/tray.png` 是托盘用的 32×32 模板图，**放大会糊**：需要从原图重导出（或重绘），另存 `resources/icon-dev.png` 可选（开发版图标）。
 
-- [ ] **步骤 4：版本注入与 `--version`**
+- [x] **步骤 4：版本注入与 `--version`**
 
 `cmd/tailcat-manager/version.go`：
 
@@ -145,7 +158,7 @@ func versionText() string {
 
 **先验证的事**：`mygo.App.Version()` 读的是链接期变量与包信息，理论上前 `Run` 也能取到；如果实测拿不到值，就改成在 `mygo.App.WhenReady` 里打印再 `mygo.App.Quit()`，并在 `version.go` 注释里写明原因。
 
-- [ ] **步骤 5：CI 加打包 job**
+- [x] **步骤 5：CI 加打包 job**
 
 `.github/workflows/ci.yml` 新增 `package` job（三平台 matrix），**删掉现有的 `cross` job**（打包 job 已经覆盖交叉编译，两份体积账没有意义）：
 
@@ -195,7 +208,7 @@ package:
 
 Windows 上 `mygo build` 会为安装器下载 NSIS；runner 断网或下载失败时改用 `-skip-installer` 并只出 `.exe`，同时在 job 里 `::warning::` 说明，不许静默跳过。
 
-- [ ] **步骤 6：文档与变更记录**
+- [x] **步骤 6：文档与变更记录**
 
 `docs/build-notes.md` 补「打包」一节：`mygo build` 与 `go build` 的差异（终端插件 `plugins/terminal/mygo-plugin.json` 被打进包 vs 首次运行联网下载）、三平台产物名、体积实测。`README.md` 补安装段落。`docs/CHANGELOG.md` 记「新增：安装包与版本号；`--version`」。
 
@@ -263,11 +276,11 @@ Windows 上 `mygo build` 会为安装器下载 NSIS；runner 断网或下载失�
 
 ### 步骤
 
-- [ ] **步骤 1：写失败的测试 `TestDiagnoseReportsEveryBrokenPart`**
+- [x] **步骤 1：写失败的测试 `TestDiagnoseReportsEveryBrokenPart`**
 
 `internal/core/diagnose_test.go`：同时给四个错误（配置、历史库、凭据库、应用缓存），断言返回 4 个 `Problem`，每条 `Title` / `Path` 与顺序固定，且 `Config` 的 `Continue=true`。
 
-- [ ] **步骤 2：实现 `core.Diagnose`**
+- [x] **步骤 2：实现 `core.Diagnose`**
 
 ```go
 // Problem is one startup problem the user has to decide about.
@@ -304,23 +317,23 @@ func Diagnose(in DiagnoseInput) []Problem
 | 应用缓存不可用 | 应用信息缓存不可用，资源页只显示包名 | true | 继续 |
 | `adb` 找不到 | 未找到 adb，连接设备前需要先安装 | true | 打开工具设置 |
 
-- [ ] **步骤 3：`main.go` 收集全部问题**
+- [x] **步骤 3：`main.go` 收集全部问题**
 
 `buildEnvironment` 不再用 `if notice == ""` 兜底：把四个 `error` 原样放进 `DiagnoseInput`，`env.Problems = core.Diagnose(...)`。`Environment.Notice` 换成 `Problems []core.Problem`；stderr 仍逐条打印（终端用户与 CI 需要）。
 
-- [ ] **步骤 4：视图 `internal/app/startup.go`**
+- [x] **步骤 4：视图 `internal/app/startup.go`**
 
 `vm.Startup` 为真时，`ContentView` 渲染启动页而不是路由内容：每条 `Problem` 一张卡片（标题、详情、路径用等宽字体、按钮），底部「继续」按钮关闭启动页并跳到设备列表。打开配置目录走注入的 `Environment.OpenDir func(string) error`（`main.go` 里接 `platform.RevealDir`），**不要在 `internal/app` 里 `exec.Command`**。
 
-- [ ] **步骤 5：`platform.RevealDir`**
+- [x] **步骤 5：`platform.RevealDir`**
 
 三平台各一份：darwin `open <dir>`、windows `explorer <dir>`、linux `xdg-open <dir>`；失败返回 `core.Errorf("无法打开目录：…")` 级别的错误，界面用错误提示条显示。
 
-- [ ] **步骤 6：视图测试 `TestStartupPageListsProblems`**
+- [x] **步骤 6：视图测试 `TestStartupPageListsProblems`**
 
 `ui.NewTester` 断言：三条问题的标题都出现、路径出现、按钮文案是「用默认设置继续」「打开配置目录」「退出」。再加一条截图用例进 `shotCases()`。
 
-- [ ] **步骤 7：`gofmt -w`、`go vet ./...`、`go test ./...`，提交 `feat: show every startup problem on its own page`**
+- [x] **步骤 7：`gofmt -w`、`go vet ./...`、`go test ./...`，提交 `feat: show every startup problem on its own page`**
 
 ### 验收
 
