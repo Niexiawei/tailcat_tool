@@ -84,7 +84,7 @@ tailcat-manager --version   # Tailcat Manager 0.2.0；普通 go build 的产物�
 - [docs/architecture.md](docs/architecture.md)：架构、状态机、两种连接方式、外部干预检测、安全设计与决策记录
 - [docs/build-notes.md](docs/build-notes.md)：依赖版本、体积与构建耗时实测
 - [docs/ui-and-console.md](docs/ui-and-console.md)：界面布局、页面路由、内嵌终端与提示机制
-- [docs/CHANGELOG.md](docs/CHANGELOG.md)：版本变更记录（后续改动都记在这里）
+- [docs/CHANGELOG.md](docs/CHANGELOG.md)：按修改日期倒序的变更记录（不按版本号分组）
 - [AGENTS.md](AGENTS.md)：仓库规则（含"改行为必须更新 CHANGELOG"）
 
 ## 测试
