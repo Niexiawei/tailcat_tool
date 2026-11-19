@@ -95,6 +95,7 @@ ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
 | `/devices` | 设备列表页 | 卡片式列表（状态点 / 名称 / 连接方式与地址 / 状态），空态给出"添加设备"；页面标题在窗口标题栏里，正文不再重复 |
 | `/devices/{id}` | 设备页 | 面包屑 + 标题行（编辑 / 连接 / 断开）+ 页签（概览 / 资源 / 终端 / 文件 / 日志） |
 | `/logs` | 日志页 | 应用错误 / 通道日志 / 任务的统一时间线，四个筛选项（见 §14）；面包屑「首页 › 日志」；入口在侧栏设备列表之下 |
+| `/logcat` | Logcat 页 | 一台已连接设备的 `adb logcat` 实时流，可按级别 / 标签 / 内容筛选、暂停、跟随、清空与导出（见 §15）；面包屑「首页 › Logcat」；入口紧跟在「日志」之后 |
 | `/manage/appmeta` | 缓存管理页 | 按设备列出已缓存的应用名称与图标（包名、大小、读取时间、是否过期），可删除单条或清空这台设备；面包屑「首页 › 缓存管理」 |
 | `/manage/derp` | DERP 节点页 | 上半部固定（新建 / 默认节点），下半部把预设与最近用过合成一个滚动框，可新建、编辑、删除（在用不可删）；入口在侧栏设备列表之下 |
 | `/manage/derp/{id}` | DERP 节点详情页 | 区域与节点表、原始 JSON、使用设备；面包屑「首页 › DERP 节点 › 名称」，点中间一级回到列表；URL 型可强制重新获取 |
@@ -184,6 +185,7 @@ if !open {
 - **`Fit` 只给"外面那个框负责滚"的地方**：`Fit` 的表高=内容高，所以它不会藏行，也不会出现第二条滚动条。前提是**行高统一**：`Fit` 会把每行钉成主题的最小行高（`ListState.RowHeight`），因为行里放按钮的行天然比表头高，按"最小行高"估算表高会每行差一两像素，最后几行就被表格自己的滚动条藏起来（`TestDerpPresetTableShowsEverySavedRow` 钉住）。反过来说，一张几百行的表会一次性建出所有行——用在预设列表（几十条）可以，不要用在文件列表那种没有上限的地方。
 - **行级点击走 `ListState.Selected` + `Table(...).Changed()`**：`ui.Table` 没有 `TableRow.Clicked()`；`Selected` 初始给 -1，否则点第一行"没变化"。
 - **排序由页面算，不由组件算**：把 `&state.Sort` 交给表，建表前用 `Sort` 里的列自己排好行序（资源页 `sortApps` / `sortProcessRows`）。
+- **筛选框一律 `ui.SearchField`**：放大镜、非空时的清除按钮、Escape 清空都是它自带的。绑定的是**草稿**，`Submitted()`（Enter）或清空才落到真正筛选用的字段（`logFilter.searchDraft`、`logcatState.tagDraft/termDraft`、`resourceState.filterDraft`）。不要再用 `components.TextBox` 配 `LeadingIcon: lucide.Search()` 逐字生效——三个页面各写一遍已经不划算，规则写在这里；清空必须立刻生效，否则读者面对一个看不见又摘不掉的筛选。
 - **可能被截断的单行文本**都要挂 `components.Tooltip` 给全文（见 §10）。
 
 ## 4. 侧栏
@@ -263,6 +265,8 @@ view.OnUnmount(func() { vm.dropConsole(device) })
 
 退出应用时 `App.Quit()` 调 `vm.CloseConsoles()` 统一关闭。
 
+**关闭不在渲染线程上做**：`dropConsole` 把 `closeConsole(host)` 丢给 goroutine，因为关一个终端等于杀它背后的 `adb shell`，Windows 上是一次 `taskkill /T /F`（实测约 0.8 秒）。第一版在 `OnUnmount` 里同步关，于是"离开终端页签"和"从设备页跳到别的页面"都会卡一下。`CloseConsoles` 反过来必须等：退出应用时同步关完再退，否则 adb shell 会变成孤儿进程。`TestLeavingTheTerminalTabDoesNotWaitForItsProcess` 与 `TestQuittingTheAppWaitsForTheConsoles` 各钉一半。
+
 ## 6. 提示与错误
 
 ### 6.1 两级提示
@@ -318,13 +322,16 @@ vm.Notify("已复制…")   // 成功级：3 秒
 
 跨线程通知只有两个通道：`Manager.Changed()`（容量 1，自动合并）与 `Window.Invalidate()`（内部 `postMain` + CAS 合并，**任何 goroutine 可调**）。
 
-### 8.2 两条"绝不能"规则
+### 8.2 三条"绝不能"规则
 
 1. **持有 `m.mu` 时不做 I/O。**
    历史库写入曾经在 `logLocked` 里直接发生，而 `logLocked` 几乎总在锁内调用，界面每帧读锁 → 磁盘一慢，界面就冻住（见 §9.1）。现在日志写入走独立协程 + 256 缓冲队列，队列满则丢弃。
 
 2. **不要用 `mygo.RunOnMain` 从协程请求重绘。**
    它会**阻塞到主线程执行完**，把"请求重绘"变成一次跨线程同步点。`Window.Invalidate` 本身就会投递并合并，直接用即可。
+
+3. **不在渲染线程上等一个子进程退出。**
+   杀一个进程树在 Windows 上是同步的 `taskkill /T /F`，实测 **约 0.8 秒**（启一个只要 5–18 ms，差两个数量级）。这条规则踩过两次：离开 Logcat 页时 `LogcatStream.Close()` 等 `Proc.Stop`（§15），设备页「终端」页签卸载时 `term.Close()` 杀 adb shell（§5.4）。两处都改成"取消 + 丢给 goroutine"，只在**退出应用**时等（`Manager.Shutdown` → `CloseAndWait()`、`vm.CloseConsoles()`），否则应用先退会留下孤儿 adb。
 
 ## 9. 事故复盘
 
@@ -433,6 +440,9 @@ TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v
 | 侧栏、分组、底栏、提示队列、标题栏面包屑 | `internal/app/state.go` |
 | 路由、页面、概览、页签 | `internal/app/detail.go` |
 | 日志页与设备日志标签（共享 `logView`、筛选、跟随、输出、清空） | `internal/app/logs.go` |
+| Logcat 页（设备选择、筛选、表格、暂停/跟随、清空、导出、流的生命周期） | `internal/app/logcat.go` |
+| logcat 拆行、解析、环形缓冲、过滤（纯逻辑，不启进程） | `internal/core/logcat.go` |
+| logcat 流的启动与按设备登记（`StartLogcat` / `StopLogcat`） | `internal/core/manager_logcat.go` |
 | 内嵌终端、`lineConsole` | `internal/app/terminal.go` |
 | 表单（连接方式单选、中继分段与「预设 + 历史」合并选择；选中预设后来源框锁定，选「自定义」解锁为多行输入） | `internal/app/editor.go` |
 | 上传/下载表单 | `internal/app/transfer.go` |
@@ -448,6 +458,7 @@ TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v
 | 对话框关闭动画回归 | `internal/app/dialog_test.go` |
 | 视图测试 | `internal/app/app_test.go`、`internal/app/forms_test.go`、`internal/app/terminal_test.go`、`internal/app/files_test.go` |
 | 页面截图（人工核对） | `internal/app/screenshots_test.go`（`TAILCAT_SHOT_DIR` 打开） |
+| Logcat 页的视图测试与假 runner（`logcatRunner`） | `internal/app/logcat_test.go` |
 | 锁不阻塞测试 | `internal/core/manager_test.go`（`TestSlowRecorderNeverBlocksTheManager`） |
 
 ## 13. 设备文件页（「文件」页签）
@@ -591,6 +602,8 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 **布局固定三段**：筛选行、时间线 box、底部动作行。
 
 - 筛选行：设备选择器（只有日志页有）一行；级别（全部 / 错误 / 警告 / 信息）与时间段（今日 / 7 天 / 30 天 / 全部时间）同一行，各带一个灰字标签，避免两个「全部」挨着分不清；搜索框与「跟随最新」一行。
+
+**搜索框是 `ui.SearchField`**（放大镜图标、非空时右侧出现清除按钮、Escape 也清空）：绑定的是 `searchDraft`，`Search` 才是查询真正用的值，**按 Enter 才生效**（`Submitted()`），清空时立刻生效——一个看不见的筛选条件不该继续筛。第一版是 `components.TextBox` 逐字生效，每敲一个字母就重读一次时间线。`Label("搜索日志")` 不只是无障碍：测试靠它定位输入框（`tt.Click("搜索日志")`）。
 - 时间线 box **始终占满剩余高度**：没有日志时也不塌陷，空态文案「这段时间没有日志」在位居中、字号 16（正文是 11）；还没读完时显示「正在读取日志…」。
 - 底部动作行固定在页面最下面：「刷新」（主要按钮 + 图标）在左、「清空日志…」（警告橙 + 垃圾桶图标）在右；被 `LIMIT` 截断时左侧多一句「只显示最近 500 条，请缩小时间范围」。
 
@@ -605,3 +618,45 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 **空态**：`这段时间没有日志`；还没读完时显示 `正在读取日志…`。
 
 **`--demo`**：`demoHistory`（`internal/app/demo.go`）是内存版 `Recorder` + `HistoryReader`，预置一条错误、一条警告、每台一条通道日志与一条失败任务，所以 `--demo` 的日志页与截图不会是空的。
+
+---
+
+## 15. Logcat 页（实时日志流）
+
+侧栏「Logcat」（`lucide.Activity`）→ 路由 `/logcat`，面包屑「首页 › Logcat」。名字保留英文：它就是 logcat，翻译成「实时日志」反而要用户多猜一次这两个页面有什么区别——`/logs`（§14）是**应用与设备的历史时间线**，`/logcat` 是**一台设备此刻的日志流**，两者不共享任何数据。
+
+**布局固定四段**：设备选择器、筛选行（级别与开关一行、两个搜索框一行）、表格 box、底部状态行。
+
+- 设备选择器**只列已连接的设备**（`session.State == StateOnline` 且有 serial）。没连上的设备不在这里出现：一个离线 serial 会让 `adb logcat` 挂住或反复报错。一台都没有时整页只有一句「没有已连接的设备，先到设备页连接一台。」，不起任何进程。
+- 筛选行：第一行是「级别」灰字标签 + 5 段 `components.Tabs`（全部 / 调试 / 信息 / 警告 / 错误，是**最低级别**语义：选「警告」留 W/E/F），右侧「跟随最新」开关与「暂停 / 继续」；第二行是「标签」「内容」两个 `ui.SearchField`，空格分隔多个词、全部命中才算、大小写不敏感——与 §14 的关键词规则相同。两个框各有一份草稿（`tagDraft` / `termDraft`），**按 Enter 才落到 `Filter.Tags` / `Filter.Terms`**，清空时立刻落（`logcatSearchField`）。重新进入页面时草稿会从已生效的值同步回来，所以输入框显示的永远是正在生效的筛选，而不是上次离开时打了一半的字。
+- **暂停时筛选照样生效**：暂停冻结的是「新行自己进来」，不是「不让你找」。改筛选会立刻在**整个缓冲**里重算（包括暂停之后收到的行），因为筛选问的是缓冲，不是屏幕；新行仍然要等「继续」才出现。第一版把暂停实现成「干脆不刷新」，于是暂停后标签/内容框形同虚设。
+- **标签列两行**：上面是 logcat 的 tag，下面灰字是这条日志的**进程名/包名**（`Manager.ProcessName`，来自页面打开时与之后每 10 秒一次 `adb shell ps -A` 的静默读取；断开连接时清空）。PID 会被回收，所以旧读数只是提示。设备不认 `ps -A` 时只少这一行，页面其余部分照常。
+- **时间 / 级别 / PID / 标签 / 内容都能选中**：每个单元格包在 `ui.Selectable()` 里，拖选、双击选词、`Shift`+方向键、右键菜单的 Copy/Select All 都可用，⌘C / Ctrl+C 复制选中的部分。行尾那个复制图标仍然是把**整条**（含多行堆栈）一次拿走。拖选只在单个单元格内生效（表格的每个单元格是独立的 Selectable 容器），要整行用图标。
+- 表格 `Grow` 占满剩余高度，空态也不塌陷：还没收到行时「正在接收日志…」，有筛选条件且没命中时「没有符合筛选条件的日志」。
+- **内容列换行显示完整**：这一列不 `SingleLine`，一条日志需要几行就占几行，行高随内容增高（表格不设 `RowHeight`）。原来的单行省略 + 悬停提示把堆栈截成一行，读崩溃现场等于读不到。代价：一次可见的行变少。
+- **行尾是复制图标**（`components.IconButton` + `lucide.Copy`，`IconButtonCompact`）：点它把这一条按导出的格式（`2006-01-02 15:04:05.000 E/Tag(pid): 正文`，多行保留换行）放进剪贴板，提示「已复制这一行」。`writeClipboard`（`internal/app/actions.go`）是变量，测试替换它，不碰真剪贴板。
+- 状态行：`已接收 N 行 · 显示 M 条`（**行**是设备打印的行，**条**是页面上的条目：一次调用打出多行仍是一条），丢弃过再加 `· 缓冲已满，丢弃 K 条（上限 30000 条 / 16 MB）`——上限写在数字旁边，用户不用猜缓冲有多大，暂停时加 `· 已暂停`；右侧「导出…」「清空缓冲」，流结束后多一个「重新开始」；读者滚离末尾而「跟随最新」仍开着时，状态文字右边多一句「已暂停跟随」和一个「跳到最新」（见下一段）。「清空缓冲」把**行数、条数与两个计数器一起归零**（`LogcatStream.Clear`）：缓冲里的东西和描述它的数字是一件事，「显示 0 条」旁边挂着「已接收 39400 行」读起来像丢了 39400 行。`Seq` 不归零——它命名行身份，不能与旧行重号。
+
+**同一次调用的多行是一条**：logcat 把一条带换行的消息（异常堆栈）存成一行一条记录，但时间戳、pid、tid、级别、tag 全同。解析后遇到「这五项与上一条完全相同」就拼到上一条的正文里（换行连接），所以一条堆栈在表格里是一条，不是几十行。代价：同一毫秒、同一 tag 的两条不同消息会被并成一条（正文都在，只是同一条目里换行）。
+
+**「跟随最新」开关打开就是"贴到最新"**：mygo 的 `ListState.FollowEnd` 只是"允许跟随"，它真正的 `following` 是"上一帧是否停在末尾"，所以光把开关置 true 不会动——用户得先手动滚到底部，开关才生效。页面因此在三种时刻显式调一次 `ScrollToEnd()`（`logcatState.jumpToEnd`）：**打开开关**、**从暂停继续**、**进入页面**。关掉开关会顺手清掉还没执行的跳转，否则那一帧的表格会先跳到末尾再停下。
+
+**但"开关开着却不在末尾"仍然会出现**，而且是故意的：读者往上滚看历史时，mygo 会把 `following` 置 false（否则日志流每 100 ms 就把他拽回末尾，没法读）。这时开关的状态是骗人的——它说"跟随最新"，实际不跟。补法不是偷偷把它关掉，而是在底栏露出 **「已暂停跟随」+ 「跳到最新」**：一次点击 `ScrollToEnd()`，把读者送回正在写的那一行。判据用 `ListState.AtEnd()`（读上一帧的布局，所以底栏必须建在表格**之后**）。`TestLogcatOffersAWayBackToTheNewestLine` 钉住三件事：在末尾时不露这个按钮、滚走后不强行跟随、点了就回到最新。
+
+**复制列是固定列**（`TableColumn.Fixed` + `Align: ui.End`）：`ui.Table` 默认让用户拖动表头换列序、拉边框改列宽，而 `ListState.Columns` 会把这份布局存下来——复制按钮因此会被拖到中间，或者被拉宽到挤出右边缘。`Fixed` 让它在声明的位置（最后）不动、不可拉宽，行序怎么排都不影响。另外**固定列不会被压缩**：窗口变窄时它们不让位，让位的只有 `Width: 0` 的「内容」列，所以五列固定宽度之和就是按钮需要的宽度。现在声明的值（时间 132 / 级别 58 / PID 56 / 标签 190 / 复制 44）是算着 **600 DIP 窗口**给的——按原来的 150/64/64/190，窗口 600 时按钮只剩 14 px、560 时完全不可见；现在 600 完整，580 起也完整，再窄就只剩横向滚动，那是宽表格的通用取舍。`TestLogcatCopyColumnStaysLast` 用一次伪造的拖拽（`Columns.Order = ["copy","at"]`）钉住位置，`TestLogcatCopyButtonStaysOnScreenInANarrowWindow` 在 600 DIP 窗口里钉住可见性。
+
+**行序旧→新（与 §14 的时间线正相反）**：流就是往下滚的读法，新行出现在底部。`ui.ListState.FollowEnd` 正好是这个语义——`FollowEnd = 跟随最新`，用户往上滚就自动停止跟随、滚回底部又继续。表格的行身份是 `LogcatEntry.Seq`：两行日志可以时间、级别、标签、正文全同，只有序号能区分。
+
+**数据来源**：`core.LogcatStream`（`internal/core/logcat.go`），不是任务、不进 SQLite、没有超时、不占任务面板。`Manager.StartLogcat` 用 `Runner.Start` 跑 `adb -s SERIAL logcat -v threadtime`，输出在管道协程里拆行 → 解析 → 进一个环形缓冲（**30000 条 / 16 MB**，谁先满就从最早的一端丢）；页面每帧只调 `Snapshot(filter)` 取当前缓冲里全部命中筛选的条目——表格是虚拟化的，所以缓冲里有多少就能滚多少，没有第二道上限。一台设备同时只有一条流，换设备先关旧的。
+
+**筛选全在本机**：级别 / 标签 / 关键词都不过设备（不重开进程、不丢行）。代价是 V/D 行照样从设备经 Tailnet 传到本机，一台刷屏设备可能占带宽；真要压带宽，升级路径是给 `StartLogcat` 加 `*:W` 这样的 spec，代价是切换级别会重开进程。
+
+**流的生命周期**：`routedPage` 每帧先 `beginLogcatFrame()`、再 `defer settleLogcat()`；`logcatPage` 一进来就 `logcatDrawn = true`。一帧没画这个页面就说明用户走了，`settleLogcat` 立刻 `Manager.StopLogcat`。关窗口到托盘时没有帧可画，属于同一件事的另一半：`shell.go` 的 `window.OnClosed` 里调 `vm.CloseLogcat()`，否则藏起来的窗口会一直读设备通道。
+
+**停流绝不能在渲染线程上等进程**：Windows 上杀一个进程树是同步的 `taskkill /T /F`，实测 **约 0.8 秒**（`Runner.Start` 只要 5–18 ms）。第一版在 `Close()` 里直接调 `Proc.Stop()`，而 `Close` 是在画页面时被调用的，于是每次离开 Logcat 页都卡 1–2 秒。现在 `Close()` 只做 `cancel()` 并把 `stop` 丢给一个 goroutine，立刻返回；只有退出应用走 `Manager.Shutdown` → `CloseAndWait()`，那里必须等——应用先退就会留下一个孤儿 adb。`TestLogcatStreamCloseDoesNotWaitForTheProcess` 与 `TestShutdownWaitsForTheLogcatStop` 钉着这两半。**不自动重启**：流结束（设备断开、adb 退出）后页面显示「日志流已结束」与「重新开始」，必须由用户点——断开后偷偷连回去是红线。
+
+**`-v threadtime` 的年份**：threadtime 不打印年份与时区。解析时用「当前年」，若算出的时间晚于现在 24 小时则减一年（1 月读到的 12 月日志属于刚过去的那年）。续行（不以时间戳开头的缩进行）拼到上一条的正文里；`--------- beginning of main` 这类分隔行丢弃；单行超过 8 KiB 截断并加「（已截断）」，否则一条跑飞的二进制行会把缓冲撑爆。
+
+**导出**：状态行的「导出…」调 `mygo.Dialog.Save` 弹系统保存对话框（默认文件名 `logcat-YYYYMMDD-HHMMSS.txt`，过滤 `*.txt`），写的是**当前筛选命中的行**——筛选是这个页面的意义所在。一行一条 `2006-01-02 15:04:05.000 I/Tag(1234): 正文`：文件里写完整日期，因为被翻看的文件需要年份，而表格里只到月日。写文件在 goroutine 里做，成功弹「已导出 N 行到 <路径>」；用户取消不是错误，静默返回（系统对话框在某些平台上把"取消"报成 error）。没有可导出的行时不弹对话框，只提示「没有可导出的行」。
+
+**`--demo`**：`demoRunner.Start` 见到 `logcat` 就按 150ms 打印一条演示行，直到 ctx 取消（`--demo` 没有真实进程，`ExecRunner` 忽略 ctx，演示版遵守它）。所以演示环境里这一页有内容，筛选与导出也能试。

@@ -43,8 +43,13 @@ type Manager struct {
 	tempCredentials map[uuid.UUID]string
 	// logs carries channel log records to the recorder off the manager lock,
 	// so a slow history store can never freeze the window.
-	logs         chan LogRecord
-	appLogs      chan AppLogRecord
+	logs    chan LogRecord
+	appLogs chan AppLogRecord
+	// logcats holds at most one streaming logcat per device.
+	logcats map[uuid.UUID]*LogcatStream
+	// processNames is each device's PID → process name, as of the last `ps`
+	// read; the log page shows it under the tag.
+	processNames map[uuid.UUID]map[int]string
 	sessions     map[uuid.UUID]Session
 	tasks        []Task
 	relayPresets []RelayPreset
@@ -143,6 +148,8 @@ func NewManager(opts ManagerOptions) *Manager {
 		changed:             make(chan struct{}, 1),
 		logs:                make(chan LogRecord, 256),
 		appLogs:             make(chan AppLogRecord, 256),
+		logcats:             map[uuid.UUID]*LogcatStream{},
+		processNames:        map[uuid.UUID]map[int]string{},
 		config:              opts.Config,
 		credentials:         opts.Credentials,
 		identities:          opts.Identities,
@@ -612,6 +619,7 @@ func (m *Manager) Disconnect(ctx context.Context, id uuid.UUID) {
 	delete(m.sampleCounters, id)
 	delete(m.hardware, id)
 	m.forgetDirListingsLocked(id)
+	m.forgetProcessNamesLocked(id)
 	m.setStateLocked(id, func(s *Session) {
 		s.State = StateDisconnecting
 	})
@@ -627,6 +635,9 @@ func (m *Manager) Disconnect(ctx context.Context, id uuid.UUID) {
 
 	jobs := m.cancelDeviceTasks(id)
 	waitDones(jobs)
+	// A log stream reads the channel the disconnect is about to close; it has
+	// to stop before the channel does, and off the manager lock like the tasks.
+	m.StopLogcat(id)
 
 	if runtime != nil {
 		if runtime.conn != nil {
@@ -669,6 +680,18 @@ func (m *Manager) DisconnectAll(ctx context.Context) {
 // Shutdown stops everything: monitors, tasks, channels, temporary devices.
 func (m *Manager) Shutdown(ctx context.Context) {
 	m.cancel()
+	// Log streams are stopped here and waited for, unlike everywhere else: an
+	// app that exits before its adb would leave the process behind.
+	m.mu.Lock()
+	streams := make([]*LogcatStream, 0, len(m.logcats))
+	for id, stream := range m.logcats {
+		streams = append(streams, stream)
+		delete(m.logcats, id)
+	}
+	m.mu.Unlock()
+	for _, stream := range streams {
+		stream.CloseAndWait()
+	}
 	m.mu.Lock()
 	ids := make([]uuid.UUID, 0, len(m.runtimes))
 	for id := range m.runtimes {

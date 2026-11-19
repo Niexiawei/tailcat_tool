@@ -35,8 +35,11 @@ type resourceState struct {
 	batch   []string
 	batchAt time.Time
 	// filter narrows both tables: one box serves the application view and the
-	// process view, so switching views does not lose the question.
-	filter string
+	// process view, so switching views does not lose the question. It is what
+	// the box applied, not what it holds: filterDraft is the field's text, so
+	// the tables narrow on Enter or on a Clear, never on a keystroke.
+	filter      string
+	filterDraft string
 }
 
 // resourceStateFor returns one device's page state, creating it on first use.
@@ -274,10 +277,13 @@ func (vm *ViewModel) tableToolbar(c *ui.Context, state *resourceState, profile c
 	ui.Column(c).FillWidth().Gap(4).Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			components.Tabs(c, &state.view, components.TabsSegmented, "应用", "进程")
-			components.TextBox(c, &state.filter, components.TextBoxOptions{LeadingIcon: lucide.Search()}).
+			box := ui.SearchField(c, &state.filterDraft).
 				Placeholder("筛选应用或进程").
 				Label("筛选应用或进程").
 				Width(200)
+			if box.Submitted() || (box.Changed() && state.filterDraft == "") {
+				state.filter = state.filterDraft
+			}
 			ui.Box(c).Grow(1)
 			if done, total := vm.batchProgress(state, profile.ID); total > 0 {
 				components.Text(c, "正在读取应用信息 "+itoa(done)+"/"+itoa(total)).

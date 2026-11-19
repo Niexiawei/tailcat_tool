@@ -28,7 +28,13 @@ func (vm *ViewModel) OpenMainWindow() *sidebar.Shell {
 	window := shell.Window()
 	vm.Invalidate = window.Invalidate
 	// Closing the window keeps the channels running; the tray reopens it.
-	window.OnClosed(func() { window.Hide() })
+	// The logcat stream is the exception: a hidden window draws no frames, so
+	// nothing would tell the page it was left, and the stream would keep
+	// reading the device.
+	window.OnClosed(func() {
+		vm.CloseLogcat()
+		window.Hide()
+	})
 	return shell
 }
 

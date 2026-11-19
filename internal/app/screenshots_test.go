@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"image/png"
@@ -261,7 +262,10 @@ func shotCases() []shotCase {
 			name: "16-logs-page-empty",
 			build: func(t *testing.T) *ViewModel {
 				vm := shotLogsPage(t)
-				vm.pageLogFilter().Search = "这段时间没有的关键词"
+				// The field holds the draft and Search is what it applied, so
+				// a state set up without the UI sets both.
+				filter := vm.pageLogFilter()
+				filter.searchDraft, filter.Search = "这段时间没有的关键词", "这段时间没有的关键词"
 				return vm
 			},
 		},
@@ -406,6 +410,39 @@ func shotCases() []shotCase {
 			settle: 12,
 		},
 		{
+			name:   "28-logcat-page",
+			build:  shotLogcatPage,
+			settle: 4,
+		},
+		{
+			name: "29-logcat-empty",
+			build: func(t *testing.T) *ViewModel {
+				// No device is connected, so the page can only explain why the
+				// box is empty.
+				vm := newTestViewModel(t)
+				vm.OpenLogcat()
+				return vm
+			},
+		},
+		{
+			name: "30-logcat-paused",
+			build: func(t *testing.T) *ViewModel {
+				vm := shotLogcatPage(t)
+				vm.Logcat.Paused = true
+				return vm
+			},
+			settle: 4,
+		},
+		{
+			name: "31-logcat-ended",
+			build: func(t *testing.T) *ViewModel {
+				vm, runner := shotLogcatStream(t)
+				runner.end(1)
+				return vm
+			},
+			settle: 6,
+		},
+		{
 			name: "21-derp-delete",
 			build: func(t *testing.T) *ViewModel {
 				vm, preset := newDerpViewModel(t)
@@ -438,6 +475,47 @@ func shotDevice(t *testing.T, read func(dir string) (core.Result, error), tab in
 	vm.OpenDevice(vm.Selection)
 	return vm
 }
+
+// shotLogcatPage is the Logcat page holding the lines a stream would have
+// carried. A fake runner feeds them, so the picture does not depend on a timer.
+func shotLogcatPage(t *testing.T) *ViewModel {
+	vm, _ := shotLogcatStream(t)
+	return vm
+}
+
+// shotLogcatStream is the page with its stream started and a batch of lines
+// already in the ring.
+func shotLogcatStream(t *testing.T) (*ViewModel, *logcatRunner) {
+	t.Helper()
+	runner := &logcatRunner{}
+	vm := newBlockingViewModel(t, runner)
+	profile := vm.Manager.Profiles()[0]
+	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	t.Cleanup(func() { vm.Manager.Disconnect(context.Background(), profile.ID) })
+	vm.OpenLogcat()
+	// The page starts its stream on its first frame; a screenshot has to have
+	// it before the lines are fed.
+	vm.ensureLogcatDevice(vm.logcatState())
+	vm.ensureLogcatStream(vm.logcatState())
+	runner.feed(shotLogcatLines)
+	return vm, runner
+}
+
+// shotLogcatLines is what the page shows in a screenshot: every level, a few
+// tags, one multi-line crash and one long message.
+const shotLogcatLines = `11-18 09:30:01.123  4100  4123 I ActivityManager: Start proc 4100:com.demo.camera/u0a132 for activity
+11-18 09:30:01.180  4100  4140 D OpenGLRenderer: setSurface called
+11-18 09:30:01.240  4100  4140 I Choreographer: Skipped 3 frames! The application may be doing too much work on its main thread: the frame took 47 ms and the deadline was missed by 19 ms, which is a long message on purpose so the column has to wrap it instead of cutting it off
+11-18 09:30:01.300  4100  4141 W demo.camera: preview callback returned 30 fps, dropping frames
+11-18 09:30:01.360  4200  4200 E AndroidRuntime: FATAL EXCEPTION: main
+11-18 09:30:01.360  4200  4200 E AndroidRuntime:   at com.demo.camera.Main.onResume(Main.java:42)
+11-18 09:30:01.360  4200  4200 E AndroidRuntime: Caused by: java.lang.IllegalStateException: camera in use
+11-18 09:30:02.000  4100  4123 I ActivityManager: Displayed com.demo.camera/.Main
+11-18 09:30:02.100  1234  1250 V SurfaceFlinger: 超过缓冲上限的详细行也要能显示
+11-18 09:30:02.200  4100  4123 F demo.camera: supervisor asked the app to stop
+`
 
 // shotLogsPage is the demo app on the log page: the page reads the demo's own
 // in-memory history, so the picture has rows without a real device.

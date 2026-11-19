@@ -9,9 +9,14 @@ import (
 	"github.com/egoist/mygo/transfer"
 )
 
+// writeClipboard is a variable so tests never touch the real clipboard.
+var writeClipboard = func(text string) error {
+	return mygo.Clipboard.Write(transfer.TextData(text), mygo.ClipboardOptions{})
+}
+
 // copyText puts a string on the clipboard.
 func (vm *ViewModel) copyText(text string) {
-	if err := mygo.Clipboard.Write(transfer.TextData(text), mygo.ClipboardOptions{}); err != nil {
+	if err := writeClipboard(text); err != nil {
 		vm.FailText("复制失败：" + err.Error())
 		return
 	}

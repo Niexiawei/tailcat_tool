@@ -198,13 +198,9 @@ func (vm *ViewModel) runADBLine(profile core.Profile, session core.Session, line
 	lines.prompt()
 }
 
-// dropConsole closes and forgets a device's console.
-func (vm *ViewModel) dropConsole(id uuid.UUID) {
-	host, ok := vm.consoles[id]
-	if !ok {
-		return
-	}
-	delete(vm.consoles, id)
+// closeConsole stops a console's program. It is a variable so a test can watch
+// that it does not run in the frame that leaves the tab.
+var closeConsole = func(host *consoleHost) {
 	if host.term != nil {
 		_ = host.term.Close()
 	}
@@ -213,10 +209,28 @@ func (vm *ViewModel) dropConsole(id uuid.UUID) {
 	}
 }
 
-// CloseConsoles closes every embedded console.
+// dropConsole closes and forgets a device's console, off the render thread:
+// closing a terminal stops the adb shell behind it, and on Windows that is a
+// `taskkill` that took the better part of a second in the frame that left the
+// page.
+func (vm *ViewModel) dropConsole(id uuid.UUID) {
+	host, ok := vm.consoles[id]
+	if !ok {
+		return
+	}
+	delete(vm.consoles, id)
+	go closeConsole(host)
+}
+
+// CloseConsoles stops every embedded console and waits for it. The app calls it
+// on the way out: exiting first would leave the adb shells behind.
 func (vm *ViewModel) CloseConsoles() {
 	for id := range vm.consoles {
-		vm.dropConsole(id)
+		host := vm.consoles[id]
+		delete(vm.consoles, id)
+		if host != nil {
+			closeConsole(host)
+		}
 	}
 }
 

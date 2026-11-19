@@ -15,8 +15,29 @@ import (
 // demoRunner answers adb calls the way a healthy device would.
 type demoRunner struct{}
 
-func (demoRunner) Start(context.Context, core.Command, func(string)) (*core.Proc, error) {
-	return nil, core.Error("demo mode runs no processes")
+func (demoRunner) Start(ctx context.Context, c core.Command, onOutput func(string)) (*core.Proc, error) {
+	if !strings.Contains(strings.Join(c.Args, " "), "logcat") {
+		return nil, core.Error("demo mode runs no processes")
+	}
+	// The demo prints what a device would, so the page, its filters and the
+	// export have something to work on. It stops on the context because there
+	// is no real process to signal: ExecRunner ignores it, the demo honours it.
+	done := make(chan int, 1)
+	proc := &core.Proc{Done: done}
+	go func() {
+		ticker := time.NewTicker(demoLogcatInterval)
+		defer ticker.Stop()
+		for n := 1; ; n++ {
+			select {
+			case <-ctx.Done():
+				done <- 0
+				return
+			case <-ticker.C:
+				onOutput(demoLogcatLine(n))
+			}
+		}
+	}()
+	return proc, nil
 }
 
 func (demoRunner) Run(_ context.Context, c core.Command, onOutput func(string)) (core.Result, error) {
@@ -43,7 +64,30 @@ func (demoRunner) Run(_ context.Context, c core.Command, onOutput func(string)) 
 	return core.Result{Output: "示例任务完成，未执行真实设备命令。\n"}, nil
 }
 
-// demoDirListing is what the simulated device prints for one directory read.
+// demoLogcatInterval is how often the simulated device prints a line: often
+// enough to read as a stream, slow enough that a screenshot is stable.
+const demoLogcatInterval = 150 * time.Millisecond
+
+// demoLogcatLine is one line the simulated device prints, in the shape
+// `logcat -v threadtime` produces. The levels and tags rotate so the level
+// tabs and the tag box have something to do.
+func demoLogcatLine(n int) string {
+	levels := []string{"I", "I", "D", "I", "W", "I", "E"}
+	tags := []string{"ActivityManager", "OpenGLRenderer", "demo.camera", "Choreographer", "demo.gallery"}
+	texts := []string{
+		"应用已进入前台",
+		"绘制第 n 帧",
+		"预览回调返回 30 fps",
+		"跳过了 2 帧",
+		"模拟的异常：示例日志流不连接真实设备",
+	}
+	level := levels[(n-1)%len(levels)]
+	tag := tags[(n-1)%len(tags)]
+	text := texts[(n-1)%len(texts)]
+	stamp := time.Now().Format("01-02 15:04:05.000")
+	return stamp + "  1234  1250 " + level + " " + tag + ": 第 " + itoa(n) + " 条演示日志 · " + text + "\n"
+}
+
 // The timestamps are fixed so the page reads the same on every run.
 func demoDirListing(script string) string {
 	switch {
