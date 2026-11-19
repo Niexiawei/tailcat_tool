@@ -22,7 +22,10 @@ type Environment struct {
 	// OpenDir reveals a directory in the file manager, for the startup page's
 	// buttons. Nil hides them.
 	OpenDir func(dir string) error
-	Demo    bool
+	// Icon is the application icon (a square PNG): the window sets it for its
+	// title bar and taskbar button. Nil leaves the platform's default.
+	Icon []byte
+	Demo bool
 
 	OnShutdown func()
 
@@ -49,6 +52,7 @@ func New(env Environment) *App {
 	vm.History = env.History
 	vm.RecordAppLog = env.RecordAppLog
 	vm.OpenDir = env.OpenDir
+	vm.WindowIcon = env.Icon
 	// Startup problems are a page of their own, not a toast: a toast saying
 	// the configuration failed is gone in eight seconds and never mentioned
 	// the history file that failed with it. They are also logged as warnings:

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"log"
+
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/shells/sidebar"
@@ -26,6 +28,14 @@ func (vm *ViewModel) OpenMainWindow() *sidebar.Shell {
 		Theme: appTheme,
 	})
 	window := shell.Window()
+	// The packaged executable carries the icon in its resources, which Windows
+	// uses for the file but not for the window: without this the taskbar button
+	// is the generic one. Linux has no other source at all.
+	if len(vm.WindowIcon) > 0 {
+		if err := window.SetIcon(vm.WindowIcon); err != nil {
+			log.Printf("window icon: %v", err)
+		}
+	}
 	vm.Invalidate = window.Invalidate
 	// Closing the window keeps the channels running; the tray reopens it.
 	// The logcat stream is the exception: a hidden window draws no frames, so

@@ -18,6 +18,9 @@ import (
 	"github.com/egoist/mygo"
 )
 
+//go:embed resources/icon.png
+var appIcon []byte
+
 //go:embed resources/tray-light.png
 var trayLight []byte
 
@@ -56,6 +59,9 @@ func main() {
 		if demo {
 			env = app.NewDemoEnvironment()
 		}
+		// One icon for the window, the taskbar and the bundle, embedded here so
+		// that `go build` and `go run` show it too, not only the packaged app.
+		env.Icon = appIcon
 		running = app.New(env)
 		running.Start(app.TrayIcons{Light: trayLight, Dark: trayDark})
 	})

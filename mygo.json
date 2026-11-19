@@ -7,5 +7,6 @@
   "publisher": "Niexiawei",
   "license": "MIT",
   "main": "./cmd/tailcat-manager",
+  "icon": "cmd/tailcat-manager/resources/icon.png",
   "macos": { "signingIdentity": "" }
 }

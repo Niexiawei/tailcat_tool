@@ -79,8 +79,17 @@ $ "dist/windows-amd64/Tailcat Manager.exe" --version
 Tailcat Manager 0.2.0
 ```
 
-`dist/windows-amd64/` 里 exe 32.4 MB、`ghostty-vt.dll` 2.2 MB、`icon.png`；
+`dist/windows-amd64/` 里 exe 32.5 MB、`ghostty-vt.dll` 2.2 MB（图标不再作为文件拷在 exe 旁边，它内嵌在 exe 与二进制里）；
 `dist/linux-amd64/` 里 `tailcat-manager` 31.7 MB 与 `.deb` / `.rpm` / `.tar.gz` 各约 14.1 MB。
+
+### 窗口图标的取证
+
+任务栏按钮此前是系统的默认图标（截图里那个空白窗口），因为 `mygo build` 只把图标放进 exe 的资源，而窗口自己没有 `WM_SETICON`。修好后用 Win32 `WM_GETICON` 量了前后两个产物：
+
+```
+修前（stash 掉 SetIcon 那一行后重新打包）：window 'Tailcat Manager': ICON_BIG=0 ICON_SMALL=0
+修后（当前分支）：window 'Tailcat Manager': ICON_BIG=4141239 ICON_SMALL=128787837
+```
 
 ### 这一轮修掉的东西
 

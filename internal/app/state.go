@@ -102,6 +102,9 @@ type ViewModel struct {
 	// OpenDir reveals a directory in the file manager; nil hides the buttons
 	// that would call it (--demo, tests).
 	OpenDir func(dir string) error
+	// WindowIcon is the PNG the window and its taskbar button show; nil keeps
+	// the platform's default.
+	WindowIcon []byte
 	// Quit closes the app; nil leaves the quit button out.
 	Quit func()
 

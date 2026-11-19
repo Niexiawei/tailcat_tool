@@ -137,7 +137,7 @@ go tool mygo -h
 
 - [x] **步骤 3：图标**
 
-`resources/icon.png`，1024×1024，方图、透明背景。现有 `cmd/tailcat-manager/resources/tray.png` 是托盘用的 32×32 模板图，**放大会糊**：需要从原图重导出（或重绘），另存 `resources/icon-dev.png` 可选（开发版图标）。
+`cmd/tailcat-manager/resources/icon.png`，1024×1024，方图、透明背景（计划原本写仓库根的 `resources/icon.png`：那样它会被整份拷到产物旁边，而 `go:embed` 又不能引用包目录之外的文件——同一份图标要既进 exe 资源又进二进制，只能放在主包目录里，由 `mygo.json` 的 `icon` 指过去）。现有 `cmd/tailcat-manager/resources/tray.png` 是托盘用的 32×32 模板图，**放大会糊**：需要从原图重导出（或重绘），另存 `resources/icon-dev.png` 可选（开发版图标）。
 
 - [x] **步骤 4：版本注入与 `--version`**
 

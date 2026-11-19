@@ -70,7 +70,7 @@ CGO_ENABLED=0 go tool mygo build -platform darwin/universal -sign -   # 需要 m
 1. **终端插件进包**：`ghostty-vt.dll`（2.2 MB）/ `libghostty-vt.so` / `libghostty-vt.dylib` 与可执行文件并排、随包走，用户首次打开终端页不需要联网下载。
 2. **图标与版本进可执行文件**：Windows 会生成 `.syso`（图标、清单、版本号），macOS 生成 `AppIcon.icns`，Linux 生成 `.desktop`、多尺寸 PNG 与安装脚本。
 3. **版本号**：`mygo.json` 的 `version` 通过 `-X github.com/egoist/mygo.packageVersion` 链进去，`tailcat-manager --version` 打印的就是它；`go build` 的产物没有这个变量，打印 `dev`。
-4. **资源目录**：`resources/` 会整份拷到可执行文件旁边（当前只有 `icon.png`），`resources/<os>[-<arch>]/` 只发给对应平台。
+4. **资源目录**：仓库根的 `resources/` 会整份拷到可执行文件旁边，`resources/<os>[-<arch>]/` 只发给对应平台（当前没有这个目录）。应用图标放在 `cmd/tailcat-manager/resources/icon.png`，由 `mygo.json` 的 `icon` 指向，同时也被主包 `go:embed` 进二进制供 `Window.SetIcon` 使用——所以它不会重复出现在产物里。
 
 `dist/` 已被 `.gitignore` 忽略；不要把产物提交进仓库。
 
