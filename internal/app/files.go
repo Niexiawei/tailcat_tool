@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
@@ -191,26 +192,61 @@ func (vm *ViewModel) loadDir(profile core.Profile, path string, force bool) {
 // listings are huge, change constantly and cannot be opened as files.
 var prefetchSkip = map[string]bool{"/proc": true, "/sys": true, "/dev": true, "/acct": true}
 
-// prefetchDirs reads the subdirectories of a listing that just arrived, one at
-// a time, so expanding the next level shows folders instead of 「正在读取…」.
+// prefetchParallel is the ceiling on read-ahead at once. Eight shell round trips
+// fill a tree in a fraction of the sequential time without burying the device's
+// shell (and adb server) under a hundred. A read the user asked for never waits
+// behind these.
+const prefetchParallel = 8
+
+// prefetchSlots keeps the read-ahead under that ceiling across the whole app:
+// the adb server is one process, and eight shell round trips at a time is what
+// it handles without making every one of them slower. The semaphore lives here
+// rather than on the page state because two devices browsing at once share it.
+var prefetchSlots = make(chan struct{}, prefetchParallel)
+
+// prefetchDirs reads the subdirectories of a listing that just arrived, so
+// expanding the next level shows folders instead of 「正在读取…」. The reads run
+// eight at a time: one shell round trip after another made a folder of forty
+// subfolders wait for forty of them before its arrows appeared.
 func (vm *ViewModel) prefetchDirs(profile core.Profile, listing core.DirListing) {
+	var wg sync.WaitGroup
 	for _, entry := range listing.Entries {
 		if !entry.Dir || prefetchSkip[entry.Path] {
 			continue
 		}
-		key := fileKey(profile.ID, entry.Path)
+		// A folder that is already cached needs no slot at all; the checks in
+		// prefetchDir cover the ones that land while this one waits its turn.
 		if _, ok := vm.Manager.DirListing(profile.ID, entry.Path); ok {
 			continue
 		}
-		if vm.fileFailure(key) != "" || !vm.beginFileLoad(key) {
-			continue
-		}
-		_, err := vm.Manager.ListRemoteDir(context.Background(), profile.ID, entry.Path)
-		if errors.Is(err, core.ErrCancelled) {
-			err = nil
-		}
-		vm.endFileLoad(key, err)
+		path := entry.Path
+		wg.Go(func() {
+			prefetchSlots <- struct{}{}
+			defer func() { <-prefetchSlots }()
+			vm.prefetchDir(profile, path)
+		})
 	}
+	wg.Wait()
+}
+
+// prefetchDir reads one folder for the tree's arrows. A folder already cached,
+// already in flight, or already known to fail is left alone, so a hundred queued
+// reads cannot turn into a hundred shell commands.
+func (vm *ViewModel) prefetchDir(profile core.Profile, path string) {
+	key := fileKey(profile.ID, path)
+	if _, ok := vm.Manager.DirListing(profile.ID, path); ok {
+		return
+	}
+	if vm.fileFailure(key) != "" || !vm.beginFileLoad(key) {
+		return
+	}
+	_, err := vm.Manager.ListRemoteDir(context.Background(), profile.ID, path)
+	// A cancelled read means the device went away mid-listing, which the page
+	// already says with its own state; it is not a failure to report.
+	if errors.Is(err, core.ErrCancelled) {
+		err = nil
+	}
+	vm.endFileLoad(key, err)
 }
 
 // showDir points the right pane at a directory, and opens the tree down to it:

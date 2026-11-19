@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -752,5 +753,66 @@ func TestFileTableKeyboardMovesTheChoice(t *testing.T) {
 	}
 	if state.selected != "/sdcard" {
 		t.Fatalf("moving the choice opened %q; keys must not activate a folder", state.selected)
+	}
+}
+
+// TestFileTreePrefetchesInParallel pins the shape of the read-ahead: a folder
+// with many subfolders is read eight at a time, not one shell round trip after
+// another. Sequentially, a big /sdcard grew its arrows over tens of seconds.
+func TestFileTreePrefetchesInParallel(t *testing.T) {
+	const folders = 20
+	var mu sync.Mutex
+	inFlight, peak, started := 0, 0, 0
+	read := func(dir string) (core.Result, error) {
+		mu.Lock()
+		inFlight++
+		started++
+		if inFlight > peak {
+			peak = inFlight
+		}
+		mu.Unlock()
+		// A real device takes milliseconds per folder; without a delay here the
+		// reads would never overlap and the test would mean nothing.
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		if dir == "/" {
+			var out strings.Builder
+			for i := 0; i < folders; i++ {
+				fmt.Fprintf(&out, "directory|4096|755|drwxr-xr-x|1700000000|./a%02d\n", i)
+			}
+			return core.Result{Output: out.String()}, nil
+		}
+		return core.Result{}, nil
+	}
+
+	vm, _ := newFilesViewModel(t, read)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		seen := started
+		mu.Unlock()
+		if seen >= 1+folders {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("read %d of %d folders", seen, 1+folders)
+		}
+		tt.Frame()
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	mu.Lock()
+	got := peak
+	mu.Unlock()
+	// One at a time can only ever overlap the two folders the page opens on its
+	// own (/ and /sdcard), so a peak near the cap is the whole point.
+	if got < prefetchParallel/2 {
+		t.Fatalf("read-ahead ran folders one at a time (peak %d in flight)", got)
+	}
+	if got > prefetchParallel {
+		t.Fatalf("peak %d folder reads in flight, want at most %d", got, prefetchParallel)
 	}
 }
