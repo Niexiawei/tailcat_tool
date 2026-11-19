@@ -38,6 +38,7 @@ type App struct {
 	vm         *ViewModel
 	shell      *sidebar.Shell
 	tray       *mygo.Tray
+	trayShown  trayText
 	installLog string
 }
 
@@ -80,6 +81,7 @@ func (a *App) Start(trayIcons TrayIcons) {
 		// The bar's brightness is only known once the icon exists.
 		applyTrayIcon(tray, trayIcons)
 		tray.OnAppearanceChange(func() { applyTrayIcon(tray, trayIcons) })
+		a.updateTrayBadge()
 		go a.keepTrayFresh()
 	} else {
 		log.Printf("tray icon unavailable: %v", err)
@@ -114,7 +116,30 @@ func (a *App) keepTrayFresh() {
 				a.tray.SetMenu(menu)
 			}
 		})
+		a.updateTrayBadge()
 	}
+}
+
+// updateTrayBadge writes the pending count next to the icon and into its hover
+// text, and only when the text changes: a menu bar title rewritten every frame
+// flickers.
+func (a *App) updateTrayBadge() {
+	if a.tray == nil {
+		return
+	}
+	title, tooltip, _ := trayBadge(a.env.Manager.Attentions())
+	wanted := trayText{title: title, tooltip: tooltip}
+	if wanted == a.trayShown {
+		return
+	}
+	a.trayShown = wanted
+	mygo.RunOnMain(func() {
+		if a.tray == nil {
+			return
+		}
+		a.tray.SetTitle(wanted.title)
+		a.tray.SetToolTip(wanted.tooltip)
+	})
 }
 
 func (a *App) connectByID(id string) {

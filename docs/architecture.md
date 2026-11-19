@@ -507,9 +507,8 @@ go test ./internal/compat/    # 第三方 API 契约
 1. **真机联调未做**：ADB 实链路、scrcpy 窗口、设备授权流程、`adb disconnect` 干预弹窗，都只有自动化测试与 `--demo` 验证。安装包已经能打（`go tool mygo build`），但还没有人在别人的机器上装过。这是当前最大的未知。
 2. **发布签名与公证未做**：三平台产物都有了，但 macOS 只有 ad-hoc 签名（Gatekeeper 会拦），Windows 安装器没有代码签名，Linux 包没有签名。
 3. **`listenerLost`** 尚未实现（需要监听器健康探测）；`adb kill-server` 的聚合提示已实现（见 §15「多设备干预的聚合」）。
-4. **托盘 Badge**：排队中的干预提示目前只会出现在托盘菜单文本里，没有数字角标。
-5. **逐进程 GPU 未实现**：`GPUSample.PerProcessAvailable` 恒为 false，只有整机 GPU 使用率。
-6. **文件页只读**：没有删除、重命名、新建目录、文件内容预览与多选批传；超过 2000 项的目录要靠进入子目录查看。
+4. **逐进程 GPU 未实现**：`GPUSample.PerProcessAvailable` 恒为 false，只有整机 GPU 使用率。
+5. **文件页只读**：没有删除、重命名、新建目录、文件内容预览与多选批传；超过 2000 项的目录要靠进入子目录查看。
 
 ---
 
