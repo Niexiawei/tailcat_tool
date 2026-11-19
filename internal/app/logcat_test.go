@@ -805,3 +805,46 @@ func TestLogcatCopyButtonStaysOnScreenInANarrowWindow(t *testing.T) {
 		t.Fatalf("the copy button is clipped at %v in a 600 wide window: widen the flexible column instead", rect)
 	}
 }
+
+// A search field promises that Enter searches: half a word typed while the
+// stream runs must not make the table jump on every keystroke.
+func TestLogcatFilterAppliesOnEnter(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 500)
+	tt.Frame()
+	runner.feed("11-18 09:30:00.000  1  1 I Alpha: kept\n11-18 09:30:00.001  1  1 I Beta: dropped\n")
+	for i := 0; i < 3; i++ {
+		tt.Frame()
+	}
+	if err := tt.Click("内容筛选"); err != nil {
+		t.Fatalf("Click(内容筛选) error: %v", err)
+	}
+	tt.Type("Alpha")
+	tt.Frame()
+	if got := vm.Logcat.Filter.Terms; got != "" {
+		t.Fatalf("the table filtered on a keystroke: Terms = %q", got)
+	}
+	if !tt.HasText("dropped") {
+		t.Fatalf("the rows left before the search was entered; texts = %v", tt.Texts())
+	}
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if got := vm.Logcat.Filter.Terms; got != "Alpha" {
+		t.Fatalf("Enter did not search: Terms = %q", got)
+	}
+	if tt.HasText("dropped") {
+		t.Fatalf("the filter did not drop the other line; texts = %v", tt.Texts())
+	}
+	// The clear button empties the field, and a filter nobody can see must not
+	// keep filtering.
+	if err := tt.Click("Clear"); err != nil {
+		t.Fatalf("Click(Clear) error: %v", err)
+	}
+	tt.Frame()
+	if got := vm.Logcat.Filter.Terms; got != "" {
+		t.Fatalf("Clear left Terms = %q", got)
+	}
+	if !tt.HasText("dropped") {
+		t.Fatalf("the rows did not come back; texts = %v", tt.Texts())
+	}
+}

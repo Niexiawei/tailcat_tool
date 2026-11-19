@@ -262,7 +262,10 @@ func shotCases() []shotCase {
 			name: "16-logs-page-empty",
 			build: func(t *testing.T) *ViewModel {
 				vm := shotLogsPage(t)
-				vm.pageLogFilter().Search = "这段时间没有的关键词"
+				// The field holds the draft and Search is what it applied, so
+				// a state set up without the UI sets both.
+				filter := vm.pageLogFilter()
+				filter.searchDraft, filter.Search = "这段时间没有的关键词", "这段时间没有的关键词"
 				return vm
 			},
 		},

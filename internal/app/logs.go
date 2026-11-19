@@ -83,6 +83,10 @@ type logFilter struct {
 	Range  int
 	Search string
 	Follow bool
+	// searchDraft is what the search field holds; Search is what the query
+	// asks for, so a word takes effect when the reader presses Enter rather
+	// than on every keystroke.
+	searchDraft string
 
 	// logMu guards what a query goroutine writes: entries, query, loading and
 	// the bookkeeping around them.
@@ -201,8 +205,17 @@ func (vm *ViewModel) logFiltersRow(c *ui.Context, f *logFilter, opts logViewOpti
 			}
 		})
 		ui.Row(c).FillWidth().Gap(theme.Space(2)).AlignItems(ui.Center).Children(func() {
-			components.TextBox(c, &f.Search, components.TextBoxOptions{}).
-				FillWidth().Grow(1).Placeholder("搜索日志：空格分隔的多个关键词都要匹配")
+			// A search field promises Enter, and its clear button empties it:
+			// the words are applied by one or the other, never per keystroke.
+			// An emptied box applies at once — a filter nobody can see must
+			// not keep filtering.
+			draft := ui.SearchField(c, &f.searchDraft).
+				FillWidth().Grow(1).
+				Label("搜索日志").
+				Placeholder("空格分隔的多个关键词都要匹配")
+			if draft.Submitted() || (draft.Changed() && f.searchDraft == "") {
+				f.Search = f.searchDraft
+			}
 			// The switch writes its own copy; comparing it to the stored value
 			// is what catches the toggle, whatever frame it lands on. The
 			// goroutine that follows reads the stored value under logMu.

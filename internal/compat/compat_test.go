@@ -79,6 +79,7 @@ var (
 	_                                                                                    = ui.ListState{}.Selected
 	_                                                                                    = ui.ListState{}.Key
 	_                                                                                    = ui.Element.Changed
+	_                                                                                    = ui.SearchField
 	_                                                                                    = ui.Element.Submitted
 	_                                                                                    = ui.ListState{}.FollowEnd
 	_                                                                                    = (*ui.ListState).ScrollToEnd

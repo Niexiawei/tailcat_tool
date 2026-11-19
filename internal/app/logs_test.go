@@ -862,3 +862,43 @@ func TestLogTimelineKeysDoNotOpenATaskRow(t *testing.T) {
 		t.Fatal("moving the choice with the keyboard opened a task's output")
 	}
 }
+
+// The search field searches on Enter, as its magnifier promises; a keystroke
+// must not re-read the timeline.
+func TestLogSearchRunsOnEnter(t *testing.T) {
+	vm, reader, base := logsPageFixture(t)
+	reader.add(core.TimelineEntry{At: base.Add(-time.Minute), Level: core.LogError, Source: core.LogApp, Text: "配置读取失败"})
+	tt := ui.NewTester(vm.ContentView, 1100, 760)
+	tt.Frame()
+	waitForQuery(t, reader, 1)
+
+	if err := tt.Click("搜索日志"); err != nil {
+		t.Fatalf("Click(搜索日志) error: %v", err)
+	}
+	tt.Type("超时")
+	tt.Frame()
+	if got := vm.pageLogFilter().Search; got != "" {
+		t.Fatalf("the page searched on a keystroke: Search = %q", got)
+	}
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if got := vm.pageLogFilter().Search; got != "超时" {
+		t.Fatalf("Enter did not search: Search = %q", got)
+	}
+	if q := waitForQuery(t, reader, 2); q.Search != "超时" {
+		t.Fatalf("query = %q, want 超时", q.Search)
+	}
+
+	// Clearing the box clears the filter: a query whose words are not on screen
+	// is one the reader cannot undo.
+	if err := tt.Click("Clear"); err != nil {
+		t.Fatalf("Click(Clear) error: %v", err)
+	}
+	tt.Frame()
+	if got := vm.pageLogFilter().Search; got != "" {
+		t.Fatalf("Clear left Search = %q", got)
+	}
+	if q := waitForQuery(t, reader, 3); q.Search != "" {
+		t.Fatalf("query after Clear = %q", q.Search)
+	}
+}

@@ -58,6 +58,11 @@ type logcatState struct {
 	// end now": without the jump the switch only takes effect once the reader
 	// scrolled there by hand, which is not what it says.
 	jumpToEnd bool
+	// tagDraft and termDraft are what the two search fields hold; Filter.Tags
+	// and Filter.Terms are what the table filters by, so a word takes effect
+	// when the reader presses Enter rather than on every keystroke.
+	tagDraft  string
+	termDraft string
 	// namesAt is when the process table was last read for this page, and
 	// namesBusy marks a read in flight. logcatMu guards both: the read runs in
 	// a goroutine.
@@ -130,8 +135,13 @@ func (vm *ViewModel) stopLogcatStream(f *logcatState) {
 func (vm *ViewModel) logcatPage(c *ui.Context) {
 	vm.logcatDrawn = true
 	f := vm.logcatState()
-	if !vm.logcatVisited && f.Follow {
-		f.jumpToEnd = true
+	if !vm.logcatVisited {
+		// Coming back to the page shows the filters it is applying, not the
+		// ones the fields were left holding.
+		f.tagDraft, f.termDraft = f.Filter.Tags, f.Filter.Terms
+		if f.Follow {
+			f.jumpToEnd = true
+		}
 	}
 	vm.logcatVisited = true
 	vm.ensureLogcatDevice(f)
@@ -346,12 +356,25 @@ func (vm *ViewModel) logcatFiltersRow(c *ui.Context, f *logcatState) {
 			})
 		})
 		ui.Row(c).FillWidth().Gap(theme.Space(2)).AlignItems(ui.Center).Children(func() {
-			components.TextBox(c, &f.Filter.Tags, components.TextBoxOptions{}).
-				FillWidth().Grow(1).Placeholder("标签筛选：如 ActivityManager，空格分隔多个")
-			components.TextBox(c, &f.Filter.Terms, components.TextBoxOptions{}).
-				FillWidth().Grow(1).Placeholder("内容筛选：空格分隔的多个关键词都要匹配")
+			logcatSearchField(c, &f.tagDraft, &f.Filter.Tags, "标签筛选",
+				"如 ActivityManager，空格分隔多个")
+			logcatSearchField(c, &f.termDraft, &f.Filter.Terms, "内容筛选",
+				"空格分隔的多个关键词都要匹配")
 		})
 	})
+}
+
+// logcatSearchField is one of the two filters: a search field whose words the
+// table applies when the reader presses Enter, or when the clear button empties
+// it — a filter nobody can see must not keep filtering.
+func logcatSearchField(c *ui.Context, draft, applied *string, label, placeholder string) {
+	field := ui.SearchField(c, draft).
+		FillWidth().Grow(1).
+		Label(label).
+		Placeholder(placeholder)
+	if field.Submitted() || (field.Changed() && *draft == "") {
+		*applied = *draft
+	}
 }
 
 // logcatPauseButton freezes and resumes what the table shows.
