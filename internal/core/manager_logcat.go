@@ -41,7 +41,7 @@ func (m *Manager) StartLogcat(ctx context.Context, id uuid.UUID, opts LogcatOpti
 		cancel()
 		return nil, sanitizeError(err)
 	}
-	stream.attach(proc, cancel)
+	stream.attach(proc.Stop, cancel)
 
 	m.mu.Lock()
 	previous := m.logcats[id]

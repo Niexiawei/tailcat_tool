@@ -407,3 +407,20 @@ func TestLogcatLinesWithDifferentTagsStayApart(t *testing.T) {
 		t.Fatalf("kept %d entries, want two: different tags are different calls", len(snap.Entries))
 	}
 }
+
+func TestLogcatStreamCloseDoesNotWaitForTheProcess(t *testing.T) {
+	stream, _ := newTestLogcatStream(10)
+	release := make(chan struct{})
+	stream.attach(func() { <-release }, func() {})
+	done := make(chan struct{})
+	go func() {
+		stream.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close() waited for the process: stopping one costs most of a second on Windows, and Close runs on the render thread")
+	}
+	close(release)
+}

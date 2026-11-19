@@ -183,3 +183,27 @@ func TestStopLogcatIsIdempotent(t *testing.T) {
 		t.Fatal("StopLogcat did not close the stream")
 	}
 }
+
+func TestShutdownWaitsForTheLogcatStop(t *testing.T) {
+	f := connectedLogcatFixture(t)
+	stream, err := f.m.StartLogcat(context.Background(), f.id, LogcatOptions{})
+	if err != nil {
+		t.Fatalf("StartLogcat() error: %v", err)
+	}
+	// A stop costs most of a second on Windows; quitting the app cannot leave
+	// that to a goroutine, or the adb outlives the app.
+	stopped := make(chan struct{})
+	stream.attach(func() {
+		time.Sleep(30 * time.Millisecond)
+		close(stopped)
+	}, func() {})
+	f.m.Shutdown(context.Background())
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("Shutdown returned before the logcat process was stopped")
+	}
+	if !stream.Closed() {
+		t.Fatal("Shutdown left the stream open")
+	}
+}

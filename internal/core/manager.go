@@ -675,6 +675,18 @@ func (m *Manager) DisconnectAll(ctx context.Context) {
 // Shutdown stops everything: monitors, tasks, channels, temporary devices.
 func (m *Manager) Shutdown(ctx context.Context) {
 	m.cancel()
+	// Log streams are stopped here and waited for, unlike everywhere else: an
+	// app that exits before its adb would leave the process behind.
+	m.mu.Lock()
+	streams := make([]*LogcatStream, 0, len(m.logcats))
+	for id, stream := range m.logcats {
+		streams = append(streams, stream)
+		delete(m.logcats, id)
+	}
+	m.mu.Unlock()
+	for _, stream := range streams {
+		stream.CloseAndWait()
+	}
 	m.mu.Lock()
 	ids := make([]uuid.UUID, 0, len(m.runtimes))
 	for id := range m.runtimes {

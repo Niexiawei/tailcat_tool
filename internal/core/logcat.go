@@ -309,8 +309,10 @@ type LogcatStream struct {
 	notify   func()
 	lastNote time.Time
 	clock    func() time.Time
-	proc     *Proc
+	stop     func()
 	cancel   context.CancelFunc
+	// stopped is closed once the process is really gone.
+	stopped chan struct{}
 }
 
 // newLogcatStream builds a stream that keeps limit lines and calls notify at
@@ -320,7 +322,7 @@ func newLogcatStream(limit int, notify func()) *LogcatStream {
 	if limit <= 0 {
 		limit = LogcatMaxLines
 	}
-	return &LogcatStream{limit: limit, notify: notify, clock: time.Now}
+	return &LogcatStream{limit: limit, notify: notify, clock: time.Now, stopped: make(chan struct{})}
 }
 
 // Version is cheap enough to ask every frame.
@@ -348,6 +350,10 @@ func (s *LogcatStream) Closed() bool {
 
 // Close stops the process and cancels its context. Both are needed: the real
 // runner stops on the process, the demo one on the context.
+//
+// Stopping runs on its own goroutine. On Windows a stop is `taskkill /T /F`,
+// measured at ~800 ms, and Close is called while the page is being drawn —
+// waiting there froze the window for the whole switch.
 func (s *LogcatStream) Close() {
 	s.mu.Lock()
 	if s.closed {
@@ -355,14 +361,27 @@ func (s *LogcatStream) Close() {
 		return
 	}
 	s.closed = true
-	proc, cancel := s.proc, s.cancel
+	stop, cancel := s.stop, s.cancel
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
-	if proc != nil {
-		proc.Stop()
+	if stop == nil {
+		close(s.stopped)
+		return
 	}
+	go func() {
+		defer close(s.stopped)
+		stop()
+	}()
+}
+
+// CloseAndWait is Close, waiting until the process is gone. Quitting the app
+// uses it: the app would otherwise exit first and leave an adb behind. The
+// render path never calls it — that is the whole point of Close.
+func (s *LogcatStream) CloseAndWait() {
+	s.Close()
+	<-s.stopped
 }
 
 // Snapshot copies the newest lines that pass f. It runs on the render path, so
@@ -460,10 +479,10 @@ func (s *LogcatStream) noteLocked() bool {
 	return true
 }
 
-// attach hands the stream the process that feeds it.
-func (s *LogcatStream) attach(proc *Proc, cancel context.CancelFunc) {
+// attach hands the stream what stops the process that feeds it.
+func (s *LogcatStream) attach(stop func(), cancel context.CancelFunc) {
 	s.mu.Lock()
-	s.proc, s.cancel = proc, cancel
+	s.stop, s.cancel = stop, cancel
 	s.mu.Unlock()
 }
 
