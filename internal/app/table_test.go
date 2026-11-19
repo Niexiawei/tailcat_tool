@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -136,5 +137,29 @@ func TestTablesAreBuiltOnlyByTableCard(t *testing.T) {
 		if strings.Contains(string(source), "ui.Table(") {
 			t.Fatalf("%s builds a table itself; build it with tableCard", path)
 		}
+	}
+}
+
+// TestBadgesSitCenteredInATableCell pins what the 类型 column looked like on a
+// real screen: components.Badge aligns itself to the start of a row, so in a
+// table cell (which centres its content) the pill rode above the name it
+// describes. Before the fix the two centres were about six DIP apart.
+func TestBadgesSitCenteredInATableCell(t *testing.T) {
+	vm := probeDerpViewModel(t, &listProber{}, nil, core.SaveRelayPresetRequest{
+		Name: "自建2", Source: "https://relay.example.com/map.json",
+	})
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	badge, ok := tt.Find("链接")
+	if !ok {
+		t.Fatalf("no 链接 badge; texts = %v", tt.Texts())
+	}
+	name, ok := tt.Find("自建2")
+	if !ok {
+		t.Fatalf("no 自建2 row; texts = %v", tt.Texts())
+	}
+	badgeCenter := badge.Y + badge.H/2
+	nameCenter := name.Y + name.H/2
+	if diff := badgeCenter - nameCenter; diff > 1 || diff < -1 {
+		t.Fatalf("the badge sits %.1f DIP off the name (badge centre %.1f, name centre %.1f)", diff, badgeCenter, nameCenter)
 	}
 }

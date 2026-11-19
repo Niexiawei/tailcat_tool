@@ -138,7 +138,7 @@ func (vm *ViewModel) cacheCell(c *ui.Context, col int, entry core.AppMetaEntry) 
 		components.Text(c, stamp).FontSize(11)
 	case 4:
 		if entry.Stale {
-			components.Badge(c, "已过期", components.BadgeOptions{Tone: components.BadgeWarning})
+			cellBadge(c, "已过期", components.BadgeWarning)
 			return
 		}
 		components.Text(c, "有效").FontSize(11).TextColor(theme.TextMuted)

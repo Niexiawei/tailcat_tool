@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/egoist/mygo/ui"
+	"github.com/oneo-me/onevra/source/components"
 )
 
 // This file is the only place in the app that builds a table.
@@ -89,4 +90,14 @@ func tableRowsHeight(c *ui.Context, rows int, fit bool) float32 {
 	// Fit: the card is exactly the content, header and divider included, so the
 	// table has nothing of its own to scroll.
 	return c.Theme().Space(8)*float32(shown+1) + tableDividerHeight
+}
+
+// cellBadge is components.Badge sharing a line with text. Badge aligns itself
+// to the start of its row on purpose (it sits at the top of a line of text in
+// a paragraph), and a table cell centres its content from the middle: without
+// this wrapper the pill rides about five DIP above the text it describes.
+func cellBadge(c *ui.Context, text string, tone components.BadgeTone) ui.Element {
+	return ui.Row(c).AlignItems(ui.Center).Children(func() {
+		components.Badge(c, text, components.BadgeOptions{Tone: tone})
+	})
 }

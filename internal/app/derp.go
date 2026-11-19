@@ -109,7 +109,7 @@ func (vm *ViewModel) derpDefaultSection(c *ui.Context) {
 		Border(1, theme.Border).Radius(theme.Radius).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 			components.Text(c, "默认节点").Bold()
-			components.Badge(c, "内置", components.BadgeOptions{Tone: components.BadgeNeutral})
+			cellBadge(c, "内置", components.BadgeNeutral)
 			// Naming the file is the only way to answer "which nodes are the
 			// default": it belongs to tailcat, fetched by tailcat, and this app
 			// ships no copy of it.
@@ -202,7 +202,7 @@ func (vm *ViewModel) derpPresetCell(c *ui.Context, col int, preset core.RelayPre
 		if vm.derpInfoFor(preset.Source).kind == core.RelayURL {
 			kind = "链接"
 		}
-		components.Badge(c, kind, components.BadgeOptions{Tone: components.BadgeNeutral})
+		cellBadge(c, kind, components.BadgeNeutral)
 	case 2:
 		source := vm.derpInfoFor(preset.Source).summary
 		components.Tooltip(c, components.Text(c, source).FontSize(11).SingleLine(), preset.Source)
@@ -369,7 +369,7 @@ func (vm *ViewModel) derpDetailPage(c *ui.Context, rawID string) {
 			ui.Column(c).FillWidth().Gap(12).Children(func() {
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 					components.Text(c, preset.Name).FontSize(18).Bold()
-					components.Badge(c, derpKindLabelFromInfo(vm.derpInfoFor(preset.Source)), components.BadgeOptions{Tone: components.BadgeNeutral})
+					cellBadge(c, derpKindLabelFromInfo(vm.derpInfoFor(preset.Source)), components.BadgeNeutral)
 					if len(usage) > 0 {
 						if components.Button(c, derpUsageLabel(len(usage))+"在用", components.ButtonLink).Clicked() {
 							if profile := firstRelayUser(vm.Manager.AllProfiles(), preset.Source); profile != nil {
