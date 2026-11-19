@@ -2,10 +2,7 @@
 
 package platform
 
-import (
-	"os/exec"
-	"testing"
-)
+import "testing"
 
 // The packaged app is a GUI executable with no console of its own, so a child
 // that is allowed to make one gets a real window: every adb poll (once every
@@ -16,11 +13,10 @@ import (
 // console program: it hands its console to every child, so the window never
 // appears here even when the flags are wrong. The behavioural proof is in
 // docs/verification.md (packaged app, window enumeration).
-func TestConfigureProcessKeepsTheConsoleOffScreen(t *testing.T) {
-	cmd := exec.Command("cmd", "/c", "exit")
-	ConfigureProcess(cmd)
+func TestCommandKeepsTheConsoleOffScreen(t *testing.T) {
+	cmd := Command("cmd", "/c", "exit")
 	if cmd.SysProcAttr == nil {
-		t.Fatal("ConfigureProcess left SysProcAttr nil")
+		t.Fatal("Command left SysProcAttr nil")
 	}
 	if got := cmd.SysProcAttr.CreationFlags; got&createNoWindow == 0 {
 		t.Fatalf("CreationFlags = %#x, want CREATE_NO_WINDOW (%#x): the child would open a console window", got, createNoWindow)

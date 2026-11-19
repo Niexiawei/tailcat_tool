@@ -72,9 +72,8 @@ func (r *ExecRunner) Start(_ context.Context, c Command, onOutput func(string)) 
 	if c.Path == "" {
 		return nil, Error("未指定要执行的命令")
 	}
-	cmd := exec.Command(c.Path, c.Args...)
+	cmd := platform.Command(c.Path, c.Args...)
 	cmd.Env = append(os.Environ(), c.Env...)
-	platform.ConfigureProcess(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -134,9 +133,8 @@ func (r *ExecRunner) RunToFile(ctx context.Context, c Command, path string) (Res
 		return Result{}, Errorf("无法写入文件：%v", err)
 	}
 
-	cmd := exec.Command(c.Path, c.Args...)
+	cmd := platform.Command(c.Path, c.Args...)
 	cmd.Env = append(os.Environ(), c.Env...)
-	platform.ConfigureProcess(cmd)
 	cmd.Stdout = file
 	stderr, err := cmd.StderrPipe()
 	if err != nil {

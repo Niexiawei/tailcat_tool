@@ -9,7 +9,7 @@
 // packaged app.
 //
 //	go build -ldflags "-H windowsgui" -o spawncheck.exe ./internal/platform/testdata/spawncheck
-//	spawncheck.exe after    # the flags platform.ConfigureProcess sets today
+//	spawncheck.exe after    # platform.Command, which is how the app spawns children
 //	spawncheck.exe before   # CREATE_NEW_PROCESS_GROUP only, as before the fix
 //
 // Exit status 0 means the child owned no visible window.
@@ -38,11 +38,12 @@ func main() {
 
 	// A child that lives for a few seconds, so the window (if any) is there to
 	// be seen.
-	cmd := exec.Command("cmd", "/c", "ping -n 5 127.0.0.1 >NUL")
+	var cmd *exec.Cmd
 	if mode == "before" {
+		cmd = exec.Command("cmd", "/c", "ping -n 5 127.0.0.1 >NUL")
 		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: oldFlags}
 	} else {
-		platform.ConfigureProcess(cmd)
+		cmd = platform.Command("cmd", "/c", "ping -n 5 127.0.0.1 >NUL")
 	}
 	if err := cmd.Start(); err != nil {
 		fmt.Println("start:", err)

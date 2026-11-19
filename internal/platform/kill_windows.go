@@ -21,9 +21,10 @@ const (
 	createNoWindow = 0x08000000
 )
 
-// ConfigureProcess gives the child its own process group and keeps its console
-// off the screen.
-func ConfigureProcess(cmd *exec.Cmd) {
+// configureProcess gives the child its own process group and keeps its console
+// off the screen. It is called by Command, which is the only way this app
+// starts a process.
+func configureProcess(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
@@ -53,10 +54,9 @@ func taskkill(pid int, force bool) {
 	if force {
 		args = append(args, "/F")
 	}
-	cmd := exec.Command("taskkill", args...)
-	// taskkill is a console program too: without the same flags it flashes its
-	// own window, and it runs every time a device is disconnected.
-	ConfigureProcess(cmd)
+	// taskkill is a console program like adb: without the same flags it flashes
+	// its own window, and it runs every time a device is disconnected.
+	cmd := Command("taskkill", args...)
 	_ = cmd.Run()
 }
 

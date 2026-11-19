@@ -7,9 +7,10 @@ import (
 	"syscall"
 )
 
-// ConfigureProcess puts the child in its own process group so terminating it
-// also stops anything it spawned (adb server helpers, scrcpy, shells).
-func ConfigureProcess(cmd *exec.Cmd) {
+// configureProcess puts the child in its own process group so terminating it
+// also stops anything it spawned (adb server helpers, scrcpy, shells). It is
+// called by Command, which is the only way this app starts a process.
+func configureProcess(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}

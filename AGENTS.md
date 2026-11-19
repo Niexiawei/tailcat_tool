@@ -138,6 +138,8 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 
 **加一种平台能力**：core 里定义接口或 `func` 类型 → 在 `internal/platform/` 为三个 OS 各写一份 → 在 `cmd/tailcat-manager/main.go` 或 `internal/app/app.go` 注入 → 用假实现写测试。
 
+**启动一个子进程**：一律用 `platform.Command(name, args...)`，**不要直接 `exec.Command`**。它统一决定子进程的进程组（`Terminate` 靠它杀整棵树）与 Windows 的控制台窗口（`CREATE_NO_WINDOW` + `HideWindow`）。直接 `exec.Command` 的后果是打包版每轮 adb 轮询都闪一个黑窗口——从终端 `go run` 时子进程继承终端的控制台，看不出来。`TestProcessesAreSpawnedOnlyByCommand`（`internal/platform/exec_test.go`）会扫全仓源码把这种写法打红。
+
 **加一条历史记录**：`internal/core/history.go` 加 record 类型与 `Recorder` 方法 → `internal/history/sqlite.go` 加表/插入/查询 → core 里在状态变化处调用（注意此时**不要**持有 `m.mu`）→ 加一个"重开库能读回"的测试。
 
 **加一个对话框**：在 `ViewModel` 加 `XxxOpen bool` 与草稿字段，`internal/app/xxx.go` 里用 `components.Dialog(c, &open, ...)`，在 `ContentView` 末尾调用。校验逻辑抽成**纯函数**（如 `EditorInput.Validate`）并单测，不要只测视图。

@@ -2,14 +2,11 @@
 
 package platform
 
-import (
-	"fmt"
-	"os/exec"
-)
+import "fmt"
 
 // RevealDir opens dir in the Finder, for the startup page's buttons.
 func RevealDir(dir string) error {
-	if err := exec.Command("open", dir).Start(); err != nil {
+	if err := Command("open", dir).Start(); err != nil {
 		return fmt.Errorf("无法打开目录：%v", err)
 	}
 	return nil
