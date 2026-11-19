@@ -205,6 +205,34 @@ func TestAckAttentionClearsEveryDeviceInTheGroup(t *testing.T) {
 	}
 }
 
+// A fleet-wide merge must not swallow a prompt that is about something else:
+// one device's changed port and another's vanishing entry are two questions.
+func TestAggregateDoesNotSwallowAnotherKindOfPrompt(t *testing.T) {
+	f := newFleet(t, 2)
+	f.m.ForceAttentionForTest(f.id[0], AttentionPortChanged, "该设备已在另一个本地端口出现")
+	f.adbDown = true
+	f.detect(t, f.id[1])
+
+	attentions := f.m.Attentions()
+	if len(attentions) != 2 {
+		t.Fatalf("Attentions() = %d entries, want 2: %+v", len(attentions), attentions)
+	}
+	for _, attention := range attentions {
+		switch attention.Kind {
+		case AttentionPortChanged:
+			if len(attention.Devices()) != 1 || attention.DeviceID != f.id[0] {
+				t.Fatalf("the port prompt changed shape: %+v", attention)
+			}
+		case AttentionSerialDetached:
+			if len(attention.Devices()) != 1 || attention.DeviceID != f.id[1] {
+				t.Fatalf("the detachment took the port prompt with it: %+v", attention)
+			}
+		default:
+			t.Fatalf("unexpected kind %q in %+v", attention.Kind, attention)
+		}
+	}
+}
+
 // Acknowledging the fleet and then watching one more device fall must not bring
 // the acknowledged ones back: the dialog was answered for them.
 func TestAckAttentionDoesNotResurrectTheFleet(t *testing.T) {
