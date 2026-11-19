@@ -142,22 +142,31 @@ func (m *Manager) loadRelayMap(ctx context.Context, source string) (RelayMapPrev
 }
 
 // RelayProbe answers with the last cycle's result for a source; ok is false
-// before the first cycle. An empty source is the default node list. The source
-// goes through NormalizeRelay first, exactly like CachedRelayMapPreview, so a
-// preset saved with stray whitespace still finds its own result.
+// before the first cycle. An empty source is the default node list.
+//
+// The map is read first and the source only normalized on a miss: the page asks
+// once per row per frame, and normalizing an inline map is a JSON parse plus a
+// marshal of up to 128 KiB.
 func (m *Manager) RelayProbe(source string) (RelayProbe, bool) {
+	if probe, ok := m.relayProbeCopy(source); ok {
+		return probe, true
+	}
 	cfg, err := NormalizeRelay(source)
-	if err != nil {
+	if err != nil || cfg.Source == source {
 		return RelayProbe{}, false
 	}
+	return m.relayProbeCopy(cfg.Source)
+}
+
+// relayProbeCopy reads one stored result, handing the caller its own slice: the
+// UI reads it while the next cycle writes the manager's copy.
+func (m *Manager) relayProbeCopy(key string) (RelayProbe, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	probe, ok := m.relayProbes[cfg.Source]
+	probe, ok := m.relayProbes[key]
 	if !ok {
 		return RelayProbe{}, false
 	}
-	// The caller gets its own slice: the UI reads it while the next cycle
-	// writes the manager's copy.
 	probe.Nodes = append([]RelayNodeProbe(nil), probe.Nodes...)
 	return probe, true
 }
@@ -255,8 +264,14 @@ func (m *Manager) probeSources() []string {
 func (m *Manager) probeSource(ctx context.Context, source string) RelayProbe {
 	preview, err := m.loadRelayMap(ctx, source)
 	if err != nil {
-		cfg, _ := NormalizeRelay(source)
-		return RelayProbe{Source: cfg.Source, Err: err.Error(), CheckedAt: time.Now()}
+		// Key the failure by the source as it stands, falling back to its
+		// canonical form: an unparsable source must not answer under "", which
+		// is the default node list's key.
+		key := source
+		if cfg, normalizeErr := NormalizeRelay(source); normalizeErr == nil {
+			key = cfg.Source
+		}
+		return RelayProbe{Source: key, Err: err.Error(), CheckedAt: time.Now()}
 	}
 	targets := relayProbeTargets(preview.Map)
 	nodes := make([]RelayNodeProbe, len(targets))

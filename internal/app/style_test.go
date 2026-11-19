@@ -209,7 +209,7 @@ func TestNoOnevraTableComponentsAnywhere(t *testing.T) {
 func TestAppSendsNoPacketsOfItsOwn(t *testing.T) {
 	banned := []string{
 		"http.Get(", "http.Post(", "http.Head(", "http.Client{", "http.NewRequest",
-		"net.Dial(", "net.DialTimeout(", "net.Listen(", "net package",
+		"net.Dial(", "net.DialTimeout(", "net.Listen(", "net.ListenPacket(",
 		"stun.Request(", "stun.ParseResponse(", "tls.Dial(",
 	}
 	files, err := filepath.Glob("*.go")

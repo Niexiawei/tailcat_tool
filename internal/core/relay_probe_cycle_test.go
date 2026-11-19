@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // probeTestMap is two regions and three nodes: one plain node, one with STUN
@@ -374,5 +376,48 @@ func TestProbeCycleGivesUpAfterItsBudget(t *testing.T) {
 	}
 	if unmeasured == 0 {
 		t.Fatalf("every one of %d nodes was probed despite a 30 ms budget", len(probe.Nodes))
+	}
+}
+
+// TestProbeCycleDoesNotClobberTheDefaultListWithABadPreset pins the error key:
+// a preset whose source does not even parse must land under its own source, not
+// under "" — the empty key is the default node list, and its result would be
+// replaced by a message about a different map.
+func TestProbeCycleDoesNotClobberTheDefaultListWithABadPreset(t *testing.T) {
+	server, _ := relayTestServer(t, http.StatusOK, probeTestMap)
+	prober := &fakeNodeProber{}
+	broken := RelayPreset{ID: uuid.New(), Name: "坏的", Source: "这不是一个节点链接"}
+	f := newManagerFixture(t, func(o *ManagerOptions) {
+		o.RelayProber = prober
+		o.DefaultNodeListURL = server.URL + "/derpmap.json"
+		o.Configuration.RelayPresets = []RelayPreset{broken}
+	})
+	t.Cleanup(func() { f.m.Shutdown(context.Background()) })
+	f.m.RefreshRelayProbes()
+	awaitProbeCycle(t, f.m)
+	def, ok := f.m.RelayProbe("")
+	if !ok || def.Err != "" || len(def.Nodes) != 3 {
+		t.Fatalf("the default node list result = %+v, want the three probed nodes", def)
+	}
+}
+
+// TestRelayProbeFindsAResultThroughAnUnnormalizedSource pins the fallback: the
+// page asks with a preset's canonical source every frame, so the lookup must
+// hit the map first and only parse when it misses (an inline map's canonical
+// form is a JSON marshal — not something to redo sixty times a second).
+func TestRelayProbeFindsAResultThroughAnUnnormalizedSource(t *testing.T) {
+	prober := &fakeNodeProber{}
+	f := probeFixture(t, prober)
+	source := saveProbePreset(t, f.m, "公司自建", probeTestMap)
+	f.m.RefreshRelayProbes()
+	awaitProbeCycle(t, f.m)
+	if _, ok := f.m.RelayProbe(source); !ok {
+		t.Fatal("the canonical source did not find its result")
+	}
+	if _, ok := f.m.RelayProbe(source + "\n"); !ok {
+		t.Fatal("a source with trailing space did not find its result")
+	}
+	if _, ok := f.m.RelayProbe("这不是一个节点链接"); ok {
+		t.Fatal("an unparsable source reported a result")
 	}
 }

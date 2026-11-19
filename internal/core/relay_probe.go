@@ -178,6 +178,14 @@ func (p *RelayProber) probeHTTP(ctx context.Context, target RelayProbeTarget, ti
 	}
 	start := time.Now()
 	response, err := client.Do(request)
+	if p.Client == nil {
+		// Each node gets a client of its own, because its TLS configuration is
+		// built from its CertName. Without this, every probe would leave an
+		// idle connection behind until the transport's own timeout.
+		if transport, ok := client.Transport.(*http.Transport); ok {
+			defer transport.CloseIdleConnections()
+		}
+	}
 	if err != nil {
 		return RelayCheck{Ran: true, Note: relayProbeNote(err)}
 	}
