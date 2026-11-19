@@ -11,13 +11,19 @@ import (
 
 // Environment is everything main() has to provide; the window owns the rest.
 type Environment struct {
-	Manager    *core.Manager
-	Locate     core.LocateTool
-	Runner     core.Runner
-	Install    *core.Installer
-	ConfigDir  string
-	Notice     string
-	Demo       bool
+	Manager   *core.Manager
+	Locate    core.LocateTool
+	Runner    core.Runner
+	Install   *core.Installer
+	ConfigDir string
+	// Problems are the startup failures core.Diagnose found. The window shows
+	// them all on its own page before the app's pages.
+	Problems []core.Problem
+	// OpenDir reveals a directory in the file manager, for the startup page's
+	// buttons. Nil hides them.
+	OpenDir func(dir string) error
+	Demo    bool
+
 	OnShutdown func()
 
 	// History is where the log page reads from.
@@ -41,14 +47,21 @@ func New(env Environment) *App {
 	vm.Demo = env.Demo
 	vm.History = env.History
 	vm.RecordAppLog = env.RecordAppLog
-	// Startup problems (a configuration or history store that would not open)
-	// surface as an error toast instead of a banner that only some page shows.
-	// They are logged as warnings: the app runs, just without that piece.
-	if env.Notice != "" {
-		vm.recordAppLog(core.LogWarn, env.Notice)
-		vm.queueErrorToast(env.Notice)
+	vm.OpenDir = env.OpenDir
+	// Startup problems are a page of their own, not a toast: a toast saying
+	// the configuration failed is gone in eight seconds and never mentioned
+	// the history file that failed with it. They are also logged as warnings:
+	// the app runs, just without that piece.
+	if len(env.Problems) > 0 {
+		vm.StartupOpen = true
+		vm.StartupProblems = env.Problems
+		for _, problem := range env.Problems {
+			vm.recordAppLog(core.LogWarn, problem.Title)
+		}
 	}
-	return &App{env: env, vm: vm}
+	a := &App{env: env, vm: vm}
+	vm.Quit = a.Quit
+	return a
 }
 
 // Start opens the window, the tray and the redraw loop.

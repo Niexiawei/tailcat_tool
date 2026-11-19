@@ -69,10 +69,13 @@ func buildEnvironment() app.Environment {
 	configDir := platform.DefaultConfigDir()
 	store := core.NewConfigStore(configDir)
 
-	var notice string
+	// Every failure the app can survive is collected here and turned into a
+	// page by core.Diagnose. The old code kept the first one only, so fixing it
+	// revealed the next one on the following start.
+	in := core.DiagnoseInput{ConfigDir: configDir}
 	cfg, err := store.Load()
 	if err != nil {
-		notice = "配置读取失败，已使用默认设置：" + err.Error()
+		in.ConfigErr = err
 		cfg = core.Configuration{}
 	}
 	if cfg.Tools.ADB == "" {
@@ -85,25 +88,25 @@ func buildEnvironment() app.Environment {
 			cfg.Tools.Scrcpy = path
 		}
 	}
+	in.ADBPath = cfg.Tools.ADB
+	in.ScrcpyPath = cfg.Tools.Scrcpy
 
 	credentials := core.CredentialStore(core.NewMemoryCredentialStore())
 	if credstore.Available() {
 		credentials = credstore.New()
-	} else if notice == "" {
-		notice = "未检测到系统凭据库，连接地址仅在本次运行中保留"
+	} else {
+		in.CredentialsErr = core.Error("系统的钥匙串 / 凭据管理器不可用")
 	}
 
 	// History is optional: if the file cannot be opened the app keeps
-	// everything in memory and says so once.
+	// everything in memory and says so on the startup page.
 	// The history file needs its directory to exist before SQLite opens it.
 	_ = os.MkdirAll(configDir, 0o700)
 	var recorder core.Recorder
 	var logs core.HistoryReader
 	historyPath := filepath.Join(configDir, "history.db")
 	if store, err := history.Open(historyPath); err != nil {
-		if notice == "" {
-			notice = "历史库无法打开，本次运行的历史不会保存：" + err.Error()
-		}
+		in.HistoryErr = err
 	} else {
 		recorder = store
 		logs = store
@@ -116,15 +119,23 @@ func buildEnvironment() app.Environment {
 	var appMeta core.AppMetaSource
 	var appMetaCache core.AppMetaCache
 	if store, err := appmeta.New(filepath.Join(configDir, "appmeta"), runner, 2); err != nil {
-		if notice == "" {
-			notice = "应用信息缓存不可用，资源页只显示包名：" + err.Error()
-		}
+		in.AppMetaErr = err
 	} else {
 		// One store, two narrow interfaces: the resource page reads names, the
 		// cache page lists and clears them.
 		appMeta = store
 		appMetaCache = store
 	}
+	problems := core.Diagnose(in)
+	// The window shows them; stderr keeps them for a terminal launch and CI.
+	for _, problem := range problems {
+		line := problem.Title
+		if problem.Detail != "" {
+			line += "：" + problem.Detail
+		}
+		fmt.Fprintln(os.Stderr, line)
+	}
+
 	manager := core.NewManager(core.ManagerOptions{
 		Config:        store,
 		Configuration: cfg,
@@ -141,16 +152,14 @@ func buildEnvironment() app.Environment {
 			manager.LoadHistory(recent)
 		}
 	}
-	if notice != "" {
-		fmt.Fprintln(os.Stderr, notice)
-	}
 
 	return app.Environment{
 		Manager:      manager,
 		Locate:       platform.FindTool,
 		Runner:       runner,
 		ConfigDir:    configDir,
-		Notice:       notice,
+		Problems:     problems,
+		OpenDir:      platform.RevealDir,
 		Install:      newInstaller(runner),
 		History:      logs,
 		RecordAppLog: manager.RecordAppLog,

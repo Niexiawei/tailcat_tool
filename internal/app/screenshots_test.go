@@ -457,6 +457,21 @@ func shotCases() []shotCase {
 			},
 			settle: 12,
 		},
+		{
+			name: "32-startup-problems",
+			build: func(t *testing.T) *ViewModel {
+				vm := newTestViewModel(t)
+				vm.StartupOpen = true
+				vm.StartupProblems = []core.Problem{
+					{Kind: core.ProblemConfig, Title: "配置读取失败，已使用默认设置", Detail: "unexpected end of JSON input", Path: "C:\\Users\\me\\AppData\\Roaming\\TailcatManager", Continue: true},
+					{Kind: core.ProblemHistory, Title: "历史库无法打开，本次运行不会保存历史", Detail: "disk full", Path: "C:\\Users\\me\\AppData\\Roaming\\TailcatManager", Continue: true},
+					{Kind: core.ProblemADB, Title: "未找到 adb，连接设备前需要先安装", Continue: true},
+				}
+				vm.OpenDir = func(string) error { return nil }
+				vm.Quit = func() {}
+				return vm
+			},
+		},
 	}
 }
 

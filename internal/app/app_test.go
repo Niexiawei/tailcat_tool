@@ -685,22 +685,6 @@ func TestIndexToolbarPutsAddDeviceFirst(t *testing.T) {
 	}
 }
 
-func TestStartupNoticeArrivesAsAToast(t *testing.T) {
-	m, _ := newTestManager(t)
-	a := New(Environment{
-		Manager: m,
-		Locate:  func(string) (string, bool) { return "", false },
-		Notice:  "历史库无法打开，本次运行的历史不会保存：disk full",
-	})
-	queued := a.vm.drainToasts()
-	if len(queued) != 1 {
-		t.Fatalf("startup notice queued %d toasts, want 1", len(queued))
-	}
-	if queued[0].Type != components.ToastError || !strings.Contains(queued[0].Description, "历史库无法打开") {
-		t.Fatalf("startup toast = %+v", queued[0])
-	}
-}
-
 func TestSavedToolSettingsIsAToastNotInlineText(t *testing.T) {
 	vm := newTestViewModel(t)
 	vm.OpenTools()
@@ -744,7 +728,7 @@ func (r *fakeAppRecorder) recorded() []core.AppLogRecord {
 }
 
 // newRecorderApp builds the app with a recorder and no window.
-func newRecorderApp(t *testing.T, notice string) (*App, *fakeAppRecorder) {
+func newRecorderApp(t *testing.T, problems []core.Problem) (*App, *fakeAppRecorder) {
 	t.Helper()
 	m, _ := newTestManager(t)
 	t.Cleanup(func() { m.Shutdown(context.Background()) })
@@ -752,14 +736,14 @@ func newRecorderApp(t *testing.T, notice string) (*App, *fakeAppRecorder) {
 	app := New(Environment{
 		Manager:      m,
 		Locate:       func(string) (string, bool) { return "", false },
-		Notice:       notice,
+		Problems:     problems,
 		RecordAppLog: recorder.record,
 	})
 	return app, recorder
 }
 
 func TestFailTextRecordsAnErrorLine(t *testing.T) {
-	app, recorder := newRecorderApp(t, "")
+	app, recorder := newRecorderApp(t, nil)
 	app.vm.FailText("上传失败：没有权限")
 	lines := recorder.recorded()
 	if len(lines) != 1 {
@@ -773,20 +757,27 @@ func TestFailTextRecordsAnErrorLine(t *testing.T) {
 	}
 }
 
-func TestStartupProblemIsRecordedAsAWarning(t *testing.T) {
-	const notice = "历史库无法打开，本次运行的历史不会保存"
-	_, recorder := newRecorderApp(t, notice)
+func TestStartupProblemsAreRecordedAsWarnings(t *testing.T) {
+	const first = "历史库无法打开，本次运行不会保存历史"
+	const second = "未找到 adb，连接设备前需要先安装"
+	_, recorder := newRecorderApp(t, []core.Problem{
+		{Kind: core.ProblemHistory, Title: first, Continue: true},
+		{Kind: core.ProblemADB, Title: second, Continue: true},
+	})
 	lines := recorder.recorded()
-	if len(lines) != 1 {
-		t.Fatalf("recorded %d lines, want 1: %+v", len(lines), lines)
+	if len(lines) != 2 {
+		t.Fatalf("recorded %d lines, want one per problem: %+v", len(lines), lines)
 	}
-	if lines[0].Level != core.LogWarn || lines[0].Text != notice {
-		t.Fatalf("recorded %+v, want a warning with the startup notice", lines[0])
+	if lines[0].Level != core.LogWarn || lines[0].Text != first {
+		t.Fatalf("recorded %+v, want a warning with the first problem", lines[0])
+	}
+	if lines[1].Text != second {
+		t.Fatalf("recorded %+v, want the second problem too", lines[1])
 	}
 }
 
 func TestSuccessToastIsNotRecorded(t *testing.T) {
-	app, recorder := newRecorderApp(t, "")
+	app, recorder := newRecorderApp(t, nil)
 	app.vm.Notify("已复制 ADB 入口")
 	if lines := recorder.recorded(); len(lines) != 0 {
 		t.Fatalf("a success toast was recorded: %+v", lines)
@@ -794,7 +785,7 @@ func TestSuccessToastIsNotRecorded(t *testing.T) {
 }
 
 func TestAppLogTextIsRedacted(t *testing.T) {
-	app, recorder := newRecorderApp(t, "")
+	app, recorder := newRecorderApp(t, nil)
 	app.vm.FailText("连接 " + testAddress + " 失败")
 	lines := recorder.recorded()
 	if len(lines) != 1 {

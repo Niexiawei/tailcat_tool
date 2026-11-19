@@ -501,7 +501,6 @@ go test ./internal/compat/    # 第三方 API 契约
 1. **真机联调未做**：ADB 实链路、scrcpy 窗口、设备授权流程、`adb disconnect` 干预弹窗，都只有自动化测试与 `--demo` 验证，**没有接过真设备**。这是当前最大的未知。
 2. **发布打包未做**：没有 dmg / msi / deb 产物与签名，只有 `go build` + CI 矩阵。
 3. **`adbServerRestarted` / `listenerLost`** 两种干预尚未实现（需要多设备关联与监听器健康探测）。
-4. **配置读取失败**只打印一条提示，没有独立的启动错误页。
 5. **托盘 Badge**：排队中的干预提示目前只会出现在托盘菜单文本里，没有数字角标。
 6. **逐进程 GPU 未实现**：`GPUSample.PerProcessAvailable` 恒为 false，只有整机 GPU 使用率。
 7. **文件页只读**：没有删除、重命名、新建目录、文件内容预览与多选批传；超过 2000 项的目录要靠进入子目录查看。
