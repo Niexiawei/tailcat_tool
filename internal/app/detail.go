@@ -18,8 +18,16 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 		c.AddToast(toast)
 	}
 	ui.Column(c).Fill().Padding(sidebar.HeaderHeight(c), 0, 0, 0).Children(func() {
+		if vm.StartupOpen {
+			vm.startupPage(c)
+			return
+		}
 		vm.routedPage(c)
 	})
+	if vm.StartupOpen {
+		// The dialogs belong to the pages the startup page replaced.
+		return
+	}
 	vm.EditorView(c)
 	vm.TransferView(c)
 	vm.FileDetailView(c)

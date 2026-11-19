@@ -22,7 +22,9 @@ func TestDialogsCloseWithoutPanic(t *testing.T) {
 		{"device editor", func(vm *ViewModel) { vm.openEditor(&EditorRequest{}) }, func(vm *ViewModel) { vm.PendingEditor = nil }},
 		{"transfer", func(vm *ViewModel) { vm.TransferOpen = true }, func(vm *ViewModel) { vm.TransferOpen = false }},
 		{"reachability", func(vm *ViewModel) { vm.ReachabilityOpen = true }, func(vm *ViewModel) { vm.ReachabilityOpen = false }},
-		{"attention", func(vm *ViewModel) { vm.AttentionOpen = true }, func(vm *ViewModel) { vm.AttentionOpen = false }},
+		{"attention", func(vm *ViewModel) {
+			vm.Manager.ForceAttentionForTest(vm.Manager.Profiles()[0].ID, core.AttentionSerialDetached, "本地 ADB 入口已被外部移除")
+		}, func(vm *ViewModel) { vm.Manager.AckAttention(vm.Manager.Profiles()[0].ID) }},
 		{"cache confirm", func(vm *ViewModel) {
 			vm.CacheConfirmOpen = true
 			vm.CacheConfirmPkg = "com.tencent.mm"

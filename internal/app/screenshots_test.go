@@ -12,6 +12,7 @@ import (
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo/ui"
+	"github.com/google/uuid"
 )
 
 // Rendering the window to PNGs.
@@ -286,6 +287,27 @@ func shotCases() []shotCase {
 			settle: 12,
 		},
 		{
+			// "adb kill-server" with three devices online: one prompt, one
+			// action for the whole fleet.
+			name: "14b-attention-fleet",
+			build: func(t *testing.T) *ViewModel {
+				vm := shotConnected(t, readFixture)
+				ids := []uuid.UUID{vm.Manager.Profiles()[0].ID}
+				for _, name := range []string{"EX5", "客厅"} {
+					id, err := vm.Manager.SaveDevice(core.SaveDeviceRequest{
+						Name: name, Address: testAddress, RemotePort: 5555,
+					})
+					if err != nil {
+						t.Fatalf("SaveDevice(%q) error: %v", name, err)
+					}
+					ids = append(ids, id)
+				}
+				vm.Manager.ForceAttentionGroupForTest(ids, core.AttentionServerRestart, "3 台设备的本地 ADB 入口同时消失")
+				return vm
+			},
+			settle: 12,
+		},
+		{
 			name: "18-derp-list",
 			build: func(t *testing.T) *ViewModel {
 				vm, _ := newDerpViewModel(t)
@@ -456,6 +478,21 @@ func shotCases() []shotCase {
 				return vm
 			},
 			settle: 12,
+		},
+		{
+			name: "32-startup-problems",
+			build: func(t *testing.T) *ViewModel {
+				vm := newTestViewModel(t)
+				vm.StartupOpen = true
+				vm.StartupProblems = []core.Problem{
+					{Kind: core.ProblemConfig, Title: "配置读取失败，已使用默认设置", Detail: "unexpected end of JSON input", Path: "C:\\Users\\me\\AppData\\Roaming\\TailcatManager", Continue: true},
+					{Kind: core.ProblemHistory, Title: "历史库无法打开，本次运行不会保存历史", Detail: "disk full", Path: "C:\\Users\\me\\AppData\\Roaming\\TailcatManager", Continue: true},
+					{Kind: core.ProblemADB, Title: "未找到 adb，连接设备前需要先安装", Continue: true},
+				}
+				vm.OpenDir = func(string) error { return nil }
+				vm.Quit = func() {}
+				return vm
+			},
 		},
 	}
 }

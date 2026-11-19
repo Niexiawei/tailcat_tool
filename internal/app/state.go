@@ -92,6 +92,22 @@ type ViewModel struct {
 	SavedOpen     bool
 	TemporaryOpen bool
 
+	// StartupOpen shows the startup problems in place of the routed content;
+	// StartupProblems is what Diagnose found, in the order it found them.
+	StartupOpen     bool
+	StartupProblems []core.Problem
+	// StartupError is why the last action on that page failed (a directory that
+	// would not open).
+	StartupError string
+	// OpenDir reveals a directory in the file manager; nil hides the buttons
+	// that would call it (--demo, tests).
+	OpenDir func(dir string) error
+	// WindowIcon is the PNG the window and its taskbar button show; nil keeps
+	// the platform's default.
+	WindowIcon []byte
+	// Quit closes the app; nil leaves the quit button out.
+	Quit func()
+
 	// Invalidate repaints the window; set once the window exists.
 	Invalidate func()
 

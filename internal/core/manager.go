@@ -28,8 +28,11 @@ type ChannelOpener interface {
 
 // Manager owns every device channel. All methods are safe for concurrent use.
 type Manager struct {
-	mu      sync.Mutex
-	changed chan struct{}
+	mu sync.Mutex
+	// listeners are the Change channels handed out, one per caller: a single
+	// channel with several readers gives each change to just one of them.
+	changedListeners map[chan struct{}]struct{}
+	changedMu        sync.Mutex
 
 	config      *ConfigStore
 	credentials CredentialStore
@@ -68,6 +71,9 @@ type Manager struct {
 	taskCancels map[uuid.UUID]context.CancelFunc
 	taskDone    map[uuid.UUID]chan struct{}
 	attention   map[uuid.UUID]Attention
+	// detachments are the recent serial losses, so that a fleet-wide event is
+	// one attention instead of one per device. Only the newest window matters.
+	detachments []Detachment
 	pinger      *Pinger
 	recorder    Recorder
 	checker     *Checker
@@ -145,7 +151,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		resourceInterval = defaultResourceInterval
 	}
 	m := &Manager{
-		changed:             make(chan struct{}, 1),
+		changedListeners:    map[chan struct{}]struct{}{},
 		logs:                make(chan LogRecord, 256),
 		appLogs:             make(chan AppLogRecord, 256),
 		logcats:             map[uuid.UUID]*LogcatStream{},
@@ -239,13 +245,29 @@ func (m *Manager) SetNotice(text string) {
 	m.notify()
 }
 
-// Changed reports that state moved; the UI redraws on it.
-func (m *Manager) Changed() <-chan struct{} { return m.changed }
+// Changed reports that state moved; the UI redraws on it. Each caller gets a
+// channel of its own and keeps it for as long as it listens: the window and the
+// tray both follow the manager, and a shared channel would hand every change to
+// exactly one of them, leaving the other on a state the app has left.
+//
+// Signals coalesce (the channel holds one), because a listener reads live state
+// when it wakes: two changes in a row need one redraw.
+func (m *Manager) Changed() <-chan struct{} {
+	m.changedMu.Lock()
+	defer m.changedMu.Unlock()
+	ch := make(chan struct{}, 1)
+	m.changedListeners[ch] = struct{}{}
+	return ch
+}
 
 func (m *Manager) notify() {
-	select {
-	case m.changed <- struct{}{}:
-	default:
+	m.changedMu.Lock()
+	defer m.changedMu.Unlock()
+	for ch := range m.changedListeners {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -812,7 +834,7 @@ func (m *Manager) refresh(ctx context.Context, id uuid.UUID, generation uuid.UUI
 func (m *Manager) maybeDetectInterference(ctx context.Context, id uuid.UUID, generation uuid.UUID) {
 	m.mu.Lock()
 	state := m.sessions[id].State
-	_, pending := m.attention[id]
+	_, pending := m.attentionForLocked(id)
 	m.mu.Unlock()
 	if pending || state != StateOffline {
 		return
