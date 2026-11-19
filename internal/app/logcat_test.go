@@ -326,7 +326,7 @@ func TestLogcatFootRowCountsReceivedAndDropped(t *testing.T) {
 	runner.feed(burst.String())
 	// The foot row names the buffer, so "丢弃" is a number with a reason and
 	// not a mystery.
-	waitForText(t, tt, "丢弃 2 条（上限 20000 条 / 8 MB）")
+	waitForText(t, tt, "丢弃 2 条（上限 30000 条 / 16 MB）")
 }
 
 func TestLogcatPageExplainsAnEmptyFilter(t *testing.T) {

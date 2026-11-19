@@ -230,12 +230,16 @@ func (l LogcatLevel) Label() string {
 // scroll. What the ring holds is exactly what the table can scroll through — the
 // table is virtualized, so a second, smaller display cap would only make the
 // counts disagree.
-const LogcatMaxLines = 20000
+//
+// A busy device prints tens of thousands of lines in a few minutes, and the line
+// the user is chasing is usually the one that just scrolled out; 30000 entries
+// of short lines is about 5 MB.
+const LogcatMaxLines = 30000
 
 // LogcatMaxBytes is the other half of the same bound. A device that prints huge
 // lines (or one binary blob) would otherwise fill the ring's row budget with
 // hundreds of megabytes.
-const LogcatMaxBytes = 8 << 20
+const LogcatMaxBytes = 16 << 20
 
 // logcatEntryBytes is what one entry costs on top of its strings: the struct,
 // its time and the slice slot.
