@@ -354,7 +354,9 @@ type Problem struct { Kind ProblemKind; Title, Detail, Path string; Continue boo
 | 管理器协程 | `Connect` / `Disconnect` / 任务执行 / 监视循环 | 触碰 `ui` 类型 |
 | 命令 goroutine | `RunADB`、终端命令、安装、探测 | 直接改 `ViewModel` 字段（只允许入队 + 请求重绘） |
 
-跨线程通知只有两个通道：`Manager.Changed()`（容量 1，自动合并）与 `Window.Invalidate()`（内部 `postMain` + CAS 合并，**任何 goroutine 可调**）。
+跨线程通知只有两个通道：`Manager.Changed()` 与 `Window.Invalidate()`（内部 `postMain` + CAS 合并，**任何 goroutine 可调**）。
+
+**`Manager.Changed()` 每个消费者各拿一条**：`Changed()` 每次调用注册一条容量 1 的通道（信号自动合并），`notify()` 分发给全部注册者。不要写成"共用一个 channel 让两处 `for range`"——那样每条通知只会被其中一个消费者收走，另一个就停在旧状态上（托盘显示「正在断开」不刷新就是这么来的，见 §9.4）。同理，**不要在视图里每帧调用 `Changed()`**：每次调用都会注册一条通道，而通道不会注销。
 
 ### 8.2 三条"绝不能"规则
 
@@ -389,6 +391,13 @@ type Problem struct { Kind ProblemKind; Title, Detail, Path string; Continue boo
 
 - **根因**：控制台按设备缓存，页面卸载时 PTY 已结束，回来继续用同一个 `*terminal.Terminal`（程序已退出）。
 - **修复**：`Element.OnUnmount` 关闭并丢弃；`Terminal.Done()` 已关闭时也重建。
+
+### 9.4 托盘菜单停在「正在断开」
+
+- **现象**：设备断开之后，托盘菜单里那台设备一直写着「正在断开」，子菜单的「重新连接」还是灰的，直到下一次别的状态变化才恢复。
+- **根因**：`keepTrayFresh` 与 `watchRedraws` 都在 `for range manager.Changed()` 上，而 `Changed()` 返回的是**同一条**容量 1 的通道。Go 的通道是"一条消息一个接收者"：每条通知只会被窗口或托盘其中一个拿走，另一个就停在它上次看到的状态上。
+- **修复**：`Changed()` 改为每次调用注册一条自己的通道，`notify()` 遍历分发给全部注册者（`changedListeners` + `changedMu`，与 `m.mu` 无嵌套，后者可能持有时调用 `notify()`）。
+- **防回归**：`TestChangedReachesEveryListener`（两个监听者都必须收到）与 `TestChangedKeepsSignalsPerListener`（忙的那个不会吞掉后一条、排空后还能再收到）。
 
 ## 10. 陷阱清单
 
