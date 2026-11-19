@@ -321,22 +321,24 @@ Swift 版对"用户在本机 adb 里动了我们的连接"是无感的：它只�
 | `serialDetached` | listener 活着、本会话 serial 不在 `adb devices -l` 里 | 用户执行了 `adb disconnect 127.0.0.1:P` |
 | `portChanged` | serial 不在表里，但表里出现另一个 `127.0.0.1:P2`，其 `model` + `device` 与会话记录一致 | 同一台设备被别的程序映射到了新端口（P2 只作线索展示，**不接管**） |
 | `portDrift` | 当前监听端口 ≠ 配置的 `preferredPort` | 我们自己的入口端口变了 |
+| `serverRestart` | 3 秒窗口内两台以上设备的 serial 一起消失 | 多半是 `adb kill-server`：一条聚合提示，文案只说「N 台设备的本地 ADB 入口同时消失」，不断言原因 |
 | 不报 | `offline` / `unauthorized`，或拿不到设备身份 | 设备侧问题，走原有退避 |
 
 `portChanged` 必须设备身份匹配才报——两台同型号车机同时在线时，宁可少报也不能把 A 的端口当成 B 的。
 
 ### 命中后
 
-1. 停止该设备的自动重试与监视重连，状态置 `needsAction`。
-2. 记一条 `Attention{DeviceID, Kind, Serial, DetectedPort, Detail, DetectedAt}`；同类事件只留一条，Ack 之前不重复弹。
-3. 事件消失（serial 回来且 `state=device`）自动清除。
+1. **先**把受影响的每台设备置 `needsAction` 并停止它的自动重试与监视重连，**再** `notify()`。顺序不能反：`retryOffline` 同一轮就跟着跑，晚一步就会替用户 `adb connect` 回去（红线）。
+2. 记一条 `Attention{DeviceID, DeviceIDs, Kind, Serial, DetectedPort, Detail, DetectedAt}`；同类事件只留一条，Ack 之前不重复弹。
+3. 3 秒窗口内的第二台、第三台不新建条目，而是把已有那条升级成 `serverRestart`（`DeviceIDs` 追加、`Detail` 重写）。首台设备仍单独记 `serialDetached`：单台断开永远是原行为。
+4. 事件消失（serial 回来且 `state=device`）自动清除。
 
 ### 对话框
 
-- 窗口**可见且聚焦** → 当场弹队首一条。
-- 窗口隐藏/失焦 → 不抢焦点，只排队 + 托盘该项加 `Badge`。
-- `Window.OnFocus` 与系统唤醒都会泵一次队列；多台设备一次只弹一条。
-- 三个动作：**重新连接**（沿用原端口策略）/ **改用其他本地端口**（`SwitchPort`，可选记住为新偏好）/ **稍后处理**（保持 `needsAction`，侧栏可点开重弹）。
+- 只要还有未确认的干预就绘出对话框，**每帧重建**（MyGo 的视图是状态的函数：只画一帧的对话框下一帧就不存在了，按钮也就点不到）。
+- 一次一条：`Attentions()` 里按「首要设备」各算一条，聚合后整队设备仍只占一条。
+- 单台时的三个动作：**重新连接**（沿用原端口策略）/ **改用其他本地端口**（`SwitchPort`，可选记住为新偏好）/ **稍后处理**（保持 `needsAction`，侧栏可点开重弹）。
+- 聚合时的两个动作：**全部重新连接**（`ReconnectAll`，逐台 `Connect`，已经在线的跳过，单台失败只进日志）/ **稍后处理**。端口切换在这里没有意义——服务重启不是某一台的端口问题。
 
 ---
 
@@ -494,16 +496,20 @@ go test ./internal/compat/    # 第三方 API 契约
 | logcat 的入口命名 | 页面就叫「Logcat」，与「日志」（§14 的历史时间线）并列 | 界面里多一个英文词；换来两个日志页面的区别一眼可辨：一个是历史与搜索，一个是此刻的流 |
 | `Fit` 的行高 | `Fit` 把每行钉成主题的最小行高（`ListState.RowHeight`），表高 = 表头 + 1 DIP 分隔线 + 行数 × 行高 | 第一版用"每行至少的最小高度"去估表高，而带按钮的行实际更高，每行差一两像素，13 行就差到下 20 多像素：最后几行落到表格自己的滚动条后面（用户截图发现）。第二版行高对了，但漏了表头下面那 1 DIP 分隔线，表格仍差 1 像素、在右边缘画一条滚动条盖住「删除」。代价：`Fit` 的行比自然排版略紧，且它会写 `ListState.RowHeight`，页面不要再自己设 |
 
+| 多设备干预的聚合 | 每设备 ticker 各自发现「自己的 serial 从 `adb devices -l` 里消失」，3 秒窗口内的事件合成一条 `AttentionServerRestart`：首台设备的条目升级（`DeviceIDs` 追加、`Detail` 重写），其余设备不新建条目。文案只说「N 台设备的本地 ADB 入口同时消失」，不断言原因 | 启发式：3 秒内用户手动断开两台也会被读成一次服务重启；反过来，"adb kill-server 后某台设备晚 4 秒才被 ticker 发现"会分成两条。换来不动每设备一条 ticker 的现有结构，也不用全局监视循环 |
+| 聚合成员用扫描而不是索引 | `attentionForLocked` 在 `m.attention` 里找 `DeviceID` 或 `DeviceIDs` 命中的条目，不维护 `id → 首要 id` 的映射表 | 每次判断 O(attention 数)，最多几台设备，可忽略。换来没有第二份真相：`AckAttention`/`SwitchPort`/`pending` 判定都只删一处，不会漏（计划原本的映射表代价栏自己写着"容易漏"） |
+| 聚合的确认 | 不做额外的一次全局 `adb devices -l`：触发升级的那次探测本身就是全量输出（判它为何消失用的就是这份） | 少一次进程与一个可能的竞态。代价：两秒内两个用户在终端里各 `adb disconnect` 一台，会被合成一条 |
+| 干预弹窗每帧重建 | `AttentionDialog` 只要还有 attention 就每帧重建（`AttentionOpen` 置真），没有 attention 才不画 | MyGo 的视图是状态的函数：只画一帧的对话框下一帧就不存在了——曾经就是这样，弹窗一闪而过、按钮点不到（`TestAttentionAggregatedDialogOffersReconnectAll` 之前只断言首帧文本，看不出来）。代价：每帧重建的成本（一个对话框） |
 ---
 
 ## 16. 已知缺口与后续工作
 
-1. **真机联调未做**：ADB 实链路、scrcpy 窗口、设备授权流程、`adb disconnect` 干预弹窗，都只有自动化测试与 `--demo` 验证，**没有接过真设备**。这是当前最大的未知。
-2. **发布打包未做**：没有 dmg / msi / deb 产物与签名，只有 `go build` + CI 矩阵。
-3. **`adbServerRestarted` / `listenerLost`** 两种干预尚未实现（需要多设备关联与监听器健康探测）。
-5. **托盘 Badge**：排队中的干预提示目前只会出现在托盘菜单文本里，没有数字角标。
-6. **逐进程 GPU 未实现**：`GPUSample.PerProcessAvailable` 恒为 false，只有整机 GPU 使用率。
-7. **文件页只读**：没有删除、重命名、新建目录、文件内容预览与多选批传；超过 2000 项的目录要靠进入子目录查看。
+1. **真机联调未做**：ADB 实链路、scrcpy 窗口、设备授权流程、`adb disconnect` 干预弹窗，都只有自动化测试与 `--demo` 验证。安装包已经能打（`go tool mygo build`），但还没有人在别人的机器上装过。这是当前最大的未知。
+2. **发布签名与公证未做**：三平台产物都有了，但 macOS 只有 ad-hoc 签名（Gatekeeper 会拦），Windows 安装器没有代码签名，Linux 包没有签名。
+3. **`listenerLost`** 尚未实现（需要监听器健康探测）；`adb kill-server` 的聚合提示已实现（见 §15「多设备干预的聚合」）。
+4. **托盘 Badge**：排队中的干预提示目前只会出现在托盘菜单文本里，没有数字角标。
+5. **逐进程 GPU 未实现**：`GPUSample.PerProcessAvailable` 恒为 false，只有整机 GPU 使用率。
+6. **文件页只读**：没有删除、重命名、新建目录、文件内容预览与多选批传；超过 2000 项的目录要靠进入子目录查看。
 
 ---
 

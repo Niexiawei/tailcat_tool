@@ -12,6 +12,7 @@ import (
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo/ui"
+	"github.com/google/uuid"
 )
 
 // Rendering the window to PNGs.
@@ -281,6 +282,27 @@ func shotCases() []shotCase {
 				profile := vm.Manager.Profiles()[0]
 				vm.Manager.ForceAttentionForTest(profile.ID, core.AttentionSerialDetached,
 					"本应用建立的 ADB 连接已被外部断开（adb disconnect）")
+				return vm
+			},
+			settle: 12,
+		},
+		{
+			// "adb kill-server" with three devices online: one prompt, one
+			// action for the whole fleet.
+			name: "14b-attention-fleet",
+			build: func(t *testing.T) *ViewModel {
+				vm := shotConnected(t, readFixture)
+				ids := []uuid.UUID{vm.Manager.Profiles()[0].ID}
+				for _, name := range []string{"EX5", "客厅"} {
+					id, err := vm.Manager.SaveDevice(core.SaveDeviceRequest{
+						Name: name, Address: testAddress, RemotePort: 5555,
+					})
+					if err != nil {
+						t.Fatalf("SaveDevice(%q) error: %v", name, err)
+					}
+					ids = append(ids, id)
+				}
+				vm.Manager.ForceAttentionGroupForTest(ids, core.AttentionServerRestart, "3 台设备的本地 ADB 入口同时消失")
 				return vm
 			},
 			settle: 12,

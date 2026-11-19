@@ -68,6 +68,9 @@ type Manager struct {
 	taskCancels map[uuid.UUID]context.CancelFunc
 	taskDone    map[uuid.UUID]chan struct{}
 	attention   map[uuid.UUID]Attention
+	// detachments are the recent serial losses, so that a fleet-wide event is
+	// one attention instead of one per device. Only the newest window matters.
+	detachments []Detachment
 	pinger      *Pinger
 	recorder    Recorder
 	checker     *Checker
@@ -812,7 +815,7 @@ func (m *Manager) refresh(ctx context.Context, id uuid.UUID, generation uuid.UUI
 func (m *Manager) maybeDetectInterference(ctx context.Context, id uuid.UUID, generation uuid.UUID) {
 	m.mu.Lock()
 	state := m.sessions[id].State
-	_, pending := m.attention[id]
+	_, pending := m.attentionForLocked(id)
 	m.mu.Unlock()
 	if pending || state != StateOffline {
 		return
