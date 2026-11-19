@@ -202,3 +202,32 @@ func TestNoOnevraTableComponentsAnywhere(t *testing.T) {
 		}
 	}
 }
+
+// TestAppSendsNoPacketsOfItsOwn enforces the dependency rule: the view reads
+// what the manager measured. A page that dials out on its own would probe the
+// network on every frame and would keep doing it with the window hidden.
+func TestAppSendsNoPacketsOfItsOwn(t *testing.T) {
+	banned := []string{
+		"http.Get(", "http.Post(", "http.Head(", "http.Client{", "http.NewRequest",
+		"net.Dial(", "net.DialTimeout(", "net.Listen(", "net package",
+		"stun.Request(", "stun.ParseResponse(", "tls.Dial(",
+	}
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("Glob() error: %v", err)
+	}
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		for _, banned := range banned {
+			if strings.Contains(string(source), banned) {
+				t.Errorf("%s sends packets (%s); ask the manager instead", path, banned)
+			}
+		}
+	}
+}

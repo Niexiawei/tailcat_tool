@@ -81,7 +81,7 @@
 **文件：**
 - 创建：`internal/core/relay_probe.go`、`internal/core/relay_probe_test.go`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```go
 // http 探测
@@ -105,12 +105,12 @@ func TestProbeTLSConfigPinsTheNodesCertName(t *testing.T)          // CertName=r
 func TestProbeTLSConfigPinsASelfSignedHash(t *testing.T)           // CertName=sha256-raw:… → ServerName 仍为 HostName，且装了 VerifyConnection
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`go test ./internal/core -run 'TestHTTPProbe|TestSTUNProbe|TestRelayNodeProbe|TestSTUNOnlyNode|TestNodeWithoutSTUNPort' -v`
 预期：FAIL，`undefined: RelayProber` / `undefined: RelayCheck`。
 
-- [ ] **步骤 3：实现**
+- [x] **步骤 3：实现**
 
 ```go
 // RelayProbeTarget is one node as a probe needs it. The fields are the
@@ -194,9 +194,9 @@ func stunAddress(target RelayProbeTarget) (string, bool)
 - STUN：`stunAddress` 给出 `host:port`（0 → 3478，-1 → 不测）；`net.Dialer.DialContext(ctx, "udp", addr)` → `stun.Request(txID)` → 设读超时 → 读 64 KiB 缓冲区 → `stun.Is` 过滤 → `stun.ParseResponse`，**txID 必须相等**；`STUNOnly` 为真时 HTTP 返回 `RelayCheck{Ran: false}`。
 - 所有字符串是面向用户的中文：`超时`、`连接失败`、`服务器返回 403`、`不是 STUN 响应`。
 
-- [ ] **步骤 4：运行测试验证通过**。
+- [x] **步骤 4：运行测试验证通过**。
 
-- [ ] **步骤 5：Commit** `feat: probe a DERP node over HTTPS and STUN`
+- [x] **步骤 5：Commit** `feat: probe a DERP node over HTTPS and STUN`
 
 ---
 
@@ -206,7 +206,7 @@ func stunAddress(target RelayProbeTarget) (string, bool)
 - 修改：`internal/core/manager_relay.go`、`internal/core/manager.go`
 - 修改：`internal/core/relay_probe_test.go`、`internal/core/manager_relay_test.go`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```go
 func TestProbeCycleCoversEveryNodeOfAMap(t *testing.T)              // 2 区域 3 节点 → 3 条结果
@@ -225,9 +225,9 @@ func TestShutdownStopsTheProbeLoop(t *testing.T)                     // Shutdown
 func TestProbeCycleGivesUpAfterItsBudget(t *testing.T)               // 注入 20 ms 预算 + 慢 prober → 剩余节点 未测量
 ```
 
-- [ ] **步骤 2：运行测试验证失败** → `go test ./internal/core -run 'TestProbe' -v`，FAIL（`undefined: Manager.RefreshRelayProbes`）。
+- [x] **步骤 2：运行测试验证失败** → `go test ./internal/core -run 'TestProbe' -v`，FAIL（`undefined: Manager.RefreshRelayProbes`）。
 
-- [ ] **步骤 3：实现**
+- [x] **步骤 3：实现**
 
 ```go
 // RelayProbe is one source's whole map as it was last probed.
@@ -280,9 +280,9 @@ func (m *Manager) RefreshRelayProbes()
 - 周期的 ctx 用 `context.WithTimeout(m.ctx, relayProbeCycleBudget)`，到期后未开始的节点标 `未测量`（`RelayCheck{Ran: false}`），整轮照常写结果。预算与 HTTPS 客户端都用包级变量（`relayProbeBudget = 2 * time.Minute`、`relayProbeClient`，后者与已有的 `relayHTTPClient` 同一写法），测试就地改小、`t.Cleanup` 改回——本轮不做第六个 `ManagerOptions` 字段。
 - 现有预览测试（`TestRelayPreviewFetchesAURL` 等）在抽出 `loadRelayMap` 之后必须原样变绿：预览与探测共用同一次下载，不改它的错误文案。
 
-- [ ] **步骤 4：运行测试验证通过**（含 `go test -race ./internal/core`）。
+- [x] **步骤 4：运行测试验证通过**（含 `go test -race ./internal/core`）。
 
-- [ ] **步骤 5：Commit** `feat: probe every DERP node on a timer, in memory`
+- [x] **步骤 5：Commit** `feat: probe every DERP node on a timer, in memory`
 
 ---
 
@@ -292,7 +292,7 @@ func (m *Manager) RefreshRelayProbes()
 - 修改：`internal/app/derp.go`、`internal/app/state.go`（若要缓存行上的统计）、`internal/app/derp_test.go`、`internal/app/derp_probe_test.go`
 - 修改：`cmd/tailcat-manager/main.go`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```go
 func TestDerpListShowsAvailableNodesOverTotal(t *testing.T)     // 3 通 1 死 → 「3/4」
@@ -304,9 +304,9 @@ func TestDerpDefaultNodeRowShowsItsProbeSummary(t *testing.T)     // 默认节�
 func TestRelayProbeCellTextNamesTheThreeStates(t *testing.T)      // 纯函数：可用/未检测/检测失败
 ```
 
-- [ ] **步骤 2：运行测试验证失败**。
+- [x] **步骤 2：运行测试验证失败**。
 
-- [ ] **步骤 3：实现**
+- [x] **步骤 3：实现**
 
 - 顶部一行加 `components.Button(c, "立即检测", components.ButtonSecondary)`（图标 `lucide.RefreshCw`），点击 → `vm.Manager.RefreshRelayProbes()`；右侧 `检测中` + `components.Spinner`（`RelayProbeRunning()` 为真时），否则 `上次检测：2026-11-20 12:03:04`（取任一结果的最大 `CheckedAt`；一次都没有时不出这行）。
 - 预设表加一列：`{Title: "可用节点", ID: "probe", Width: 76}`，放在「使用设备」之后。**列宽必须同时挪**：名称 `MinWidth` 150→130、来源 200→140、使用设备 `Width` 88→84、操作 `MinWidth` 200→184，六列合计约 686 DIP，仍在侧栏之后约 720 DIP 的可视区内——否则 操作 那一列被挤出右边缘，用户点不到 删除。单元格内容是纯函数的输出：
@@ -322,9 +322,9 @@ func relayProbeCell(probe core.RelayProbe, found bool) string // "3/4" / "未检
 - 行数没变，`Fit` 与 `Unframed` 不变；新列宽度 88 足够放下 `128/128` 与 `未检测`。
 - `cmd/tailcat-manager/main.go` 的 `ManagerOptions` 加 `RelayProbeInterval: 5 * time.Minute`；`internal/app/demo.go` **不加**（`--demo` 不联网）。
 
-- [ ] **步骤 4：运行测试验证通过**。
+- [x] **步骤 4：运行测试验证通过**。
 
-- [ ] **步骤 5：Commit** `feat: show how many DERP nodes answer in the list`
+- [x] **步骤 5：Commit** `feat: show how many DERP nodes answer in the list`
 
 ---
 
@@ -333,7 +333,7 @@ func relayProbeCell(probe core.RelayProbe, found bool) string // "3/4" / "未检
 **文件：**
 - 修改：`internal/app/derp.go`、`internal/app/derp_probe_test.go`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```go
 func TestDerpDetailDrawsOneProbeIconPerNode(t *testing.T)          // 2 节点区域 → 两个图标（按 AccessByRole(RoleImage) 名）
@@ -345,9 +345,9 @@ func TestRelayProbeSummarySkipsNodesWithoutASTUNPort(t *testing.T)  // 无 STUN 
 func TestDerpDetailProbeNowStartsACycle(t *testing.T)
 ```
 
-- [ ] **步骤 2：运行测试验证失败**。
+- [x] **步骤 2：运行测试验证失败**。
 
-- [ ] **步骤 3：实现**
+- [x] **步骤 3：实现**
 
 - 区域表在「节点」之后插入一列 `{Title: "可用", ID: "probe", MinWidth: 72}`（在「STUN 端口」之前）：一个节点一个图标，顺序与「节点」列一致（`region.Nodes` 的原序）。
 - 图标规则（纯函数，单测）：
@@ -367,9 +367,9 @@ func nodeProbeIcon(theme *ui.Theme, probe RelayNodeProbe, known bool) (func() *u
 - 地图本身拉不到（`probe.Err != ""`）时，统计行换成 `检测失败：<原因>`，图标全为「未检测」。
 - 详情页已有的 `DerpPreviewErr`（本页自己抓地图失败）与探测的 `probe.Err` 是两条独立信息，互不覆盖：前者管「这份地图现在下载不到」，后者管「最近一轮探测没拿到地图」。
 
-- [ ] **步骤 4：运行测试验证通过**。
+- [x] **步骤 4：运行测试验证通过**。
 
-- [ ] **步骤 5：Commit** `feat: mark each DERP node's health in the detail table`
+- [x] **步骤 5：Commit** `feat: mark each DERP node's health in the detail table`
 
 ---
 
@@ -381,7 +381,7 @@ func nodeProbeIcon(theme *ui.Theme, probe RelayNodeProbe, known bool) (func() *u
 - 修改：`internal/app/forms.go`（`cellBadge`）、`internal/app/derp.go`、`internal/app/appcache.go`、`internal/app/logs.go`、`internal/app/logcat.go`
 - 修改：`internal/app/forms_test.go` 或 `internal/app/derp_test.go`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```go
 func TestBadgesSitCenteredInATableCell(t *testing.T)
@@ -389,9 +389,9 @@ func TestBadgesSitCenteredInATableCell(t *testing.T)
 // 修复前相差约 6 DIP（截图 18-derp-list 的「类型」列）。
 ```
 
-- [ ] **步骤 2：运行测试验证失败**（记录实测差值，写进测试注释）。
+- [x] **步骤 2：运行测试验证失败**（记录实测差值，写进测试注释）。
 
-- [ ] **步骤 3：实现**
+- [x] **步骤 3：实现**
 
 ```go
 // cellBadge is components.Badge inside a table cell. Badge aligns itself to
@@ -408,29 +408,29 @@ func cellBadge(c *ui.Context, text string, tone components.BadgeTone) ui.Element
 - 把 DERP 列表「类型」、默认节点行「内置」、缓存页「已过期」、日志/Logcat 的等级徽标换成 `cellBadge`。
 - 不要改 onevra（第三方）：`Badge` 的 `AlignSelf(Start)` 在别处是对的（贴着一行文字的顶）。
 
-- [ ] **步骤 4：运行测试验证通过**。
+- [x] **步骤 4：运行测试验证通过**。
 
-- [ ] **步骤 5：Commit** `fix: a badge sits level with the text in its table cell`
+- [x] **步骤 5：Commit** `fix: a badge sits level with the text in its table cell`
 
 ---
 
 ## 任务 6：截图、守卫、文档与变更记录
 
-- [ ] **步骤 1：源码守卫**（`internal/app/style_test.go`）
+- [x] **步骤 1：源码守卫**（`internal/app/style_test.go`）
 
 ```go
 func TestAppSendsNoPacketsOfItsOwn(t *testing.T) // internal/app 非测试源码里出现 http.Get/Client、net.Dial、stun. 即红
 ```
 
-- [ ] **步骤 2：截图用例**（`shotCases()`，用假 prober 喂结果，不联网）：
+- [x] **步骤 2：截图用例**（`shotCases()`，用假 prober 喂结果，不联网）：
   - `18c-derp-list-probed`：三个预设，`3/4`、`未检测`、`检测失败`；
   - `19b-derp-detail-probed`：一个区域两节点（一个可用、一个不可用）+ 统计行 + 图标列。
   人工看一眼：「可用」列图标与「节点」列文字对齐、没有挤压「STUN 端口」、tooltip 能出来。
-- [ ] **步骤 3：文档**
+- [x] **步骤 3：文档**
   - `docs/ui-and-console.md` 路由表两条各补一句（列表：`可用节点` 列与「立即检测」；详情：`可用` 图标列、统计行）；
   - `docs/architecture.md` §15 补决策：「节点可用性靠 HTTPS latency-check + STUN binding request，自动每 5 分钟跑一轮，结果只在内存」，代价写「应用开着就每 5 分钟向各节点与 tailcat 的节点列表各发一轮请求，用户可能把它当成本地缓存的结论」；
   - §16 已知缺口补一条：探测间隔写死在 `main.go`，界面里不能改。
-- [ ] **步骤 4：CHANGELOG**（当天那一节的 `新增` / `修复`）：
+- [x] **步骤 4：CHANGELOG**（当天那一节的 `新增` / `修复`）：
   - `新增`：「DERP 节点列表显示每个地图的可用节点数（如 `7/10`），详情页每个节点一个图标标出是否可用；可用性用 HTTPS 与 STUN 两种探测，默认每 5 分钟自动跑一次，也可以点『立即检测』。」
   - `修复`：「DERP 节点的『类型』徽标不再贴在表格行顶部，和同一行的名称对齐。」
 
