@@ -523,6 +523,48 @@ func TestFileTreeOpensTheFolderTheTableNavigatedTo(t *testing.T) {
 	}
 }
 
+// TestFoldingABranchForgetsWhatItHid pins the user's report: 展开 / 就看到
+// /sdcard 被选中并展开. The fold closed the branch but kept the expansion flags
+// underneath it, so opening / again resurrected /sdcard and its folders — a
+// subtree nobody had opened in this frame.
+func TestFoldingABranchForgetsWhatItHid(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "照片.jpg")
+	state := vm.fileStateFor(vm.Selection)
+
+	if !state.tree.Open.Has("/sdcard") {
+		t.Fatalf("the page opens with /sdcard expanded; rows = %v", treeRows(vm))
+	}
+	state.tree.Open.Remove("/")
+	tt.Frame()
+	state.tree.Open.Add("/")
+	tt.Frame()
+
+	want := []string{"/", "/sdcard", "/storage", "/system"}
+	if got := treeRows(vm); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("rows = %v, want %v: a reopened branch shows its children closed", got, want)
+	}
+}
+
+// TestFoldingKeepsASiblingOpen checks that forgetting what a fold hid stops at
+// the folded branch: the folders beside it keep the state the user gave them.
+func TestFoldingKeepsASiblingOpen(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "照片.jpg")
+	state := vm.fileStateFor(vm.Selection)
+
+	state.tree.Open.Add("/system")
+	waitForRow(t, vm, tt, "/system/bin")
+	state.tree.Open.Remove("/sdcard")
+	tt.Frame()
+
+	if !state.tree.Open.Has("/system") {
+		t.Fatalf("folding /sdcard closed /system too; rows = %v", treeRows(vm))
+	}
+}
+
 // TestFileTreeReopensTheRootTheTableNavigatedFrom pins the user's report: after
 // collapsing / by hand, opening a folder in the table left the tree sitting on
 // one collapsed row while the breadcrumbs moved deeper, so the two panes

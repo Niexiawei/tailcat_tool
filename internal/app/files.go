@@ -50,7 +50,10 @@ type fileState struct {
 	// tree owns expansion, the cursor and the scroll offset. Keys are device
 	// paths, which are unique; labels are not, and two folders called DCIM
 	// would otherwise share one row's state.
-	tree  components.TreeVirtualizedState[string]
+	tree components.TreeVirtualizedState[string]
+	// open is last frame's expansion set, so the page can tell which rows the
+	// user folded and forget what those rows were hiding.
+	open  map[string]bool
 	table ui.ListState
 	// chosen is the row the table highlights, and chosenPath is the directory
 	// its index belongs to. They live here rather than in the build pass
@@ -298,6 +301,7 @@ func (vm *ViewModel) filesOffline(c *ui.Context, session core.Session) {
 // tree's column, so a label-keyed tree cannot tell /sdcard/DCIM from
 // /system/DCIM and would give the two rows one shared state.
 func (vm *ViewModel) folderTree(c *ui.Context, profile core.Profile, state *fileState) {
+	forgetFoldedSubtrees(state)
 	children := func(path string) []string {
 		folders, known := vm.subfolders(profile, path)
 		if !known && state.tree.Open.Has(path) {
@@ -316,6 +320,39 @@ func (vm *ViewModel) folderTree(c *ui.Context, profile core.Profile, state *file
 		revealInTree(state)
 		tree.FillWidth().Grow(1).MinHeight(0)
 	})
+}
+
+// forgetFoldedSubtrees drops the expansion flags a folded branch left behind.
+// A closed row hides everything under it, so the flags underneath have to go
+// with it: keeping them meant folding / and opening it again brought /sdcard
+// back expanded — a subtree the user had just folded away, and one the page
+// never asked to open (「只要展开 / 就会自动选中 /sdcard 并且展开」).
+func forgetFoldedSubtrees(state *fileState) {
+	open := make(map[string]bool, state.tree.Open.Len())
+	for path := range state.tree.Open.All() {
+		open[path] = true
+	}
+	for path := range state.open {
+		if open[path] {
+			continue
+		}
+		// path was folded between frames: it is hiding everything below it.
+		for hidden := range open {
+			if remoteUnder(hidden, path) {
+				delete(open, hidden)
+				state.tree.Open.Remove(hidden)
+			}
+		}
+	}
+	state.open = open
+}
+
+// remoteUnder reports whether path lives inside dir rather than beside it.
+func remoteUnder(path, dir string) bool {
+	if dir == "/" {
+		return path != "/" && strings.HasPrefix(path, "/")
+	}
+	return strings.HasPrefix(path, dir+"/")
 }
 
 // treeChildren answers what a tree row can expand into. The component shows a
