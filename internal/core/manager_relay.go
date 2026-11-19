@@ -350,3 +350,18 @@ func (m *Manager) CachedRelayMapPreview(source string) (RelayMapPreview, bool) {
 	preview, ok := m.relayPreviews[cfg.Source]
 	return preview, ok
 }
+
+// RelayProbeCheckedAt is the newest time any source was probed; zero before the
+// first cycle. The list header shows it so a count is never mistaken for a live
+// reading.
+func (m *Manager) RelayProbeCheckedAt() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var newest time.Time
+	for _, probe := range m.relayProbes {
+		if probe.CheckedAt.After(newest) {
+			newest = probe.CheckedAt
+		}
+	}
+	return newest
+}

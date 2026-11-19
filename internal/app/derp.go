@@ -61,7 +61,18 @@ func (vm *ViewModel) derpListPage(c *ui.Context) {
 			if actionButton(c, lucide.Plus, "新建 DERP 节点", components.ButtonPrimary).Clicked() {
 				vm.openDerpEditor(&DerpEditorDraft{Kind: "json"})
 			}
+			if components.Button(c, "立即检测", components.ButtonSecondary).Clicked() {
+				// A cycle is asynchronous: the spinner below appears on the next
+				// frame, when the manager has already marked itself busy.
+				vm.Manager.RefreshRelayProbes()
+			}
 			components.Text(c, "预设只影响之后选择它的设备").FontSize(11).TextColor(theme.TextMuted)
+			if vm.Manager.RelayProbeRunning() {
+				components.Spinner(c, components.SpinnerRing)
+				components.Text(c, "检测中").FontSize(11).TextColor(theme.TextMuted)
+			} else if at := vm.Manager.RelayProbeCheckedAt(); !at.IsZero() {
+				components.Text(c, "上次检测："+at.Format("2006-01-02 15:04:05")).FontSize(11).TextColor(theme.TextMuted)
+			}
 		})
 		vm.derpDefaultSection(c)
 		ui.Column(c).FillWidth().Grow(1).MinHeight(0).
@@ -105,6 +116,8 @@ func (vm *ViewModel) derpDefaultSection(c *ui.Context) {
 			components.Tooltip(c, components.Text(c, core.DefaultNodeListURL).FontSize(11).SingleLine(), core.DefaultNodeListURL).Grow(1)
 			components.Text(c, "tailcat 提供，本应用不缓存").FontSize(11).TextColor(theme.TextMuted)
 			components.Text(c, usage).FontSize(11).TextColor(theme.TextMuted)
+			probe, _ := vm.Manager.RelayProbe("")
+			components.Text(c, relayProbeLabel(probe)).FontSize(11).TextColor(theme.TextMuted)
 		})
 	})
 }
@@ -162,16 +175,18 @@ func (vm *ViewModel) derpHistorySection(c *ui.Context) {
 
 func derpColumns() []ui.TableColumn {
 	return []ui.TableColumn{
-		{Title: "名称", ID: "name", MinWidth: 150},
+		{Title: "名称", ID: "name", MinWidth: 130},
 		{Title: "类型", ID: "kind", Width: 72},
-		{Title: "来源", ID: "source", MinWidth: 200},
-		{Title: "使用设备", ID: "usage", Width: 88},
-		// The three two-character buttons and their gaps need 184: 200 keeps
+		{Title: "来源", ID: "source", MinWidth: 140},
+		{Title: "使用设备", ID: "usage", Width: 84},
+		// The probe column shows 7/10 or a word; 76 fits 128/128 and 未检测.
+		{Title: "可用节点", ID: "probe", Width: 76},
+		// The three two-character buttons and their gaps need 184: 184 keeps
 		// 删除 clear of the cell's edge. It shares the room left rather than
 		// fixing its width, because a fixed last column makes ui.Table draw a
 		// resize grip on the table's own edge — a 1 DIP line that reads as a
 		// scrollbar next to the buttons.
-		{Title: "操作", ID: "actions", MinWidth: 200},
+		{Title: "操作", ID: "actions", MinWidth: 184},
 	}
 }
 
@@ -194,6 +209,13 @@ func (vm *ViewModel) derpPresetCell(c *ui.Context, col int, preset core.RelayPre
 	case 3:
 		usage := derpUsageLabel(len(vm.Manager.RelayPresetUsage(preset.ID)))
 		components.Text(c, usage).FontSize(11).TextColor(theme.TextMuted)
+	case 4:
+		probe, found := vm.Manager.RelayProbe(preset.Source)
+		cell := components.Text(c, relayProbeCell(probe)).FontSize(11).TextColor(theme.TextMuted)
+		if found && probe.Err != "" {
+			// The reason is a sentence and the column is 76 DIP wide.
+			components.Tooltip(c, cell, probe.Err)
+		}
 	default:
 		ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).Children(func() {
 			if components.Button(c, "详情", components.ButtonOutline).Height(22).FontSize(11).Clicked() {
@@ -217,6 +239,29 @@ func derpUsageLabel(count int) string {
 		return "—"
 	}
 	return itoa(count) + " 台设备"
+}
+
+// relayProbeCell is the list's 可用节点 column: a count once a cycle produced
+// one, and a word when it has not. "0/12" for a map that never loaded would
+// read as twelve dead nodes.
+func relayProbeCell(probe core.RelayProbe) string {
+	if probe.Err != "" {
+		return "检测失败"
+	}
+	ok, total := probe.Available()
+	if total == 0 {
+		return "未检测"
+	}
+	return itoa(ok) + "/" + itoa(total)
+}
+
+// relayProbeLabel is the default node row's summary. It has no column heading
+// over it, so the count needs the word that says what it counts.
+func relayProbeLabel(probe core.RelayProbe) string {
+	if ok, total := probe.Available(); total > 0 {
+		return "可用 " + itoa(ok) + "/" + itoa(total)
+	}
+	return relayProbeCell(probe)
 }
 
 // kindOfRelay reports the source type without trusting the stored text: any
