@@ -53,6 +53,11 @@ type logcatState struct {
 	err       string
 	// table keeps the column layout and the scroll between frames.
 	table ui.ListState
+	// jumpToEnd asks the next table build to scroll to the newest row once.
+	// Turning 跟随最新 on, resuming, or opening the page all mean "show me the
+	// end now": without the jump the switch only takes effect once the reader
+	// scrolled there by hand, which is not what it says.
+	jumpToEnd bool
 	// namesAt is when the process table was last read for this page, and
 	// namesBusy marks a read in flight. logcatMu guards both: the read runs in
 	// a goroutine.
@@ -92,6 +97,7 @@ func (vm *ViewModel) settleLogcat() {
 	if vm.logcatDrawn {
 		return
 	}
+	vm.logcatVisited = false
 	if vm.Logcat != nil {
 		vm.stopLogcatStream(vm.Logcat)
 	}
@@ -124,6 +130,10 @@ func (vm *ViewModel) stopLogcatStream(f *logcatState) {
 func (vm *ViewModel) logcatPage(c *ui.Context) {
 	vm.logcatDrawn = true
 	f := vm.logcatState()
+	if !vm.logcatVisited && f.Follow {
+		f.jumpToEnd = true
+	}
+	vm.logcatVisited = true
 	vm.ensureLogcatDevice(f)
 	vm.ensureLogcatStream(f)
 	vm.ensureLogcatNames(f)
@@ -291,6 +301,7 @@ func (vm *ViewModel) switchLogcatDevice(f *logcatState, id uuid.UUID) {
 	f.err = ""
 	f.exited = false
 	f.received, f.dropped = 0, 0
+	f.jumpToEnd = f.Follow
 }
 
 // logcatDeviceLabel is what the picker's trigger shows.
@@ -327,7 +338,9 @@ func (vm *ViewModel) logcatFiltersRow(c *ui.Context, f *logcatState) {
 				follow := f.Follow
 				components.Switch(c, &follow, "跟随最新")
 				if follow != f.Follow {
-					f.Follow = follow
+					// Jumping is what the switch means; turning it off also
+					// drops a jump that was still pending.
+					f.Follow, f.jumpToEnd = follow, follow
 				}
 				vm.logcatPauseButton(c, f)
 			})
@@ -356,6 +369,9 @@ func (vm *ViewModel) logcatPauseButton(c *ui.Context, f *logcatState) {
 	})
 	if button.Clicked() {
 		f.Paused = !f.Paused
+		if !f.Paused && f.Follow {
+			f.jumpToEnd = true
+		}
 	}
 }
 
@@ -397,6 +413,10 @@ func logcatColumns() []ui.TableColumn {
 func (vm *ViewModel) logcatTable(c *ui.Context, f *logcatState) {
 	rows := f.rows
 	state := &f.table
+	if f.jumpToEnd {
+		f.jumpToEnd = false
+		state.ScrollToEnd()
+	}
 	// Seq is the row's identity: two log lines can be identical, and a table
 	// keyed on the text would lose its place on every burst.
 	state.Key = func(row int) any { return rows[row].Seq }
@@ -505,6 +525,7 @@ func (vm *ViewModel) logcatFootRow(c *ui.Context, f *logcatState) {
 func (vm *ViewModel) clearLogcat(f *logcatState) {
 	f.rows = nil
 	f.version = 0
+	f.jumpToEnd = f.Follow
 	if f.stream != nil {
 		f.stream.Clear()
 	}

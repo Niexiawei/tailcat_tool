@@ -142,8 +142,10 @@ type ViewModel struct {
 	// Logcat is the streaming log page's state; nil until the page is opened.
 	Logcat *logcatState
 	// logcatDrawn reports that the page built this frame; settleLogcat closes
-	// the stream when it did not.
-	logcatDrawn bool
+	// the stream when it did not. logcatVisited remembers whether the previous
+	// frame drew it, so a visit can scroll to the end once on arrival.
+	logcatDrawn   bool
+	logcatVisited bool
 	// logcatMu guards the page's process-table read, which runs in a goroutine.
 	logcatMu sync.Mutex
 

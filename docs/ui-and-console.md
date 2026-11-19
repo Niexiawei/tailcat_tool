@@ -264,6 +264,8 @@ view.OnUnmount(func() { vm.dropConsole(device) })
 
 退出应用时 `App.Quit()` 调 `vm.CloseConsoles()` 统一关闭。
 
+**关闭不在渲染线程上做**：`dropConsole` 把 `closeConsole(host)` 丢给 goroutine，因为关一个终端等于杀它背后的 `adb shell`，Windows 上是一次 `taskkill /T /F`（实测约 0.8 秒）。第一版在 `OnUnmount` 里同步关，于是"离开终端页签"和"从设备页跳到别的页面"都会卡一下。`CloseConsoles` 反过来必须等：退出应用时同步关完再退，否则 adb shell 会变成孤儿进程。`TestLeavingTheTerminalTabDoesNotWaitForItsProcess` 与 `TestQuittingTheAppWaitsForTheConsoles` 各钉一半。
+
 ## 6. 提示与错误
 
 ### 6.1 两级提示
@@ -630,6 +632,8 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 - 状态行：`已接收 N 行 · 显示 M 条`（**行**是设备打印的行，**条**是页面上的条目：一次调用打出多行仍是一条），丢弃过再加 `· 缓冲已满，丢弃 K 条（上限 30000 条 / 16 MB）`——上限写在数字旁边，用户不用猜缓冲有多大，暂停时加 `· 已暂停`；右侧「导出…」「清空缓冲」，流结束后多一个「重新开始」。「清空缓冲」把**行数、条数与两个计数器一起归零**（`LogcatStream.Clear`）：缓冲里的东西和描述它的数字是一件事，「显示 0 条」旁边挂着「已接收 39400 行」读起来像丢了 39400 行。`Seq` 不归零——它命名行身份，不能与旧行重号。
 
 **同一次调用的多行是一条**：logcat 把一条带换行的消息（异常堆栈）存成一行一条记录，但时间戳、pid、tid、级别、tag 全同。解析后遇到「这五项与上一条完全相同」就拼到上一条的正文里（换行连接），所以一条堆栈在表格里是一条，不是几十行。代价：同一毫秒、同一 tag 的两条不同消息会被并成一条（正文都在，只是同一条目里换行）。
+
+**「跟随最新」开关打开就是"贴到最新"**：mygo 的 `ListState.FollowEnd` 只是"允许跟随"，它真正的 `following` 是"上一帧是否停在末尾"，所以光把开关置 true 不会动——用户得先手动滚到底部，开关才生效。页面因此在三种时刻显式调一次 `ScrollToEnd()`（`logcatState.jumpToEnd`）：**打开开关**、**从暂停继续**、**进入页面**。关掉开关会顺手清掉还没执行的跳转，否则那一帧的表格会先跳到末尾再停下。
 
 **行序旧→新（与 §14 的时间线正相反）**：流就是往下滚的读法，新行出现在底部。`ui.ListState.FollowEnd` 正好是这个语义——`FollowEnd = 跟随最新`，用户往上滚就自动停止跟随、滚回底部又继续。表格的行身份是 `LogcatEntry.Seq`：两行日志可以时间、级别、标签、正文全同，只有序号能区分。
 

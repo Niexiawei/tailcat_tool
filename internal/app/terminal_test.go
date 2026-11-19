@@ -10,6 +10,7 @@ import (
 	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
+	"github.com/google/uuid"
 	"github.com/oneo-me/onevra/source/components"
 )
 
@@ -242,5 +243,44 @@ func TestConsoleThemeIsAlwaysDark(t *testing.T) {
 	}
 	if theme.Foreground != ui.Hex("#f2f2f2") {
 		t.Fatalf("console foreground = %v, want near-white", theme.Foreground)
+	}
+}
+
+func TestLeavingTheTerminalTabDoesNotWaitForItsProcess(t *testing.T) {
+	release := make(chan struct{})
+	original := closeConsole
+	t.Cleanup(func() { closeConsole = original })
+	closeConsole = func(*consoleHost) { <-release }
+
+	vm := newTestViewModel(t)
+	id := uuid.New()
+	vm.consoles = map[uuid.UUID]*consoleHost{id: {key: "adb:shell"}}
+
+	done := make(chan struct{})
+	go func() {
+		vm.dropConsole(id)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("dropConsole waited for the console's process: stopping an adb shell costs most of a second on Windows")
+	}
+	close(release)
+}
+
+func TestQuittingTheAppWaitsForTheConsoles(t *testing.T) {
+	stopped := make(chan struct{}, 1)
+	original := closeConsole
+	t.Cleanup(func() { closeConsole = original })
+	closeConsole = func(*consoleHost) { stopped <- struct{}{} }
+
+	vm := newTestViewModel(t)
+	vm.consoles = map[uuid.UUID]*consoleHost{uuid.New(): {key: "adb:shell"}}
+	vm.CloseConsoles()
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("CloseConsoles returned before the console was stopped: quitting would leave an adb shell behind")
 	}
 }

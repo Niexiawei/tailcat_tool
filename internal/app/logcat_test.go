@@ -681,3 +681,45 @@ func TestLogcatTagCellShowsTheProcessName(t *testing.T) {
 	// table does, and it belongs under the tag it explains.
 	waitForText(t, tt, "com.demo.camera")
 }
+
+// logcatBurst is n distinct lines, so nothing merges and the table overflows.
+func logcatBurst(n int) string {
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		b.WriteString(fmt.Sprintf("11-18 09:30:%02d.%03d  1  1 I Tag: line %d\n", (i/1000)%60, i%1000, i))
+	}
+	return b.String()
+}
+
+func TestLogcatFollowShowsTheNewestLine(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	// A window too short for the burst: the newest line is only visible if the
+	// table actually follows its end.
+	tt := ui.NewTester(vm.ContentView, 1100, 400)
+	tt.Frame()
+	runner.feed(logcatBurst(60))
+	waitForText(t, tt, "line 59")
+}
+
+func TestTurningFollowBackOnJumpsToTheNewestLine(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 400)
+	tt.Frame()
+	if err := tt.Click("跟随最新"); err != nil {
+		t.Fatalf("Click(跟随最新) error: %v", err)
+	}
+	tt.Frame()
+	runner.feed(logcatBurst(60))
+	for i := 0; i < 5; i++ {
+		tt.Frame()
+	}
+	if tt.HasText("line 59") {
+		t.Fatalf("a page that is not following already shows the newest line: the test proves nothing")
+	}
+	// Turning the switch back on has to bring the reader to the end; making
+	// them scroll to the bottom first is not what the switch says.
+	if err := tt.Click("跟随最新"); err != nil {
+		t.Fatalf("Click(跟随最新) error: %v", err)
+	}
+	waitForText(t, tt, "line 59")
+}
