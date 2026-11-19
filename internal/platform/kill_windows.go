@@ -8,15 +8,29 @@ import (
 	"syscall"
 )
 
-// createNewProcessGroup keeps the child out of this console's Ctrl+C group.
-const createNewProcessGroup = 0x00000200
+const (
+	// createNewProcessGroup keeps the child out of this console's Ctrl+C group.
+	createNewProcessGroup = 0x00000200
+	// createNoWindow gives the child no console at all.
+	//
+	// The packaged app is a GUI executable with no console of its own, so a
+	// console child would allocate one and Windows would show it: every adb
+	// poll (once every three seconds, per device) flashed a cmd window. A child
+	// started from a terminal inherits that console and shows nothing, which is
+	// why this only ever appeared in the built app.
+	createNoWindow = 0x08000000
+)
 
-// ConfigureProcess gives the child its own process group.
+// ConfigureProcess gives the child its own process group and keeps its console
+// off the screen.
 func ConfigureProcess(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
-	cmd.SysProcAttr.CreationFlags |= createNewProcessGroup
+	cmd.SysProcAttr.CreationFlags |= createNewProcessGroup | createNoWindow
+	// HideWindow covers the first frame a console would otherwise paint before
+	// CREATE_NO_WINDOW takes effect.
+	cmd.SysProcAttr.HideWindow = true
 }
 
 // Terminate stops the process tree. Windows has no SIGTERM, and an adb or
@@ -40,7 +54,9 @@ func taskkill(pid int, force bool) {
 		args = append(args, "/F")
 	}
 	cmd := exec.Command("taskkill", args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	// taskkill is a console program too: without the same flags it flashes its
+	// own window, and it runs every time a device is disconnected.
+	ConfigureProcess(cmd)
 	_ = cmd.Run()
 }
 

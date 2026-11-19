@@ -91,7 +91,26 @@ Tailcat Manager 0.2.0
 修后（当前分支）：window 'Tailcat Manager': ICON_BIG=4141239 ICON_SMALL=128787837
 ```
 
+### 黑窗口闪烁（2026-11-19，Windows）
+
+打包版运行时不停弹出黑色命令窗口。复现与取证工具是 `internal/platform/testdata/spawncheck`——**必须**编译成 GUI 子系统才能复现，因为 `go test` 的二进制是控制台程序、会把控制台传给子进程：
+
+```sh
+go build -ldflags "-H windowsgui" -o /tmp/spawncheck.exe ./internal/platform/testdata/spawncheck
+# 用 PowerShell 启动（和资源管理器双击一样，STARTUPINFO 正常显示）
+powershell -Command "Start-Process /tmp/spawncheck.exe -ArgumentList 'before' -RedirectStandardOutput out-before.txt -Wait"
+powershell -Command "Start-Process /tmp/spawncheck.exe -ArgumentList 'after'  -RedirectStandardOutput out-after.txt  -Wait"
+```
+
+```
+before: the child owned a visible window of class "PseudoConsoleWindow"
+after:  the child owned no visible window
+```
+
+`before` 用的就是修复前的标志（只有 `CREATE_NEW_PROCESS_GROUP`）：子进程拿到了一个可见伪控制台窗口——屏幕上那个黑窗口。`after` 加上 `CREATE_NO_WINDOW` + `HideWindow` 之后没有窗口了。`internal/platform/kill_windows.go` 因此不再只给 `taskkill` 设 `HideWindow`，而是与 adb 走同一套标志。
+
 ### 这一轮修掉的东西
+
 
 - 干预弹窗只画一帧就消失、点不到按钮（`AttentionDialog` 的早退守卫）——发现于本轮聚合工作，改法与理由见 `docs/architecture.md` §15「干预弹窗每帧重建」。
 - 多台设备一起掉线时弹 N 条提示——见 §15「多设备干预的聚合」。真机验收等有两台设备时补（场景 7）。

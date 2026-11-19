@@ -399,6 +399,13 @@ type Problem struct { Kind ProblemKind; Title, Detail, Path string; Continue boo
 - **修复**：`Changed()` 改为每次调用注册一条自己的通道，`notify()` 遍历分发给全部注册者（`changedListeners` + `changedMu`，与 `m.mu` 无嵌套，后者可能持有时调用 `notify()`）。
 - **防回归**：`TestChangedReachesEveryListener`（两个监听者都必须收到）与 `TestChangedKeepsSignalsPerListener`（忙的那个不会吞掉后一条、排空后还能再收到）。
 
+### 9.5 打包版一直闪黑窗口
+
+- **现象**：双击打开打包版后，屏幕上不停有黑色命令窗口弹出又关闭，循环往复；从终端 `go run` 启动时完全看不到。
+- **根因**：应用是 GUI 子进程（无控制台），而它启动的 `adb` / `taskkill` 是控制台程序。`platform.ConfigureProcess` 只设了 `CREATE_NEW_PROCESS_GROUP`，没有 `CREATE_NO_WINDOW`，于是每个子进程都新建一个控制台窗口——每台设备每 3 秒一次轮询，就是那个"循环往复"。从终端启动时子进程继承终端的控制台，所以只在打包版出现。
+- **修复**：`ConfigureProcess` 加 `CREATE_NO_WINDOW` + `HideWindow`（后者盖住控制台窗口的第一帧）；`taskkill` 也改走同一函数。
+- **防回归**：`TestConfigureProcessKeepsTheConsoleOffScreen`（Windows 构建）断言三个标志位。真正的行为验证需要一个 GUI 子系统的父进程，`go test` 的二进制是控制台程序、复现不出来——用 `internal/platform/testdata/spawncheck` 手工验（见 `docs/verification.md`）。
+
 ## 10. 陷阱清单
 
 | 陷阱 | 表现 | 正确做法 |
