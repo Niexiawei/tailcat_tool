@@ -2,11 +2,35 @@ package app
 
 import (
 	"context"
+	"log"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo"
 	"github.com/google/uuid"
 )
+
+// TrayIcons are the two tray images. Light is drawn on a light bar, so its
+// ink is dark; Dark is drawn on a dark bar, so its ink is light. A single
+// image would vanish on one of them.
+type TrayIcons struct {
+	Light []byte
+	Dark  []byte
+}
+
+// forBar picks the image for the bar: dark reports whether the bar is dark.
+func (i TrayIcons) forBar(dark bool) []byte {
+	if dark {
+		return i.Dark
+	}
+	return i.Light
+}
+
+// applyTrayIcon sets the image that matches the bar the icon shows on.
+func applyTrayIcon(tray *mygo.Tray, icons TrayIcons) {
+	if err := tray.SetIcon(icons.forBar(tray.Dark()), false); err != nil {
+		log.Printf("tray icon: %v", err)
+	}
+}
 
 // TrayMenu builds the tray menu from the current manager state. It is rebuilt
 // on every change so the labels always describe the live channels.

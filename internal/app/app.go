@@ -52,19 +52,21 @@ func New(env Environment) *App {
 }
 
 // Start opens the window, the tray and the redraw loop.
-func (a *App) Start(trayIcon []byte) {
+func (a *App) Start(trayIcons TrayIcons) {
 	a.shell = a.vm.OpenMainWindow()
 	window := a.shell.Window()
 	watchRedraws(a.env.Manager, window)
 
 	if tray, err := mygo.NewTray(mygo.TrayOptions{
-		ID:             "tailcat-manager",
-		Icon:           trayIcon,
-		IconIsTemplate: true,
-		ToolTip:        AppName,
-		Menu:           a.vm.TrayMenu(a.Show, a.Quit),
+		ID:      "tailcat-manager",
+		Icon:    trayIcons.forBar(false),
+		ToolTip: AppName,
+		Menu:    a.vm.TrayMenu(a.Show, a.Quit),
 	}); err == nil {
 		a.tray = tray
+		// The bar's brightness is only known once the icon exists.
+		applyTrayIcon(tray, trayIcons)
+		tray.OnAppearanceChange(func() { applyTrayIcon(tray, trayIcons) })
 		go a.keepTrayFresh()
 	} else {
 		log.Printf("tray icon unavailable: %v", err)

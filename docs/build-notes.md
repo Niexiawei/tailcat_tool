@@ -48,6 +48,32 @@
 - 发布包应改用 `mygo build`，它会把该库打进应用（`plugins/terminal/mygo-plugin.json` 声明文件名与 SHA-256），否则用户首次使用终端需要联网；
 - 下载失败时界面显示「终端不可用：…」，其他功能不受影响。
 
+## 打包（`go tool mygo build`，2026-11-19 实测）
+
+发布构建走 `mygo.json`，工具本身钉在 `go.mod` 的 `tool` 指令里，所以本地与 CI 是同一条命令：
+
+```sh
+CGO_ENABLED=0 go tool mygo build -platform windows/amd64
+CGO_ENABLED=0 go tool mygo build -platform linux/amd64,linux/arm64
+CGO_ENABLED=0 go tool mygo build -platform darwin/universal -sign -   # 需要 macOS
+```
+
+| 目标 | 耗时（本机 Windows/amd64 上交叉构建） | 产物 | 体积 |
+|---|---|---|---|
+| windows/amd64 | 41 s（`-skip-installer`）、21 s（增量 + NSIS） | `dist/windows-amd64/Tailcat Manager.exe` | 32.4 MB |
+| windows/amd64 安装包 | +15 s（首次需下载 NSIS 3.13，约 2 s） | `tailcat-manager-setup-0.2.0-amd64.exe` | 10.8 MB |
+| linux/amd64 | 49 s | `tailcat-manager` / `.deb` / `.rpm` / `.tar.gz` / `PKGBUILD` | 31.7 MB；每个包 14.1 MB |
+| darwin/universal | 编两遍（CI 实测见 artifact） | `.app` + `tailcat-manager-0.2.0.dmg` | 待 CI 记录 |
+
+`mygo build` 与 `go build` 的差别，以及为什么发布不能只发 `go build` 的产物：
+
+1. **终端插件进包**：`ghostty-vt.dll`（2.2 MB）/ `libghostty-vt.so` / `libghostty-vt.dylib` 与可执行文件并排、随包走，用户首次打开终端页不需要联网下载。
+2. **图标与版本进可执行文件**：Windows 会生成 `.syso`（图标、清单、版本号），macOS 生成 `AppIcon.icns`，Linux 生成 `.desktop`、多尺寸 PNG 与安装脚本。
+3. **版本号**：`mygo.json` 的 `version` 通过 `-X github.com/egoist/mygo.packageVersion` 链进去，`tailcat-manager --version` 打印的就是它；`go build` 的产物没有这个变量，打印 `dev`。
+4. **资源目录**：`resources/` 会整份拷到可执行文件旁边（当前只有 `icon.png`），`resources/<os>[-<arch>]/` 只发给对应平台。
+
+`dist/` 已被 `.gitignore` 忽略；不要把产物提交进仓库。
+
 ## 体积预估与结论
 
 - 当前 app 还没 import tailcat（转发器在任务 6 接入），`mygo + onevra` 已占 12–14 MB（stripped）。
@@ -58,6 +84,12 @@
 - `-ldflags "-s -w"` 稳定省掉 30% 左右，发布构建一律带上。
 
 ## 复核方法
+
+```sh
+go tool mygo build -platform windows/amd64            # 含安装包
+go tool mygo build -platform linux/amd64 -o /tmp/tm  # 想要别的输出目录用 -o
+"./dist/windows-amd64/Tailcat Manager.exe" --version  # 应当等于 mygo.json 的 version
+```
 
 ```sh
 CGO_ENABLED=0 go build -ldflags "-s -w" -o dist/tm ./cmd/tailcat-manager

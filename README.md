@@ -19,6 +19,32 @@ CGO_ENABLED=0 GOOS=linux go build ./cmd/tailcat-manager
 go run ./cmd/tailcat-manager --demo
 ```
 
+## 安装
+
+发布包用 `go tool mygo build` 生成（配置在 `mygo.json`，工具版本钉在 `go.mod` 的 `tool` 指令里，本地与 CI 同一条命令）：
+
+```sh
+CGO_ENABLED=0 go tool mygo build -platform windows/amd64   # 可执行文件 + 安装包
+CGO_ENABLED=0 go tool mygo build -platform linux/amd64,linux/arm64
+CGO_ENABLED=0 go tool mygo build -platform darwin/universal -sign -   # 需要在 macOS 上跑
+```
+
+| 平台 | 产物 |
+|---|---|
+| macOS | `Tailcat Manager.app` + `tailcat-manager-0.2.0.dmg` |
+| Windows | `Tailcat Manager.exe` + `tailcat-manager-setup-0.2.0-amd64.exe` |
+| Linux | 可执行文件 + `.deb` / `.rpm` / `.tar.gz`（含 `install.sh`）/ `PKGBUILD` |
+
+发布包装好了终端插件（libghostty-vt），**首次打开终端页不需要联网**；`go build` 的产物会临时下载它。
+
+查看版本：
+
+```sh
+tailcat-manager --version   # Tailcat Manager 0.2.0；普通 go build 的产物打印 dev
+```
+
+> **macOS**：没有 Developer ID 的包是 ad-hoc 签名的，Gatekeeper 会拦。首次打开请右键 →「打开」，或执行 `xattr -dr com.apple.quarantine "/Applications/Tailcat Manager.app"`。正式发布需要 Developer ID 与公证（`MACOS_SIGNING_IDENTITY`）。
+
 ## 平台前提
 
 | 平台 | ADB | scrcpy | 凭据库 | 自动安装 |

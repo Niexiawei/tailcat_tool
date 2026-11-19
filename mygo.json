@@ -1,0 +1,11 @@
+{
+  "name": "Tailcat Manager",
+  "slug": "tailcat-manager",
+  "identifier": "cc.nicoi.tailcat-manager",
+  "version": "0.2.0",
+  "copyright": "© 2026 Niexiawei",
+  "publisher": "Niexiawei",
+  "license": "MIT",
+  "main": "./cmd/tailcat-manager",
+  "macos": { "signingIdentity": "" }
+}

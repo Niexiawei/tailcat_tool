@@ -12,18 +12,36 @@ import (
 	"github.com/google/uuid"
 )
 
-// Service is the credential-store service name. It is the one the Swift build
-// used, so addresses saved by that build are read without re-entry.
-const Service = "cc.coauto.tailcat-manager.connections"
+// Service is the credential-store service name, the bundle identifier plus
+// what the addresses are, so that nothing else in the app's identifier reads
+// them by accident.
+const Service = "cc.nicoi.tailcat-manager.connections"
+
+// legacyService is the service name of the Swift build and of 0.1.0. Those
+// addresses are still read, so an upgraded app does not ask for them again;
+// everything written from here on goes to Service.
+const legacyService = "cc.coauto.tailcat-manager.connections"
+
+// secretsModule is the part of mygo.SecretsModule this package uses, so that
+// a test can stand in for the system store.
+type secretsModule interface {
+	Get(key string) ([]byte, error)
+	Set(key string, value []byte) error
+	Delete(key string) error
+}
 
 // Store implements core.CredentialStore on top of mygo.Secrets.
 type Store struct {
-	secrets mygo.SecretsModule
+	secrets secretsModule
+	legacy  secretsModule
 }
 
 // New returns a store backed by the system credential store.
 func New() *Store {
-	return &Store{secrets: mygo.Secrets.Service(Service)}
+	return &Store{
+		secrets: mygo.Secrets.Service(Service),
+		legacy:  mygo.Secrets.Service(legacyService),
+	}
 }
 
 // Available reports whether this machine has a usable credential store. Linux
@@ -43,16 +61,26 @@ func AccountKey(id uuid.UUID) string {
 	return strings.ToUpper(id.String())
 }
 
-// Read returns the stored address.
+// Read returns the stored address, falling back to the service name the Swift
+// build and 0.1.0 used.
 func (s *Store) Read(id uuid.UUID) (string, bool, error) {
-	raw, err := s.secrets.Get(AccountKey(id))
-	if errors.Is(err, mygo.ErrSecretNotFound) {
-		return "", false, nil
+	sources := []secretsModule{s.secrets, s.legacy}
+	var failure error
+	for _, source := range sources {
+		if source == nil {
+			continue
+		}
+		raw, err := source.Get(AccountKey(id))
+		if errors.Is(err, mygo.ErrSecretNotFound) {
+			continue
+		}
+		if err != nil {
+			failure = core.Errorf("无法从系统凭据库读取连接地址：%v", err)
+			continue
+		}
+		return string(raw), true, nil
 	}
-	if err != nil {
-		return "", false, core.Errorf("无法从系统凭据库读取连接地址：%v", err)
-	}
-	return string(raw), true, nil
+	return "", false, failure
 }
 
 // Write stores an address after checking it fits the smallest store.
@@ -66,11 +94,17 @@ func (s *Store) Write(address string, id uuid.UUID) error {
 	return nil
 }
 
-// Delete removes an address; a missing entry is not an error.
+// Delete removes an address from both service names, so a device that is
+// removed and added back does not inherit the address the old one held; a
+// missing entry is not an error.
 func (s *Store) Delete(id uuid.UUID) error {
-	err := s.secrets.Delete(AccountKey(id))
-	if err != nil && !errors.Is(err, mygo.ErrSecretNotFound) {
-		return core.Errorf("无法从系统凭据库删除连接地址：%v", err)
+	for _, source := range []secretsModule{s.secrets, s.legacy} {
+		if source == nil {
+			continue
+		}
+		if err := source.Delete(AccountKey(id)); err != nil && !errors.Is(err, mygo.ErrSecretNotFound) {
+			return core.Errorf("无法从系统凭据库删除连接地址：%v", err)
+		}
 	}
 	return nil
 }

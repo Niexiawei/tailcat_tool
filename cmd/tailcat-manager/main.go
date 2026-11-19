@@ -18,12 +18,27 @@ import (
 	"github.com/egoist/mygo"
 )
 
-//go:embed resources/tray.png
-var trayIcon []byte
+//go:embed resources/tray-light.png
+var trayLight []byte
+
+//go:embed resources/tray-dark.png
+var trayDark []byte
 
 var running *app.App
 
 func main() {
+	// --version answers before anything else: asking what this build is must
+	// not compete for the single-instance lock with a running copy.
+	demo := false
+	for _, arg := range os.Args[1:] {
+		switch arg {
+		case "--demo":
+			demo = true
+		case "--version", "-version", "-v":
+			fmt.Println(app.AppName, versionText())
+			return
+		}
+	}
 	if !mygo.App.RequestSingleInstanceLock() {
 		// Another copy owns the channels; it was asked to show its window.
 		return
@@ -33,12 +48,6 @@ func main() {
 			running.Show()
 		}
 	})
-	demo := false
-	for _, arg := range os.Args[1:] {
-		if arg == "--demo" {
-			demo = true
-		}
-	}
 	// Every string this app owns is Chinese; this also makes the component
 	// library's own labels (toast close, breadcrumb overflow) Chinese.
 	mygo.App.SetLocale("zh-Hans")
@@ -48,7 +57,7 @@ func main() {
 			env = app.NewDemoEnvironment()
 		}
 		running = app.New(env)
-		running.Start(trayIcon)
+		running.Start(app.TrayIcons{Light: trayLight, Dark: trayDark})
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)

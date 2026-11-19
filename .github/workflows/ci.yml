@@ -37,8 +37,18 @@ jobs:
       - name: test
         run: go test -race ./...
 
-  cross:
-    runs-on: ubuntu-latest
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux/amd64,linux/arm64
+          - os: macos-latest
+            platform: darwin/universal
+          - os: windows-latest
+            platform: windows/amd64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -47,13 +57,41 @@ jobs:
           go-version: '1.27.3'
           check-latest: true
 
-      - name: cross compile
+      - name: build packages
         env:
           CGO_ENABLED: '0'
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        shell: bash
         run: |
           set -e
-          for target in linux/amd64 darwin/arm64 darwin/amd64 windows/amd64; do
-            os=${target%/*}; arch=${target#*/}
-            GOOS=$os GOARCH=$arch go build -ldflags "-s -w" -o "dist/tm-$os-$arch" ./cmd/tailcat-manager
-          done
-          ls -l dist
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            sign=-
+            if [ -n "$SIGN_IDENTITY" ]; then
+              sign="$SIGN_IDENTITY"
+            else
+              echo "::warning::no macOS signing identity; the dmg is ad-hoc signed and Gatekeeper will block it"
+            fi
+            go tool mygo build -platform "${{ matrix.platform }}" -sign "$sign"
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            # The installer needs NSIS, which mygo build downloads. A runner
+            # without it still has to produce the executable, but never
+            # without saying that the installer is missing.
+            if ! go tool mygo build -platform "${{ matrix.platform }}"; then
+              echo "::warning::the Windows installer could not be built (NSIS download failed?); shipping the executable only"
+              go tool mygo build -platform "${{ matrix.platform }}" -skip-installer
+            fi
+          else
+            go tool mygo build -platform "${{ matrix.platform }}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tailcat-manager-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            dist/*.dmg
+            dist/*.exe
+            dist/*.deb
+            dist/*.rpm
+            dist/*.tar.gz
+            dist/*.AppImage
