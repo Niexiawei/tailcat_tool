@@ -319,22 +319,28 @@ func TestLogcatSnapshotKeepsTheNewestMatchingRows(t *testing.T) {
 	}
 }
 
-func TestLogcatClearKeepsTheCounters(t *testing.T) {
-	stream, _ := newTestLogcatStream(10)
-	for i := 0; i < 3; i++ {
+func TestLogcatClearResetsTheCounters(t *testing.T) {
+	stream, _ := newTestLogcatStream(3)
+	for i := 0; i < 5; i++ {
 		stream.append(logcatTextMS(i, "I", "Tag", "line"))
+	}
+	if snap := stream.Snapshot(LogcatFilter{}); snap.Dropped != 2 || snap.Received != 5 {
+		t.Fatalf("Received/Dropped = %d/%d before Clear, want 5/2", snap.Received, snap.Dropped)
 	}
 	stream.Clear()
 	snap := stream.Snapshot(LogcatFilter{})
 	if len(snap.Entries) != 0 {
-		t.Fatalf("kept %d lines after Clear", len(snap.Entries))
+		t.Fatalf("kept %d entries after Clear", len(snap.Entries))
 	}
-	if snap.Received != 3 {
-		t.Fatalf("Received = %d, want 3: clearing is not forgetting how much came", snap.Received)
+	// "清空" empties the buffer and the two counters that describe it: a page
+	// that says 「显示 0 条」 next to 「已接收 5 行 · 丢弃 2 条」 reads as a page
+	// that lost five lines it still claims to hold.
+	if snap.Received != 0 || snap.Dropped != 0 {
+		t.Fatalf("Received/Dropped = %d/%d after Clear, want 0/0", snap.Received, snap.Dropped)
 	}
 	stream.append(logcatText("I", "Tag", "after"))
-	if seq := stream.Snapshot(LogcatFilter{}).Entries[0].Seq; seq <= 3 {
-		t.Fatalf("Seq = %d, want it to keep counting after Clear", seq)
+	if seq := stream.Snapshot(LogcatFilter{}).Entries[0].Seq; seq <= 5 {
+		t.Fatalf("Seq = %d, want it to keep counting after Clear: it names rows, not lines", seq)
 	}
 }
 

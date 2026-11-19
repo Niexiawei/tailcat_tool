@@ -352,12 +352,16 @@ func (s *LogcatStream) Version() uint64 {
 	return s.version
 }
 
-// Clear drops the kept lines; the counters keep counting, because "this stream
-// has received N lines" stays true after the reader emptied it.
+// Clear drops the kept entries and the counters that describe them, so the page
+// starts from zero: "cleared" means the buffer holds nothing and has received
+// nothing since. Seq keeps counting — it names rows, and a row must never reuse
+// another row's identity.
 func (s *LogcatStream) Clear() {
 	s.mu.Lock()
 	s.entries = nil
 	s.bytes = 0
+	s.received = 0
+	s.dropped = 0
 	s.version++
 	s.mu.Unlock()
 }

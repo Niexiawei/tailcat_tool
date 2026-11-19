@@ -352,8 +352,10 @@ func TestLogcatClearEmptiesTheTable(t *testing.T) {
 	if tt.HasText("will be cleared") {
 		t.Fatalf("the cleared line is still on screen; texts = %v", tt.Texts())
 	}
-	if !tt.HasText("已接收 1 行") {
-		t.Fatalf("clearing forgot how many lines came; texts = %v", tt.Texts())
+	// The counters describe the buffer, so they go with it: 「显示 0 条」 beside
+	// 「已接收 1 行」 reads as one lost line.
+	if !tt.HasText("已接收 0 行 · 显示 0 条") {
+		t.Fatalf("clearing left the counters behind; texts = %v", tt.Texts())
 	}
 }
 
