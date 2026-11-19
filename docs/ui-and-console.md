@@ -185,6 +185,7 @@ if !open {
 - **`Fit` 只给"外面那个框负责滚"的地方**：`Fit` 的表高=内容高，所以它不会藏行，也不会出现第二条滚动条。前提是**行高统一**：`Fit` 会把每行钉成主题的最小行高（`ListState.RowHeight`），因为行里放按钮的行天然比表头高，按"最小行高"估算表高会每行差一两像素，最后几行就被表格自己的滚动条藏起来（`TestDerpPresetTableShowsEverySavedRow` 钉住）。反过来说，一张几百行的表会一次性建出所有行——用在预设列表（几十条）可以，不要用在文件列表那种没有上限的地方。
 - **行级点击走 `ListState.Selected` + `Table(...).Changed()`**：`ui.Table` 没有 `TableRow.Clicked()`；`Selected` 初始给 -1，否则点第一行"没变化"。
 - **排序由页面算，不由组件算**：把 `&state.Sort` 交给表，建表前用 `Sort` 里的列自己排好行序（资源页 `sortApps` / `sortProcessRows`）。
+- **筛选框一律 `ui.SearchField`**：放大镜、非空时的清除按钮、Escape 清空都是它自带的。绑定的是**草稿**，`Submitted()`（Enter）或清空才落到真正筛选用的字段（`logFilter.searchDraft`、`logcatState.tagDraft/termDraft`、`resourceState.filterDraft`）。不要再用 `components.TextBox` 配 `LeadingIcon: lucide.Search()` 逐字生效——三个页面各写一遍已经不划算，规则写在这里；清空必须立刻生效，否则读者面对一个看不见又摘不掉的筛选。
 - **可能被截断的单行文本**都要挂 `components.Tooltip` 给全文（见 §10）。
 
 ## 4. 侧栏

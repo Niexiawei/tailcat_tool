@@ -967,3 +967,48 @@ func TestSortKeepsTheExpandedGroup(t *testing.T) {
 		t.Fatalf("sorting closed the group the user opened; texts = %v", tt.Texts())
 	}
 }
+
+// The toolbar's box is a search field: typing narrows nothing until Enter, and
+// its clear button takes the filter off. Filtering both tables on every
+// keystroke made a slow device jump under the reader as they typed.
+func TestResourceFilterAppliesOnEnter(t *testing.T) {
+	vm, _ := resourceFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	tt.Frame()
+	if !tt.HasText("system_server") {
+		t.Fatalf("the unfiltered table is missing a group; texts = %v", tt.Texts())
+	}
+
+	if err := tt.Click("筛选应用或进程"); err != nil {
+		t.Fatalf("Click(筛选应用或进程) error: %v", err)
+	}
+	tt.Type("remote")
+	tt.Frame()
+	if got := vm.resourceStateFor(profile.ID).filter; got != "" {
+		t.Fatalf("the tables filtered on a keystroke: filter = %q", got)
+	}
+	if !tt.HasText("system_server") {
+		t.Fatalf("the rows left before Enter; texts = %v", tt.Texts())
+	}
+
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if got := vm.resourceStateFor(profile.ID).filter; got != "remote" {
+		t.Fatalf("Enter did not filter: filter = %q", got)
+	}
+	if tt.HasText("system_server") {
+		t.Fatalf("the filter did not narrow the table; texts = %v", tt.Texts())
+	}
+
+	if err := tt.Click("Clear"); err != nil {
+		t.Fatalf("Click(Clear) error: %v", err)
+	}
+	tt.Frame()
+	if got := vm.resourceStateFor(profile.ID).filter; got != "" {
+		t.Fatalf("Clear left filter = %q", got)
+	}
+	if !tt.HasText("system_server") {
+		t.Fatalf("Clear did not bring the rows back; texts = %v", tt.Texts())
+	}
+}
