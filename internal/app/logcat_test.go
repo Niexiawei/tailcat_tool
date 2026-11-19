@@ -683,9 +683,13 @@ func TestLogcatTagCellShowsTheProcessName(t *testing.T) {
 }
 
 // logcatBurst is n distinct lines, so nothing merges and the table overflows.
-func logcatBurst(n int) string {
+func logcatBurst(n int) string { return logcatBurstFrom(0, n) }
+
+// logcatBurstFrom is the same for lines [from, to): a second burst reads as new
+// lines arriving over a stream that already has some.
+func logcatBurstFrom(from, to int) string {
 	var b strings.Builder
-	for i := 0; i < n; i++ {
+	for i := from; i < to; i++ {
 		b.WriteString(fmt.Sprintf("11-18 09:30:%02d.%03d  1  1 I Tag: line %d\n", (i/1000)%60, i%1000, i))
 	}
 	return b.String()
@@ -722,4 +726,38 @@ func TestTurningFollowBackOnJumpsToTheNewestLine(t *testing.T) {
 		t.Fatalf("Click(跟随最新) error: %v", err)
 	}
 	waitForText(t, tt, "line 59")
+}
+
+func TestLogcatOffersAWayBackToTheNewestLine(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 400)
+	tt.Frame()
+	runner.feed(logcatBurst(60))
+	for i := 0; i < 3; i++ {
+		tt.Frame()
+	}
+	if tt.HasText("跳到最新") {
+		t.Fatalf("offered the jump while the list shows its end; texts = %v", tt.Texts())
+	}
+
+	// The reader scrolled up to read something, and the stream kept running.
+	vm.Logcat.table.ScrollTo(0, ui.Start)
+	tt.Frame()
+	runner.feed(logcatBurstFrom(60, 65))
+	for i := 0; i < 3; i++ {
+		tt.Frame()
+	}
+	if tt.HasText("line 64") {
+		t.Fatalf("the list followed a reader who scrolled away; texts = %v", tt.Texts())
+	}
+	if !tt.HasText("跳到最新") {
+		t.Fatalf("no way back to the newest line while it is being written; texts = %v", tt.Texts())
+	}
+	if !tt.HasText("已暂停跟随") {
+		t.Fatalf("the row does not say why the stream stopped moving; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("跳到最新"); err != nil {
+		t.Fatalf("Click(跳到最新) error: %v", err)
+	}
+	waitForText(t, tt, "line 64")
 }
