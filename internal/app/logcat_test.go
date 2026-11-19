@@ -761,3 +761,47 @@ func TestLogcatOffersAWayBackToTheNewestLine(t *testing.T) {
 	}
 	waitForText(t, tt, "line 64")
 }
+
+// The copy button closes the row and must stay there: a column the reader can
+// drag to the middle is one they have to go looking for.
+func TestLogcatCopyColumnStaysLast(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 500)
+	tt.Frame()
+	runner.feed(logcatBurst(4))
+	tt.Frame()
+
+	// What a drag of the copy column's header would have saved.
+	vm.Logcat.table.Columns.Order = []string{"copy", "at"}
+	tt.Frame()
+
+	copyRect, ok := tt.Find("复制这一行")
+	if !ok {
+		t.Fatalf("no copy button; texts = %v", tt.Texts())
+	}
+	textHead, ok := tt.Find("内容")
+	if !ok {
+		t.Fatalf("no 内容 header; texts = %v", tt.Texts())
+	}
+	if copyRect.X <= textHead.X {
+		t.Fatalf("the copy button moved to x=%v, left of the 内容 column at %v: the column was dragged out of place",
+			copyRect.X, textHead.X)
+	}
+}
+
+// The widths are chosen so the button stays on screen in a window that is still
+// usable, rather than sliding out of the right edge behind a sideways scroll.
+func TestLogcatCopyButtonStaysOnScreenInANarrowWindow(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 600, 460)
+	tt.Frame()
+	runner.feed(logcatBurst(4))
+	tt.Frame()
+	rect, ok := tt.Find("复制这一行")
+	if !ok {
+		t.Fatalf("no copy button; texts = %v", tt.Texts())
+	}
+	if rect.W < 16 || rect.X+rect.W > 600 {
+		t.Fatalf("the copy button is clipped at %v in a 600 wide window: widen the flexible column instead", rect)
+	}
+}

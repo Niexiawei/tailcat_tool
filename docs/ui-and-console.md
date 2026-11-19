@@ -637,6 +637,8 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 
 **但"开关开着却不在末尾"仍然会出现**，而且是故意的：读者往上滚看历史时，mygo 会把 `following` 置 false（否则日志流每 100 ms 就把他拽回末尾，没法读）。这时开关的状态是骗人的——它说"跟随最新"，实际不跟。补法不是偷偷把它关掉，而是在底栏露出 **「已暂停跟随」+ 「跳到最新」**：一次点击 `ScrollToEnd()`，把读者送回正在写的那一行。判据用 `ListState.AtEnd()`（读上一帧的布局，所以底栏必须建在表格**之后**）。`TestLogcatOffersAWayBackToTheNewestLine` 钉住三件事：在末尾时不露这个按钮、滚走后不强行跟随、点了就回到最新。
 
+**复制列是固定列**（`TableColumn.Fixed` + `Align: ui.End`）：`ui.Table` 默认让用户拖动表头换列序、拉边框改列宽，而 `ListState.Columns` 会把这份布局存下来——复制按钮因此会被拖到中间，或者被拉宽到挤出右边缘。`Fixed` 让它在声明的位置（最后）不动、不可拉宽，行序怎么排都不影响。另外**固定列不会被压缩**，所以四列时间/级别/PID/标签的宽度是算着 600 DIP 窗口给的（150/64/64/190 会挤到 564，132/58/56/190 不会）：窗口再窄就只剩横向滚动，那是表格通用的取舍。`TestLogcatCopyColumnStaysLast` 用一次伪造的拖拽（`Columns.Order = ["copy","at"]`）钉住位置，`TestLogcatCopyButtonStaysOnScreenInANarrowWindow` 在 600 DIP 窗口里钉住可见性。
+
 **行序旧→新（与 §14 的时间线正相反）**：流就是往下滚的读法，新行出现在底部。`ui.ListState.FollowEnd` 正好是这个语义——`FollowEnd = 跟随最新`，用户往上滚就自动停止跟随、滚回底部又继续。表格的行身份是 `LogcatEntry.Seq`：两行日志可以时间、级别、标签、正文全同，只有序号能区分。
 
 **数据来源**：`core.LogcatStream`（`internal/core/logcat.go`），不是任务、不进 SQLite、没有超时、不占任务面板。`Manager.StartLogcat` 用 `Runner.Start` 跑 `adb -s SERIAL logcat -v threadtime`，输出在管道协程里拆行 → 解析 → 进一个环形缓冲（**30000 条 / 16 MB**，谁先满就从最早的一端丢）；页面每帧只调 `Snapshot(filter)` 取当前缓冲里全部命中筛选的条目——表格是虚拟化的，所以缓冲里有多少就能滚多少，没有第二道上限。一台设备同时只有一条流，换设备先关旧的。

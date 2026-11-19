@@ -397,14 +397,19 @@ func (vm *ViewModel) logcatBox(c *ui.Context, f *logcatState) {
 // logcatColumns is the table's column layout: the timestamp and the tag need
 // the most room, the level and the pid the least. The message takes whatever is
 // left and the copy button closes the row.
+//
+// The copy column is Fixed so a drag cannot move it out of the row's right end
+// or widen it, and the four fixed columns before it are sized so that it stays
+// on screen in a 600 DIP window: a Fixed column is never squeezed, so their sum
+// is the width the button needs.
 func logcatColumns() []ui.TableColumn {
 	return []ui.TableColumn{
-		{ID: "at", Title: "时间", Width: 150},
-		{ID: "level", Title: "级别", Width: 64},
-		{ID: "pid", Title: "PID", Width: 64},
+		{ID: "at", Title: "时间", Width: 132},
+		{ID: "level", Title: "级别", Width: 58},
+		{ID: "pid", Title: "PID", Width: 56},
 		{ID: "tag", Title: "标签", Width: 190},
 		{ID: "text", Title: "内容"},
-		{ID: "copy", Title: "", Width: 44},
+		{ID: "copy", Title: "", Width: 44, Fixed: true, Align: ui.End},
 	}
 }
 
