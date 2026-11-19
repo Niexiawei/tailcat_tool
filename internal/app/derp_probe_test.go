@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -281,5 +282,126 @@ func TestDerpLastProbeTimeIsShownOnceACycleRan(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("上次检测") {
 		t.Fatalf("no 上次检测 after a cycle; texts = %v", tt.Texts())
+	}
+}
+
+// detailProbeMap is one region with two nodes: one that answers, one that does
+// not, so the detail page has both icons side by side.
+const detailProbeMap = `{"Regions":{"901":{"RegionID":901,"RegionCode":"test","RegionName":"东京","Nodes":[
+ {"Name":"901a","RegionID":901,"HostName":"a1.example.com","DERPPort":443},
+ {"Name":"901b","RegionID":901,"HostName":"a2.example.com","DERPPort":443,"STUNPort":-1}]}}}`
+
+// probedDetail opens the detail page of one preset after a finished cycle.
+func probedDetail(t *testing.T, prober core.NodeProber, source string) (*ViewModel, *ui.Tester) {
+	t.Helper()
+	vm := probeDerpViewModel(t, prober, nil, core.SaveRelayPresetRequest{Name: "公司自建", Source: source})
+	vm.Manager.RefreshRelayProbes()
+	waitForProbes(t, vm)
+	vm.OpenDerpDetail(vm.Manager.RelayPresets()[0].ID)
+	tt := ui.NewTester(vm.ContentView, 1100, 800)
+	waitForText(t, tt, "901a")
+	return vm, tt
+}
+
+func TestDerpDetailDrawsOneProbeIconPerNode(t *testing.T) {
+	_, tt := probedDetail(t, &listProber{}, detailProbeMap)
+	icons := 0
+	for _, info := range tt.AccessAll() {
+		if info.Role == ui.RoleImage && (strings.HasSuffix(info.Name, " 可用") || strings.HasSuffix(info.Name, " 不可用")) {
+			icons++
+		}
+	}
+	if icons != 2 {
+		t.Fatalf("probe icons = %d, want one per node; access = %v", icons, tt.AccessAll())
+	}
+}
+
+func TestDerpProbeIconSaysAvailableOrNot(t *testing.T) {
+	_, tt := probedDetail(t, &listProber{dead: map[string]bool{"901b": true}}, detailProbeMap)
+	if _, ok := tt.AccessByRole(ui.RoleImage, "901a 可用"); !ok {
+		t.Fatalf("no 可用 icon for the node that answered; access = %v", tt.AccessAll())
+	}
+	if _, ok := tt.AccessByRole(ui.RoleImage, "901b 不可用"); !ok {
+		t.Fatalf("no 不可用 icon for the node that did not; access = %v", tt.AccessAll())
+	}
+}
+
+func TestDerpProbeIconIsDashedBeforeTheFirstCycle(t *testing.T) {
+	vm := probeDerpViewModel(t, &listProber{}, nil,
+		core.SaveRelayPresetRequest{Name: "公司自建", Source: detailProbeMap})
+	vm.OpenDerpDetail(vm.Manager.RelayPresets()[0].ID)
+	tt := ui.NewTester(vm.ContentView, 1100, 800)
+	waitForText(t, tt, "901a")
+	if _, ok := tt.AccessByRole(ui.RoleImage, "901a 未检测"); !ok {
+		t.Fatalf("an unprobed node has no 未检测 icon; access = %v", tt.AccessAll())
+	}
+}
+
+func TestDerpDetailProbeTooltipNamesBothChecks(t *testing.T) {
+	_, tt := probedDetail(t, &listProber{dead: map[string]bool{"901b": true}}, detailProbeMap)
+	// Both checks belong in the tooltip: the cell is a few icons wide.
+	icon, ok := tt.AccessByRole(ui.RoleImage, "901a 可用")
+	if !ok {
+		t.Fatalf("no 901a icon; access = %v", tt.AccessAll())
+	}
+	tt.Move(icon.Bounds.X+icon.Bounds.W/2, icon.Bounds.Y+icon.Bounds.H/2)
+	tt.Advance(1500 * time.Millisecond)
+	tt.Frame()
+	found := false
+	for _, info := range tt.AccessAll() {
+		if info.Role == ui.RoleTooltip && strings.Contains(info.Name, "HTTP 通") && strings.Contains(info.Name, "STUN 通") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the icon's tooltip names no checks; access = %v", tt.AccessAll())
+	}
+}
+
+func TestRelayProbeSummarySkipsNodesWithoutASTUNPort(t *testing.T) {
+	probe := core.RelayProbe{Nodes: []core.RelayNodeProbe{
+		{HTTP: core.RelayCheck{Ran: true, OK: true}, STUN: core.RelayCheck{Ran: true, OK: true}},
+		{HTTP: core.RelayCheck{Ran: true, OK: true}, STUN: core.RelayCheck{Ran: true, OK: false, Note: "超时"}},
+		{HTTP: core.RelayCheck{Ran: true, OK: false, Note: "超时"}, STUN: core.RelayCheck{Ran: false}},
+	}, CheckedAt: time.Now()}
+	got := relayProbeSummary(probe)
+	if !strings.Contains(got, "可用 2/3 节点") {
+		t.Fatalf("summary = %q, want 可用 2/3 节点", got)
+	}
+	if !strings.Contains(got, "STUN 通 1/2") {
+		t.Fatalf("summary = %q, the STUN denominator must skip nodes without a STUN port", got)
+	}
+	if !strings.Contains(got, "上次检测：") {
+		t.Fatalf("summary = %q, want the time in it", got)
+	}
+}
+
+func TestDerpDetailSummaryCountsRelayAndStun(t *testing.T) {
+	_, tt := probedDetail(t, &listProber{dead: map[string]bool{"901b": true}}, detailProbeMap)
+	if !tt.HasText("可用 1/2 节点") {
+		t.Fatalf("the detail page shows no 可用 1/2 节点; texts = %v", tt.Texts())
+	}
+	// 901b has no STUN port, so only 901a counts there — and it answers.
+	if !tt.HasText("STUN 通 1/1") {
+		t.Fatalf("the detail page does not count STUN; texts = %v", tt.Texts())
+	}
+}
+
+func TestDerpDetailProbeNowStartsACycle(t *testing.T) {
+	vm := probeDerpViewModel(t, &listProber{}, nil,
+		core.SaveRelayPresetRequest{Name: "公司自建", Source: detailProbeMap})
+	vm.OpenDerpDetail(vm.Manager.RelayPresets()[0].ID)
+	tt := ui.NewTester(vm.ContentView, 1100, 800)
+	waitForText(t, tt, "901a")
+	if err := tt.Click("立即检测"); err != nil {
+		t.Fatalf("Click() error: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !tt.HasText("可用 2/2 节点") && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+		tt.Frame()
+	}
+	if !tt.HasText("可用 2/2 节点") {
+		t.Fatalf("立即检测 produced no summary; texts = %v", tt.Texts())
 	}
 }

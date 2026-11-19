@@ -255,6 +255,35 @@ func relayProbeCell(probe core.RelayProbe) string {
 	return itoa(ok) + "/" + itoa(total)
 }
 
+// relayProbeSummary is the detail page's summary line: how many nodes answer
+// now, how many of those with a STUN port answer over UDP, and when that was
+// measured. A node without a STUN port stays out of the STUN denominator: it
+// never had a chance to fail.
+func relayProbeSummary(probe core.RelayProbe) string {
+	if probe.Err != "" {
+		return "检测失败：" + probe.Err
+	}
+	ok, total := probe.Available()
+	if total == 0 {
+		return ""
+	}
+	line := "可用 " + itoa(ok) + "/" + itoa(total) + " 节点"
+	stunOK, stunTotal := 0, 0
+	for _, node := range probe.Nodes {
+		if !node.STUN.Ran {
+			continue
+		}
+		stunTotal++
+		if node.STUN.OK {
+			stunOK++
+		}
+	}
+	if stunTotal > 0 {
+		line += " · STUN 通 " + itoa(stunOK) + "/" + itoa(stunTotal)
+	}
+	return line + " · 上次检测：" + probe.CheckedAt.Format("2006-01-02 15:04:05")
+}
+
 // relayProbeLabel is the default node row's summary. It has no column heading
 // over it, so the count needs the word that says what it counts.
 func relayProbeLabel(probe core.RelayProbe) string {
@@ -330,6 +359,8 @@ func (vm *ViewModel) derpDetailPage(c *ui.Context, rawID string) {
 	theme := c.Theme()
 	preview, previewErr, loading := vm.derpPreviewState(preset.Source)
 	usage := derivedRelayUsers(vm.Manager.AllProfiles(), preset.Source)
+	probe, probed := vm.Manager.RelayProbe(preset.Source)
+	probeRunning := vm.Manager.RelayProbeRunning()
 
 	ui.Column(c).Fill().Padding(20).Gap(12).Children(func() {
 		// A map can hold 128 regions, so the whole page scrolls rather than
@@ -350,6 +381,11 @@ func (vm *ViewModel) derpDetailPage(c *ui.Context, rawID string) {
 				if len(usage) > 0 {
 					components.Text(c, "正在使用："+strings.Join(usage, "、")).FontSize(11).TextColor(theme.TextMuted)
 				}
+				// The count and the time sit together: a number without its time
+				// reads as a live reading.
+				if summary := relayProbeSummary(probe); summary != "" {
+					components.Text(c, summary).FontSize(11).TextColor(theme.TextMuted)
+				}
 
 				ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 					if vm.derpInfoFor(preset.Source).kind == core.RelayURL {
@@ -369,8 +405,15 @@ func (vm *ViewModel) derpDetailPage(c *ui.Context, rawID string) {
 					if actionButton(c, lucide.RefreshCw, "重新获取", components.ButtonSecondary).Clicked() {
 						vm.startDerpPreview(preset)
 					}
+					if components.Button(c, "立即检测", components.ButtonSecondary).Clicked() {
+						vm.Manager.RefreshRelayProbes()
+					}
 					if loading {
 						components.Spinner(c, components.SpinnerRing)
+					}
+					if probeRunning {
+						components.Spinner(c, components.SpinnerRing)
+						components.Text(c, "检测中").FontSize(11).TextColor(theme.TextMuted)
 					}
 					if !preview.FetchedAt.IsZero() {
 						components.Text(c, "上次获取："+preview.FetchedAt.Format("2006-01-02 15:04:05")).FontSize(11).TextColor(theme.TextMuted)
@@ -387,7 +430,7 @@ func (vm *ViewModel) derpDetailPage(c *ui.Context, rawID string) {
 				}
 
 				if preview.Map != nil {
-					vm.derpRegionTable(c, preview)
+					vm.derpRegionTable(c, preview, probe, probed)
 					components.Collapsible(c, "原始 JSON", &vm.DerpJSONOpen, components.CollapsibleOptions{}, func() {
 						vm.derpRawJSON(c, preview.JSON)
 					})
@@ -399,17 +442,25 @@ func (vm *ViewModel) derpDetailPage(c *ui.Context, rawID string) {
 
 // derpRegionTable lists the regions of one map. Regions come out of a Go map,
 // so the table sorts by ID rather than trusting iteration order.
-func (vm *ViewModel) derpRegionTable(c *ui.Context, preview core.RelayMapPreview) {
+func (vm *ViewModel) derpRegionTable(c *ui.Context, preview core.RelayMapPreview, probe core.RelayProbe, probed bool) {
 	ids := make([]tailcfg.DERPRegionID, 0, len(preview.Map.Regions))
 	for id := range preview.Map.Regions {
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	// One lookup for the whole table: a cell asking the manager per node would
+	// take a lock per icon, per frame.
+	byNode := map[string]core.RelayNodeProbe{}
+	for _, node := range probe.Nodes {
+		byNode[relayProbeKey(node.RegionID, node.Name)] = node
+	}
 	tableCard(c, &vm.DerpRegionTable, []ui.TableColumn{
 		{Title: "区域", ID: "region", Width: 68},
 		{Title: "代码", ID: "code", Width: 110},
 		{Title: "名称", ID: "name", MinWidth: 140},
 		{Title: "节点", ID: "nodes", MinWidth: 200},
+		// One icon per node, in the same order as the 节点 column.
+		{Title: "可用", ID: "probe", MinWidth: 72},
 		{Title: "STUN 端口", ID: "stun", Width: 100},
 		{Title: "仅 STUN", ID: "stunonly", Width: 80},
 	}, len(ids), tableOptions{
@@ -417,11 +468,12 @@ func (vm *ViewModel) derpRegionTable(c *ui.Context, preview core.RelayMapPreview
 		// its room for 原始 JSON.
 		Label: "区域表", Rows: len(ids),
 	}, func(row, col int) {
-		vm.derpRegionCell(c, col, preview.Map.Regions[ids[row]])
+		vm.derpRegionCell(c, col, preview.Map.Regions[ids[row]], byNode, probed)
 	})
 }
 
-func (vm *ViewModel) derpRegionCell(c *ui.Context, col int, region *tailcfg.DERPRegion) {
+func (vm *ViewModel) derpRegionCell(c *ui.Context, col int, region *tailcfg.DERPRegion, probes map[string]core.RelayNodeProbe, probed bool) {
+	theme := c.Theme()
 	switch col {
 	case 0:
 		components.Text(c, itoa(int(region.RegionID))).FontSize(11)
@@ -432,9 +484,67 @@ func (vm *ViewModel) derpRegionCell(c *ui.Context, col int, region *tailcfg.DERP
 	case 3:
 		components.Text(c, derpNodeLabel(region)).FontSize(11).SingleLine()
 	case 4:
+		ui.Row(c).AlignItems(ui.Center).Gap(theme.Space(1)).Children(func() {
+			for _, node := range region.Nodes {
+				if node == nil {
+					continue
+				}
+				probe, known := probes[relayProbeKey(node.RegionID, node.Name)]
+				known = known && probed
+				icon, color, label := nodeProbeIcon(theme, node.Name, probe, known)
+				mark := components.Icon(c, icon).Size(theme.Rem(.875), theme.Rem(.875)).TextColor(color).Label(label)
+				components.Tooltip(c, mark, nodeProbeNote(node.Name, probe, known))
+			}
+		})
+	case 5:
 		components.Text(c, derpStunPorts(region)).FontSize(11).SingleLine()
 	default:
 		components.Text(c, derpStunOnly(region)).FontSize(11)
+	}
+}
+
+// relayProbeKey matches a map node with its probe: the name is unique within a
+// region, and a host can appear in two.
+func relayProbeKey(region tailcfg.DERPRegionID, name string) string {
+	return itoa(int(region)) + "|" + name
+}
+
+// nodeProbeIcon is the detail page's 可用 cell for one node.
+func nodeProbeIcon(theme *ui.Theme, name string, probe core.RelayNodeProbe, known bool) (func() *ui.SVG, ui.Color, string) {
+	if !known || (!probe.HTTP.Ran && !probe.STUN.Ran) {
+		return lucide.CircleDashed, theme.TextMuted, name + " 未检测"
+	}
+	if probe.Available() {
+		return lucide.CircleCheck, theme.Success, name + " 可用"
+	}
+	return lucide.CircleX, theme.Warning, name + " 不可用"
+}
+
+// nodeProbeNote is the tooltip under one icon: both checks, in words, so a
+// relay-only node is not mistaken for a working direct path.
+func nodeProbeNote(name string, probe core.RelayNodeProbe, known bool) string {
+	if !known {
+		return name + " · 未检测"
+	}
+	parts := []string{name}
+	if probe.Address != "" {
+		parts = append(parts, probe.Address)
+	}
+	parts = append(parts, "HTTP "+relayCheckWord(probe.HTTP), "STUN "+relayCheckWord(probe.STUN))
+	return strings.Join(parts, " · ")
+}
+
+// relayCheckWord is one check's outcome as a tooltip says it.
+func relayCheckWord(check core.RelayCheck) string {
+	switch {
+	case !check.Ran:
+		return "未测"
+	case check.OK:
+		return "通"
+	case check.Note != "":
+		return check.Note
+	default:
+		return "不通"
 	}
 }
 
