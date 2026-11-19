@@ -504,7 +504,7 @@ go test ./internal/compat/    # 第三方 API 契约
 
 ## 16. 已知缺口与后续工作
 
-1. **真机联调未做**：ADB 实链路、scrcpy 窗口、设备授权流程、`adb disconnect` 干预弹窗，都只有自动化测试与 `--demo` 验证。安装包已经能打（`go tool mygo build`），但还没有人在别人的机器上装过。这是当前最大的未知。
+1. **真机联调只做了一半**（2026-11-19，明细见 `docs/verification.md`）：USB 直连、本地网络直连、`adb disconnect` 后的「等待处理」已在真机模拟器上跑通（`internal/core/live_adb_test.go`，默认跳过）。**没验的**：Tailcat 对端的真链路、设备未授权、端口变化、scrcpy、两台设备同时在线、`adb kill-server` 的多设备聚合（本机只有一台设备）。安装包能打（`go tool mygo build`），但还没有人在别人的机器上装过。
 2. **发布签名与公证未做**：三平台产物都有了，但 macOS 只有 ad-hoc 签名（Gatekeeper 会拦），Windows 安装器没有代码签名，Linux 包没有签名。
 3. **`listenerLost`** 尚未实现（需要监听器健康探测）；`adb kill-server` 的聚合提示已实现（见 §15「多设备干预的聚合」）。
 4. **逐进程 GPU 未实现**：`GPUSample.PerProcessAvailable` 恒为 false，只有整机 GPU 使用率。
@@ -532,4 +532,5 @@ go test ./internal/compat/    # 第三方 API 契约
 | 资源采样与应用信息 | `internal/core/sample.go`、`internal/core/procfs.go`、`internal/appmeta/` |
 | 表单与校验 | `internal/app/editor.go`、`internal/app/transfer.go` |
 | 第三方契约 | `internal/compat/compat_test.go` |
+| 真机验收记录 | `docs/verification.md`；可选的 `internal/core/live_adb_test.go`（不设环境变量即跳过） |
 | 计划与执行账本 | `docs/superpowers/plans/2026-11-15-tailcat-manager-go-port.md`、`.superpowers/sdd/<plan>/progress.md`（git-ignore，本地保留） |

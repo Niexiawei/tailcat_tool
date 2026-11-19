@@ -191,7 +191,7 @@ GUI 需要真实窗口；在无头环境中验证视图请用 `ui.NewTester`（�
 
 动手前先确认你要改的是不是这块：
 
-1. **真机联调未做**——ADB 实链路、scrcpy、授权流程、干预弹窗都只有自动化测试验过。
+1. **真机联调只做了一半**——USB 直连、本地网络直连、`adb disconnect` 的干预链路已在模拟器上跑通（`docs/verification.md`）；Tailcat 对端链路、授权流程、端口变化、scrcpy、多设备聚合仍未验。`TAILCAT_LIVE_ADB_USB` / `TAILCAT_LIVE_ADB_HOST` 可复跑 core 层的真机用例。
 2. 发布打包（dmg/msi/deb）与签名未做。
 3. `adbServerRestarted` / `listenerLost` 两种干预未实现。
 4. 配置读取失败只有一条提示，没有独立错误页。

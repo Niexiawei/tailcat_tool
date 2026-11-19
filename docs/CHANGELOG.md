@@ -26,6 +26,10 @@
 - 发布包内嵌终端插件（libghostty-vt）：装好之后**首次**打开「终端」页也不用联网下载。
 - 应用图标换成 Android 终端图标（1024×1024）；托盘图标随之更换，并跟随任务栏明暗自动切换（浅色任务栏用深色版，深色任务栏用浅色版）。
 
+### 已知限制
+
+- Tailcat 转发通道（`tc…` 连接地址）这一轮**没有对端可验**：USB 直连与本地网络直连已在真机模拟器上跑通，但「对端跑 tailcat server」的链路、未授权提示、端口变化与 scrcpy 屏幕控制仍只有自动化测试与 `--demo` 覆盖。用这些功能时如果遇到问题，请附上「日志」页的片段。明细见 `docs/verification.md`。
+
 ### 变更
 
 - 应用标识（macOS Bundle ID / Windows 应用 ID / Linux 桌面文件名）改为 `cc.nicoi.tailcat-manager`。凭据库服务名同步改为 `cc.nicoi.tailcat-manager.connections`，但**旧的 `cc.coauto.…` 仍然会读**：升级后已保存的连接地址不用重新输入，写入一律落在新名下。
