@@ -53,6 +53,11 @@ type logcatState struct {
 	err       string
 	// table keeps the column layout and the scroll between frames.
 	table ui.ListState
+	// namesAt is when the process table was last read for this page, and
+	// namesBusy marks a read in flight. logcatMu guards both: the read runs in
+	// a goroutine.
+	namesAt   time.Time
+	namesBusy bool
 }
 
 // logcatState returns the page's state, creating it on first use. It lives on
@@ -121,6 +126,7 @@ func (vm *ViewModel) logcatPage(c *ui.Context) {
 	f := vm.logcatState()
 	vm.ensureLogcatDevice(f)
 	vm.ensureLogcatStream(f)
+	vm.ensureLogcatNames(f)
 	vm.refreshLogcatRows(f)
 	// The follow switch owns the table's follow flag, and it is set here rather
 	// than in logcatTable: an empty table is not built at all, and the switch
@@ -184,6 +190,36 @@ func (vm *ViewModel) ensureLogcatStream(f *logcatState) {
 	f.stream = stream
 }
 
+// logcatNamesInterval is how often the process table is re-read: a PID is
+// recycled by the next process, so an old name is a hint rather than a fact.
+const logcatNamesInterval = 10 * time.Second
+
+// ensureLogcatNames keeps the PID → process name table fresh enough to label the
+// tag column. One read at a time, at most one per interval, and a failed read
+// waits for the next interval instead of retrying every frame.
+func (vm *ViewModel) ensureLogcatNames(f *logcatState) {
+	if f.Device == nil {
+		return
+	}
+	vm.logcatMu.Lock()
+	due := time.Since(f.namesAt) >= logcatNamesInterval
+	if !due || f.namesBusy {
+		vm.logcatMu.Unlock()
+		return
+	}
+	f.namesBusy = true
+	vm.logcatMu.Unlock()
+
+	device := *f.Device
+	go func() {
+		_ = vm.Manager.RefreshProcessNames(context.Background(), device)
+		vm.logcatMu.Lock()
+		f.namesAt, f.namesBusy = time.Now(), false
+		vm.logcatMu.Unlock()
+		vm.requestFrame()
+	}()
+}
+
 // refreshLogcatRows copies what the stream holds into the page's state. A
 // paused page keeps the rows it shows: the point of pausing is that the reader
 // does not move.
@@ -191,14 +227,17 @@ func (vm *ViewModel) refreshLogcatRows(f *logcatState) {
 	if f.stream == nil {
 		return
 	}
-	// A paused page keeps the rows it shows, but a page that was paused before
-	// it ever read the buffer still has to read it once: an empty table under
-	// 「已暂停」 looks like a page that lost its lines.
-	if f.Paused && f.version != 0 {
-		return
-	}
+	// A paused page keeps the rows it shows — until the user asks a different
+	// question: a filter has to work on a paused page too, or pausing makes the
+	// page unsearchable. New lines still wait for 继续, because they only move
+	// the stream's version.
 	filterKey := string(f.Filter.MinLevel) + "\x00" + f.Filter.Tags + "\x00" + f.Filter.Terms
-	if f.version != 0 && f.stream.Version() == f.version && f.filterKey == filterKey {
+	seen := f.version != 0 && f.filterKey == filterKey
+	if f.Paused {
+		if seen {
+			return
+		}
+	} else if seen && f.stream.Version() == f.version {
 		return
 	}
 	snap := f.stream.Snapshot(f.Filter)
@@ -242,6 +281,9 @@ func (vm *ViewModel) logcatDeviceSelect(c *ui.Context, f *logcatState, online []
 // previous one printed: two devices' lines in one table would be unreadable.
 func (vm *ViewModel) switchLogcatDevice(f *logcatState, id uuid.UUID) {
 	vm.stopLogcatStream(f)
+	vm.logcatMu.Lock()
+	f.namesAt = time.Time{}
+	vm.logcatMu.Unlock()
 	f.Device = &id
 	f.rows = nil
 	f.version = 0
@@ -344,7 +386,7 @@ func logcatColumns() []ui.TableColumn {
 		{ID: "at", Title: "时间", Width: 150},
 		{ID: "level", Title: "级别", Width: 64},
 		{ID: "pid", Title: "PID", Width: 64},
-		{ID: "tag", Title: "标签", Width: 160},
+		{ID: "tag", Title: "标签", Width: 190},
 		{ID: "text", Title: "内容"},
 		{ID: "copy", Title: "", Width: 44},
 	}
@@ -368,7 +410,11 @@ func (vm *ViewModel) logcatTable(c *ui.Context, f *logcatState) {
 			}
 			return
 		}
-		ui.Row(c).FillWidth().MinWidth(0).Children(func() {
+		// Every cell except the button is selectable: reading a crash means
+		// lifting a line (or part of one) into a bug report, and a tooltip is
+		// no way to copy.
+		cell := ui.Row(c).FillWidth().MinWidth(0).Selectable()
+		cell.Children(func() {
 			switch col {
 			case 0:
 				components.Text(c, entry.At.Format("01-02 15:04:05.000")).FontSize(11).SingleLine()
@@ -377,7 +423,14 @@ func (vm *ViewModel) logcatTable(c *ui.Context, f *logcatState) {
 			case 2:
 				components.Text(c, itoa(entry.PID)).FontSize(11).SingleLine()
 			case 3:
-				components.Tooltip(c, components.Text(c, entry.Tag).FontSize(11).SingleLine(), entry.Tag)
+				ui.Column(c).Gap(1).Children(func() {
+					components.Text(c, entry.Tag).FontSize(11).SingleLine()
+					// The tag says what logged it; the process says which
+					// application did, which is usually the question.
+					if name := vm.logcatProcessName(f, entry.PID); name != "" && name != entry.Tag {
+						components.Text(c, name).FontSize(10).TextColor(c.Theme().TextMuted).SingleLine()
+					}
+				})
 			default:
 				// The message wraps to as many lines as it needs: a stack trace
 				// read one truncated line at a time is useless, and a tooltip is
@@ -402,6 +455,15 @@ func (vm *ViewModel) copyLogcatLine(entry core.LogcatEntry) {
 func logcatLineText(entry core.LogcatEntry) string {
 	return entry.At.Format("2006-01-02 15:04:05.000") + " " +
 		string(entry.Level) + "/" + entry.Tag + "(" + itoa(entry.PID) + "): " + entry.Text
+}
+
+// logcatProcessName is the process a PID belonged to at the last read, "" when
+// the device has not answered or the page belongs to another device.
+func (vm *ViewModel) logcatProcessName(f *logcatState, pid int) string {
+	if f.Device == nil {
+		return ""
+	}
+	return vm.Manager.ProcessName(*f.Device, pid)
 }
 
 // logcatTone is the badge colour: errors and fatals red, warnings yellow.

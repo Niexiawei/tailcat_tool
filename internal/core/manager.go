@@ -46,7 +46,10 @@ type Manager struct {
 	logs    chan LogRecord
 	appLogs chan AppLogRecord
 	// logcats holds at most one streaming logcat per device.
-	logcats      map[uuid.UUID]*LogcatStream
+	logcats map[uuid.UUID]*LogcatStream
+	// processNames is each device's PID → process name, as of the last `ps`
+	// read; the log page shows it under the tag.
+	processNames map[uuid.UUID]map[int]string
 	sessions     map[uuid.UUID]Session
 	tasks        []Task
 	relayPresets []RelayPreset
@@ -146,6 +149,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		logs:                make(chan LogRecord, 256),
 		appLogs:             make(chan AppLogRecord, 256),
 		logcats:             map[uuid.UUID]*LogcatStream{},
+		processNames:        map[uuid.UUID]map[int]string{},
 		config:              opts.Config,
 		credentials:         opts.Credentials,
 		identities:          opts.Identities,
@@ -615,6 +619,7 @@ func (m *Manager) Disconnect(ctx context.Context, id uuid.UUID) {
 	delete(m.sampleCounters, id)
 	delete(m.hardware, id)
 	m.forgetDirListingsLocked(id)
+	m.forgetProcessNamesLocked(id)
 	m.setStateLocked(id, func(s *Session) {
 		s.State = StateDisconnecting
 	})

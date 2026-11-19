@@ -207,3 +207,66 @@ func TestShutdownWaitsForTheLogcatStop(t *testing.T) {
 		t.Fatal("Shutdown left the stream open")
 	}
 }
+
+func TestParseProcessTableReadsPIDAndName(t *testing.T) {
+	output := "USER           PID  PPID     VSZ    RSS WCHAN            ADDR S NAME\n" +
+		"root             1     0 1234567   1234 0                   0 S init\n" +
+		"u0_a132       4100   500 2345678  56789 0                   0 S com.demo.camera\n" +
+		"system         850     1  999999   9999 0                   0 S system_server\n"
+	names := parseProcessTable(output)
+	want := map[int]string{1: "init", 4100: "com.demo.camera", 850: "system_server"}
+	for pid, name := range want {
+		if got := names[pid]; got != name {
+			t.Fatalf("pid %d = %q, want %q", pid, got, name)
+		}
+	}
+	if len(names) != len(want) {
+		t.Fatalf("parsed %d rows, want %d: the header is not a process", len(names), len(want))
+	}
+}
+
+func TestRefreshProcessNamesMapsPIDToName(t *testing.T) {
+	f := connectedLogcatFixture(t)
+	f.runner.setHandler(func(_ context.Context, c Command) (Result, error) {
+		if contains(c.Args, "get-state") {
+			return Result{Output: "device\n"}, nil
+		}
+		if contains(c.Args, "ps -A") {
+			return Result{Output: "USER PID PPID VSZ RSS WCHAN ADDR S NAME\n" +
+				"u0_a132 4100 500 1 2 3 4 S com.demo.camera\n"}, nil
+		}
+		return Result{}, nil
+	})
+	if got := f.m.ProcessName(f.id, 4100); got != "" {
+		t.Fatalf("ProcessName before any read = %q, want empty", got)
+	}
+	if err := f.m.RefreshProcessNames(context.Background(), f.id); err != nil {
+		t.Fatalf("RefreshProcessNames() error: %v", err)
+	}
+	if got := f.m.ProcessName(f.id, 4100); got != "com.demo.camera" {
+		t.Fatalf("ProcessName = %q, want com.demo.camera", got)
+	}
+	if got := f.m.ProcessName(f.id, 9999); got != "" {
+		t.Fatalf("ProcessName for an unknown pid = %q", got)
+	}
+}
+
+func TestDisconnectForgetsProcessNames(t *testing.T) {
+	f := connectedLogcatFixture(t)
+	f.runner.setHandler(func(_ context.Context, c Command) (Result, error) {
+		if contains(c.Args, "get-state") {
+			return Result{Output: "device\n"}, nil
+		}
+		if contains(c.Args, "ps -A") {
+			return Result{Output: "USER PID PPID VSZ RSS WCHAN ADDR S NAME\nu0_a132 4100 500 1 2 3 4 S com.demo.camera\n"}, nil
+		}
+		return Result{}, nil
+	})
+	if err := f.m.RefreshProcessNames(context.Background(), f.id); err != nil {
+		t.Fatalf("RefreshProcessNames() error: %v", err)
+	}
+	f.m.Disconnect(context.Background(), f.id)
+	if got := f.m.ProcessName(f.id, 4100); got != "" {
+		t.Fatalf("ProcessName after a disconnect = %q: PIDs from a gone channel are guesses", got)
+	}
+}

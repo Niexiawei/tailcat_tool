@@ -48,6 +48,14 @@ func (r *logcatRunner) Run(_ context.Context, c core.Command, _ func(string)) (c
 			return core.Result{Output: "device\n"}, nil
 		}
 	}
+	if strings.Contains(strings.Join(c.Args, " "), "ps -A") {
+		return core.Result{Output: "USER PID PPID VSZ RSS WCHAN ADDR S NAME\n" +
+			"u0_a132 4100 500 1 2 3 4 S com.demo.camera\n" +
+			"u0_a133 4200 500 1 2 3 4 S com.demo.gallery\n" +
+			"system 850 1 1 2 3 4 S system_server\n" +
+			"root 1234 1 1 2 3 4 S surfaceflinger\n" +
+			"root 505 1 1 2 3 4 S wifi_forwarder\n"}, nil
+	}
 	return core.Result{}, nil
 }
 
@@ -603,4 +611,73 @@ func TestLogcatPageOpensWithRowsWhilePaused(t *testing.T) {
 	if !tt.HasText("已暂停") {
 		t.Fatalf("the page does not say it is paused; texts = %v", tt.Texts())
 	}
+}
+
+func TestLogcatFilterAppliesWhilePaused(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.100  1  1 I Alpha: alpha line\n" +
+		"11-18 09:30:01.200  1  1 I Beta: beta line\n")
+	waitForText(t, tt, "beta line")
+	if err := tt.Click("暂停"); err != nil {
+		t.Fatalf("Click(暂停) error: %v", err)
+	}
+	// A filter is a question about the buffer, not about the screen: it has to
+	// work on a paused page too, or 暂停 makes the page unsearchable.
+	vm.Logcat.Filter.Tags = "Alpha"
+	tt.Frame()
+	if tt.HasText("beta line") || !tt.HasText("alpha line") {
+		t.Fatalf("the tag filter did nothing while paused; texts = %v", tt.Texts())
+	}
+	// Paused still means new lines do not arrive on their own.
+	runner.feed("11-18 09:30:01.300  1  1 I Alpha: late line\n")
+	for i := 0; i < 5; i++ {
+		tt.Frame()
+	}
+	if tt.HasText("late line") {
+		t.Fatalf("a paused page took a new line; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("继续"); err != nil {
+		t.Fatalf("Click(继续) error: %v", err)
+	}
+	waitForText(t, tt, "late line")
+}
+
+func TestLogcatCellsCanBeSelectedAndCopied(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.123  1234  1250 I VehicleSignalHub: selectable payload text\n")
+	waitForText(t, tt, "selectable payload text")
+
+	rect, ok := tt.Find("selectable payload text")
+	if !ok {
+		t.Fatalf("the message is not on screen; texts = %v", tt.Texts())
+	}
+	// Drag across the message, the way a user copies part of a line.
+	tt.SetClipboard("")
+	middle := rect.Y + rect.H/2
+	left, right := rect.X+2, rect.X+rect.W-2
+	tt.Press(left, middle)
+	tt.Move((left+right)/2, middle)
+	tt.Move(right, middle)
+	tt.Release(right, middle)
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyC)
+	tt.Frame()
+	if got := tt.Clipboard(); !strings.Contains(got, "payload") {
+		t.Fatalf("Ctrl+C after a drag copied %q, want the selected message", got)
+	}
+}
+
+func TestLogcatTagCellShowsTheProcessName(t *testing.T) {
+	vm, runner := newLogcatFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1100, 720)
+	tt.Frame()
+	runner.feed("11-18 09:30:01.123  4100  4123 I VehicleSignalHub: connected\n")
+	waitForText(t, tt, "connected")
+	// The tag alone does not say which application logged the line; the process
+	// table does, and it belongs under the tag it explains.
+	waitForText(t, tt, "com.demo.camera")
 }

@@ -144,6 +144,8 @@ type ViewModel struct {
 	// logcatDrawn reports that the page built this frame; settleLogcat closes
 	// the stream when it did not.
 	logcatDrawn bool
+	// logcatMu guards the page's process-table read, which runs in a goroutine.
+	logcatMu sync.Mutex
 
 	// PageLogFilter is the log page's filter; nil means it was never opened.
 	PageLogFilter *logFilter

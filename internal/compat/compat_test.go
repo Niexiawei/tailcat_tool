@@ -83,6 +83,10 @@ var (
 	_                                                                                    = ui.ListState{}.FollowEnd
 	_                                                                                    = (*ui.ListState).ScrollToEnd
 	_                                                                                    = (*ui.Element).RowClicked
+	_                                                                                    = (*ui.Element).Selectable
+	_                                                                                    = (*ui.Element).SelectedTexts
+	_                                                                                    = ui.Cmd
+	_                                                                                    = ui.KeyC
 )
 
 // onevra: shells, theme, components and icons.
