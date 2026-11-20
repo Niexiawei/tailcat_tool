@@ -29,3 +29,7 @@ const (
 // MsgTaskOutputMissing is what the output dialog says when a task's record is
 // gone (cleared history, or a row from another machine).
 const MsgTaskOutputMissing = "任务输出不存在，可能已被清理"
+
+// MsgAdbStuck means the tunnel answers but the device's ADB does not: it is a
+// device-side outage, not a channel one, so the recovery is adb's own retry.
+const MsgAdbStuck = "设备在 4 秒内没有应答，ADB 可能已卡住"

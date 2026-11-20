@@ -19,6 +19,9 @@ const (
 	maxOfflineRetries      = 6
 	adbConnectTimeout      = 15 * time.Second
 	adbStateTimeout        = 4 * time.Second
+	// adbRoundTripTimeout bounds one end-to-end check: a healthy device answers
+	// in tens of milliseconds, and a silent tunnel is what the timeout is for.
+	adbRoundTripTimeout = 4 * time.Second
 )
 
 // ChannelOpener opens device channels (the forwarder in production).
