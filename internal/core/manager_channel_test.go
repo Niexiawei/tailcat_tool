@@ -467,3 +467,28 @@ func TestStalledChannelStopsItsReaders(t *testing.T) {
 		t.Fatal("the resource sampler kept running against the dead channel")
 	}
 }
+
+// The monitor tick itself has to ask the device for a round trip: without it a
+// silent device keeps reading "ADB 已连接" from adb's cache, which is the whole
+// point of this feature.
+func TestMonitorRunsTheEndToEndCheck(t *testing.T) {
+	f := newManagerFixture(t, func(o *ManagerOptions) {
+		o.MonitorInterval = 10 * time.Millisecond
+		o.TunnelInterval = time.Hour // only the slow loop matters here
+	})
+	if err := f.m.Connect(context.Background(), f.id); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	time.Sleep(60 * time.Millisecond)
+	f.m.Disconnect(context.Background(), f.id)
+
+	shells := 0
+	for _, cmd := range f.runner.commandLog() {
+		if strings.Contains(cmd, " shell true") {
+			shells++
+		}
+	}
+	if shells < 2 {
+		t.Fatalf("the monitor ran %d end-to-end checks in 60ms, want at least 2", shells)
+	}
+}
