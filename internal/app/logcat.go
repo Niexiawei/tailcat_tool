@@ -467,7 +467,7 @@ func (vm *ViewModel) logcatTable(c *ui.Context, f *logcatState) {
 			case 0:
 				components.Text(c, entry.At.Format("01-02 15:04:05.000")).FontSize(11).SingleLine()
 			case 1:
-				components.Badge(c, entry.Level.Label(), components.BadgeOptions{Tone: logcatTone(entry.Level)})
+				cellBadge(c, entry.Level.Label(), logcatTone(entry.Level))
 			case 2:
 				components.Text(c, itoa(entry.PID)).FontSize(11).SingleLine()
 			case 3:

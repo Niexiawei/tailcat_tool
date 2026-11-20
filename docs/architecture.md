@@ -480,6 +480,8 @@ go test ./internal/compat/    # 第三方 API 契约
 | 日志表迁移 | 新增 `logs` 表，用 `PRAGMA user_version` 0→1 把 `channel_logs` 复制一次；旧表保留、不再写 | 多一张表、多一次迁移；换来老数据零风险：只读、不删、不重复插入 |
 | DERP 节点预览 | 详情页的抓取只影响界面，不改设备配置；结果只在内存、不落盘 | 用户可能误以为这里刷新就等于设备换节点；每次打开详情都要重新下载 URL 节点 |
 | DERP 预设的删除 | 只按"是否有设备在用"（含临时设备）判断，由 core 拒绝而不是禁用按钮 | 按钮状态不会随托盘/其他页面变化而过期；换来拒绝理由永远是最新的，且要删先改设备 |
+| 节点可用性 | 每个节点两条独立探测：HTTPS `https://<HostName>:<DERPPort 或 443>/derp/latency-check`（2xx 才算通，证书名按 `CertName`，含 `sha256-raw:` 指纹）与 STUN binding request（`STUNPort`，0 即 3478，-1 表示没有）。「可用」只由中继通道决定，STUN 结果单独显示；自动每 5 分钟跑一轮（`main.go` 里的 `RelayProbeInterval`），8 并发、一轮 2 分钟封顶，结果只在内存 | 应用开着就每 5 分钟向各节点与 tailcat 的节点列表各发一轮请求（每个 URL 预设下载一次地图 + 每节点两个包），不打开 DERP 页也照发；用户可能把列表里的数字当成本地缓存的结论，所以每处都并排写「上次检测」时间。代价：`IPv4`/`IPv6`/`STUNTestIP` 不读（只按 `HostName` 解析），超大地图（128×32 节点）跑不完预算，剩余节点显示「未检测」 |
+| 徽标与文字同行 | `components.Badge` 内部 `AlignSelf(Start)`，在表格单元格里会贴顶；统一经 `internal/app/table.go` 的 `cellBadge` 包一层居中行 | onevra 那个语义在段落里是对的（徽标贴文字顶部），不能改第三方；代价：每次用徽标都多一层容器，忘了包就回到用户截图里的样子 |
 | 用词 | 界面统一叫「DERP 节点」，不出现「官方」：默认节点是 tailcat 的公共文件，本应用不替它表态 | 用户可能不知道「默认节点」背后是 tailcat.dev 的公共节点；换来不误导、不越权 |
 | 日志搜索 | `LIKE '%kw%'`，不建 FTS5 trigram 索引 | 5 万行以上明显变慢，只能靠 30 天 / 5 万行保留期与时间范围兜住。实测（`modernc.org/sqlite` v1.62.0，bundled SQLite 3.54.1）trigram 可用，但日志体积翻倍、要手动同步，而且**少于 3 个字的查询用不到索引**——用户搜「失败」正是 2 个字 |
 | 日志保留 | 30 天 / 5 万行，打开时与每 1000 次写入清理一次；清空后不 `VACUUM` | 用户查不到更早的记录（硬编码、无设置项）；`history.db` 不会变小但空间会复用，换取清空瞬时完成 |
@@ -509,6 +511,8 @@ go test ./internal/compat/    # 第三方 API 契约
 3. **`listenerLost`** 尚未实现（需要监听器健康探测）；`adb kill-server` 的聚合提示已实现（见 §15「多设备干预的聚合」）。
 4. **逐进程 GPU 未实现**：`GPUSample.PerProcessAvailable` 恒为 false，只有整机 GPU 使用率。
 5. **文件页只读**：没有删除、重命名、新建目录、文件内容预览与多选批传；超过 2000 项的目录要靠进入子目录查看。
+6. **DERP 节点探测的间隔写死在 `cmd/tailcat-manager/main.go`**（5 分钟），设置页里不能改；`IPv4` / `IPv6` / `STUNTestIP` 这三个「强制地址」字段不读，探测只按 `HostName` 解析 DNS。自建节点需要把它们写进 `HostName`（或配 `CertName`）。
+7. **默认节点列表每轮都会被取一次**（探测用，仍然只进内存）：tailcat 的 `derpmap.json` 打不开时，列表的默认节点行显示「检测失败」，但预设的探测不受影响。
 
 ---
 

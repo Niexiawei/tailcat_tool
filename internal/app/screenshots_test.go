@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -330,6 +332,29 @@ func shotCases() []shotCase {
 			},
 		},
 		{
+			name: "18c-derp-list-probed",
+			build: func(t *testing.T) *ViewModel {
+				failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusInternalServerError)
+				}))
+				t.Cleanup(failing.Close)
+				vm := probeDerpViewModel(t, &listProber{dead: map[string]bool{"a4": true}}, nil,
+					core.SaveRelayPresetRequest{Name: "公司自建", Source: listProbeMap},
+					core.SaveRelayPresetRequest{Name: "备用节点", Source: failing.URL + "/map.json"})
+				vm.Manager.RefreshRelayProbes()
+				waitForProbes(t, vm)
+				// Saved after the cycle ran: its first probe has not happened,
+				// which is what 未检测 means.
+				if _, err := vm.Manager.SaveRelayPreset(core.SaveRelayPresetRequest{
+					Name: "新加的节点", Source: "https://relay.example.com/map.json",
+				}); err != nil {
+					t.Fatalf("SaveRelayPreset() error: %v", err)
+				}
+				return vm
+			},
+			settle: 6,
+		},
+		{
 			name: "19-derp-detail",
 			build: func(t *testing.T) *ViewModel {
 				vm := newTestViewModel(t)
@@ -339,6 +364,18 @@ func shotCases() []shotCase {
 				}
 				vm.OpenDerpDetail(id)
 				vm.DerpJSONOpen = true
+				return vm
+			},
+			settle: 6,
+		},
+		{
+			name: "19b-derp-detail-probed",
+			build: func(t *testing.T) *ViewModel {
+				vm := probeDerpViewModel(t, &listProber{dead: map[string]bool{"901b": true}}, nil,
+					core.SaveRelayPresetRequest{Name: "公司自建", Source: detailProbeMap})
+				vm.Manager.RefreshRelayProbes()
+				waitForProbes(t, vm)
+				vm.OpenDerpDetail(vm.Manager.RelayPresets()[0].ID)
 				return vm
 			},
 			settle: 6,

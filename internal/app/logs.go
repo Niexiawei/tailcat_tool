@@ -383,7 +383,7 @@ func (vm *ViewModel) logTable(c *ui.Context, f *logFilter, entries []core.Timeli
 			case 0:
 				components.Text(c, entry.At.Format("2006-01-02 15:04:05")).FontSize(11).SingleLine()
 			case 1:
-				components.Badge(c, entry.Level.Label(), components.BadgeOptions{Tone: logLevelTone(entry.Level)})
+				cellBadge(c, entry.Level.Label(), logLevelTone(entry.Level))
 			case 2:
 				components.Text(c, entry.Source.Label()).FontSize(11).SingleLine()
 			case 3:

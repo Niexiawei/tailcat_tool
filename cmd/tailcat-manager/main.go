@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/Niexiawei/tailcat-tool/internal/app"
 	"github.com/Niexiawei/tailcat-tool/internal/appmeta"
@@ -152,6 +153,11 @@ func buildEnvironment() app.Environment {
 		Recorder:      recorder,
 		AppMeta:       appMeta,
 		AppMetaCache:  appMetaCache,
+		// The DERP page answers "is this node usable", and an answer from
+		// five minutes ago is still worth reading: a cycle every five minutes
+		// keeps it fresh without touching the network constantly. --demo
+		// passes no interval and stays offline.
+		RelayProbeInterval: 5 * time.Minute,
 	})
 	if recorder != nil {
 		if recent, err := recorder.RecentTasks(50); err == nil {
