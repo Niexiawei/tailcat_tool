@@ -241,7 +241,7 @@ reachability(device_id, name, state, latency, route, detail, checked_at)
 
 ## 6. 会话状态机
 
-8 个状态（Swift 是 7 个，新增 `needsAction`）：
+9 个状态（Swift 是 7 个，新增 `needsAction` 与 `tunnelLost`）：
 
 | 值 | 中文标签 | Busy |
 |---|---|---|
@@ -253,6 +253,7 @@ reachability(device_id, name, state, latency, route, detail, checked_at)
 | `disconnecting` | 正在断开 | ✓ |
 | `failed` | 连接失败 | |
 | `needsAction` | 等待处理 | |
+| `tunnelLost` | Tailcat 断开 | |
 
 ```
                   connect()
@@ -267,15 +268,17 @@ disconnected ────────────────► connecting ─�
                                                                           failed
 online/offline ──外部干预──► needsAction ──用户选择重连/改端口──► connecting
                                  └──── 稍后 ────► needsAction（保持）
+online ──隧道与端到端都不答──► tunnelLost ──重建通道成功/通道自愈──► online
 ```
 
 不变式：
 
 1. 连接、断开、诊断、任务都绑定 generation；过期回调一律丢弃。
 2. 断开顺序：**关监听器 → 关活跃连接 → `Client.Close()` → `adb disconnect`**。先把本地入口关掉，才不会有新连接在 `adb disconnect` 之后又接进来。
-3. **只有 `offline` 会重试**，`unauthorized` 和 `needsAction` 都不重试——后者尤其重要，否则用户刚 `adb disconnect` 又会被偷偷连回去。
+3. **只有 `offline` 和 `tunnelLost` 会重试**，`unauthorized` 和 `needsAction` 都不重试——后者尤其重要，否则用户刚 `adb disconnect` 又会被偷偷连回去。两者的恢复动作不同：`offline` 只 `adb connect`，`tunnelLost` 重建整条通道（见 §7.1）。
 4. 重试退避 2/4/8/16/30/30 秒，第 6 次后提示"请检查设备后重新连接"。
 5. `Connect`/`Disconnect` 是**同步**方法，界面在 goroutine 里调；渲染线程绝不直接调。
+6. **判活不只看 `get-state`**：它回答的是 adb server 的缓存，tailcat 通道静默死亡时仍然回 `device`。真正的判活与分层归因见 §7.1。
 
 ---
 
@@ -290,6 +293,26 @@ online/offline ──外部干预──► needsAction ──用户选择重连/
 流程：校验地址 → 取/建 `connection` 身份 → 绑定本地端口（固定端口或 5556–5655）→ 建 `tailcat.Client` → `adb connect 127.0.0.1:<port>` → 轮询 `get-state` → 启动监视。
 
 端口绑定成功即就绪，**没有 5 秒等待，也不解析 stderr**。
+
+监视由两个循环组成（都绑定同一个 generation，`Disconnect` 一次取消）：
+
+| 循环 | 间隔 | 做什么 | 写状态 |
+|---|---|---|---|
+| 隧道探活 | 2 秒 | `tailcat.Client.DiscoPing`（4 秒上限），连续 2 次无响应算「隧道静默」 | 否，只记计数 |
+| 监视 tick | 3 秒（与本地 ADB 的 `get-state` 同频） | `get-state` + 一次 `adb shell true`（端到端往返）→ 归因 → 写状态 → 干预检测 → 退避 | 是，唯一写者 |
+
+归因（详见 `internal/core/manager_channel.go` 的 `channelVerdict`）：
+
+| 隧道 | 端到端 | 结论 |
+|---|---|---|
+| 正常 | 有应答 | `online` |
+| 正常 | 无应答 | `offline` +「设备在 4 秒内没有应答，ADB 可能已卡住」→ 现有 `adb connect` 退避 |
+| 静默 | 无应答（或设备本来就不通 / 待授权） | `tunnelLost` +「Tailcat 通道已断开，正在重建通道」→ 重建整条通道 |
+| 静默 | 有应答 | 不动（探活走 DERP，数据可能走直连；只有探活无响应不算掉线） |
+
+**为什么不能用 `Client.Ping`**：它等的是 `meowWait` 这个 channel，而后者由 `sync.OnceFunc` 只关一次——首次握手成功后 `Ping()` 永远立即返回成功，对端早死了也照样绿。只有 `DiscoPing` 是每次真实往返。
+
+重建顺序：停掉任务 / Logcat / 资源采样（它们读的是死通道）→ 关旧 listener 与活跃连接 → `adb disconnect <旧 serial>` → 新 `ForwardConn` → `adb connect <新 serial>` → 轮询 `get-state`。通道自己活回来时**不重建**，下一轮 `get-state` 直接决定状态。重建失败沿用 6 次退避，耗尽后停在 `tunnelLost` 并提示「Tailcat 通道重建失败，请检查网络后重新连接」。
 
 ### 7.2 本地 ADB 直连
 
@@ -481,6 +504,7 @@ go test ./internal/compat/    # 第三方 API 契约
 | DERP 节点预览 | 详情页的抓取只影响界面，不改设备配置；结果只在内存、不落盘 | 用户可能误以为这里刷新就等于设备换节点；每次打开详情都要重新下载 URL 节点 |
 | DERP 预设的删除 | 只按"是否有设备在用"（含临时设备）判断，由 core 拒绝而不是禁用按钮 | 按钮状态不会随托盘/其他页面变化而过期；换来拒绝理由永远是最新的，且要删先改设备 |
 | 节点可用性 | 每个节点两条独立探测：HTTPS `https://<HostName>:<DERPPort 或 443>/derp/latency-check`（2xx 才算通，证书名按 `CertName`，含 `sha256-raw:` 指纹）与 STUN binding request（`STUNPort`，0 即 3478，-1 表示没有）。「可用」只由中继通道决定，STUN 结果单独显示；自动每 5 分钟跑一轮（`main.go` 里的 `RelayProbeInterval`），8 并发、一轮 2 分钟封顶，结果只在内存 | 应用开着就每 5 分钟向各节点与 tailcat 的节点列表各发一轮请求（每个 URL 预设下载一次地图 + 每节点两个包），不打开 DERP 页也照发；用户可能把列表里的数字当成本地缓存的结论，所以每处都并排写「上次检测」时间。代价：`IPv4`/`IPv6`/`STUNTestIP` 不读（只按 `HostName` 解析），超大地图（128×32 节点）跑不完预算，剩余节点显示「未检测」 |
+| 通道判活 | 不信任 `adb get-state`：2 秒一次 `DiscoPing` 记「连续无响应」，3 秒一次端到端 `adb shell true`；两层都不答判 `tunnelLost`，只有端到端不答判 `offline`，只有探活不答（数据通路仍通）不动状态 | 每设备每 2 秒一次 disco ping（`DiscoPing` 还会顺带发一个 TSMP ping 触发直连发现）、每 3 秒一个 adb 进程与设备上一个 shell 会话。`DiscoPing` 走的是 magicsock 路径，只能证明「对端 magicsock 活着」，数据通路要靠端到端往返；`get-state` 的缓存不可信这条写进注释，否则以后有人会把端到端那一半去掉 |
 | 徽标与文字同行 | `components.Badge` 内部 `AlignSelf(Start)`，在表格单元格里会贴顶；统一经 `internal/app/table.go` 的 `cellBadge` 包一层居中行 | onevra 那个语义在段落里是对的（徽标贴文字顶部），不能改第三方；代价：每次用徽标都多一层容器，忘了包就回到用户截图里的样子 |
 | 用词 | 界面统一叫「DERP 节点」，不出现「官方」：默认节点是 tailcat 的公共文件，本应用不替它表态 | 用户可能不知道「默认节点」背后是 tailcat.dev 的公共节点；换来不误导、不越权 |
 | 日志搜索 | `LIKE '%kw%'`，不建 FTS5 trigram 索引 | 5 万行以上明显变慢，只能靠 30 天 / 5 万行保留期与时间范围兜住。实测（`modernc.org/sqlite` v1.62.0，bundled SQLite 3.54.1）trigram 可用，但日志体积翻倍、要手动同步，而且**少于 3 个字的查询用不到索引**——用户搜「失败」正是 2 个字 |
@@ -508,7 +532,7 @@ go test ./internal/compat/    # 第三方 API 契约
 
 1. **真机联调只做了一半**（2026-11-19，明细见 `docs/verification.md`）：USB 直连、本地网络直连、`adb disconnect` 后的「等待处理」已在真机模拟器上跑通（`internal/core/live_adb_test.go`，默认跳过）。**没验的**：Tailcat 对端的真链路、设备未授权、端口变化、scrcpy、两台设备同时在线、`adb kill-server` 的多设备聚合（本机只有一台设备）。安装包能打（`go tool mygo build`），但还没有人在别人的机器上装过。
 2. **发布签名与公证未做**：三平台产物都有了，但 macOS 只有 ad-hoc 签名（Gatekeeper 会拦），Windows 安装器没有代码签名，Linux 包没有签名。
-3. **`listenerLost`** 尚未实现（需要监听器健康探测）；`adb kill-server` 的聚合提示已实现（见 §15「多设备干预的聚合」）。
+3. **`listenerLost`** 尚未实现（需要监听器健康探测）；`adb kill-server` 的聚合提示已实现（见 §15「多设备干预的聚合」）。**通道静默失效已经覆盖**（见 §15「通道判活」），所以 `listenerLost` 剩下的范围只有「本地 listener 被外部关掉」这一种。
 4. **逐进程 GPU 未实现**：`GPUSample.PerProcessAvailable` 恒为 false，只有整机 GPU 使用率。
 5. **文件页只读**：没有删除、重命名、新建目录、文件内容预览与多选批传；超过 2000 项的目录要靠进入子目录查看。
 6. **DERP 节点探测的间隔写死在 `cmd/tailcat-manager/main.go`**（5 分钟），设置页里不能改；`IPv4` / `IPv6` / `STUNTestIP` 这三个「强制地址」字段不读，探测只按 `HostName` 解析 DNS。自建节点需要把它们写进 `HostName`（或配 `CertName`）。
