@@ -741,8 +741,15 @@ func TestLogPageFillsTheTimelineBoxWhenEmpty(t *testing.T) {
 	if !ok {
 		t.Fatalf("no empty note; texts = %v", tt.Texts())
 	}
-	if note.H < 20 {
-		t.Fatalf("the empty note is %0.0f high; it must be larger than body text", note.H)
+	// The note is bigger than body text (16 against 11). A line's height comes
+	// from the platform's font metrics, so measure it against a body-size label
+	// of the same frame rather than a pixel count only one platform's font meets.
+	body, ok := tt.Find("级别")
+	if !ok {
+		t.Fatalf("no body-size label to measure against; texts = %v", tt.Texts())
+	}
+	if note.H <= body.H*1.2 {
+		t.Fatalf("the empty note is %0.1f high against body text's %0.1f; it must stand out from it", note.H, body.H)
 	}
 	// Centred in the box: the note's middle is near the middle of the space
 	// between the filter rows and the footer.
