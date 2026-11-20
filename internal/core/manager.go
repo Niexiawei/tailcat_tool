@@ -136,6 +136,9 @@ type runtimeState struct {
 	// (which answers from a cache) cannot bring it back and retryOffline
 	// rebuilds the channel instead of re-adding a dead ADB entry.
 	stalled bool
+	// rebuildFailed means the rebuild budget is spent: the session keeps saying
+	// so instead of falling back to "正在重建通道" on the next tick.
+	rebuildFailed bool
 }
 
 // ManagerOptions wires a Manager. Only Runner and Credentials are required.
@@ -557,76 +560,8 @@ func (m *Manager) Connect(ctx context.Context, id uuid.UUID) error {
 		return m.connectDirect(ctx, id, generation, profile, adbPath)
 	}
 
-	relay, err := NormalizeRelay(profile.RelaySource)
-	if err != nil {
+	if err := m.openTailcatChannel(ctx, id, generation, profile, adbPath, address); err != nil {
 		return m.failConnect(id, generation, err)
-	}
-	nodeKey, err := m.identities.NodeKey(ctx, id.String()+"-connection")
-	if err != nil {
-		return m.failConnect(id, generation, err)
-	}
-
-	m.log(id, "正在建立独立 Tailcat 转发通道")
-	conn, err := m.forwarder.Open(ctx, ForwardRequest{
-		Address:       address,
-		PreferredPort: preferredPort(profile),
-		RemotePort:    remotePort(profile),
-		NodeKey:       nodeKey,
-		Relay:         relay,
-	}, func(line string) {
-		m.mu.Lock()
-		current := m.isCurrentLocked(id, generation)
-		m.mu.Unlock()
-		if current {
-			m.log(id, line)
-		}
-	})
-	if err != nil {
-		return m.failConnect(id, generation, err)
-	}
-
-	m.mu.Lock()
-	if !m.isCurrentLocked(id, generation) {
-		m.mu.Unlock()
-		_ = conn.Close(ctx)
-		return nil
-	}
-	m.runtimes[id] = &runtimeState{conn: conn, serial: conn.Serial, adb: adbPath, generation: generation}
-	m.setStateLocked(id, func(s *Session) {
-		s.Serial = conn.Serial
-		s.Port = conn.Port
-	})
-	m.notify()
-	m.mu.Unlock()
-
-	res, err := m.runner.Run(ctx, Command{
-		Path:    adbPath,
-		Args:    []string{"connect", conn.Serial},
-		Timeout: adbConnectTimeout,
-	}, nil)
-	if err != nil {
-		return m.failConnect(id, generation, err)
-	}
-	if res.TimedOut {
-		m.log(id, "ADB 连接等待超时，通道保留，可重试或等待设备上线")
-	} else if trimmed := strings.TrimSpace(res.Output); trimmed != "" {
-		m.log(id, trimmed)
-	}
-
-	for attempt := 0; attempt < connectPollAttempts; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return nil
-		}
-		m.refresh(ctx, id, generation, false)
-		state := m.Session(id).State
-		if state == StateOnline || state == StateUnauthorized {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(m.connectPoll):
-		}
 	}
 	m.startMonitor(id, generation)
 	// Connecting is the moment the device identity becomes readable; doing it
@@ -929,9 +864,13 @@ func (m *Manager) refresh(ctx context.Context, id uuid.UUID, generation uuid.UUI
 		// The tunnel answers again: a short outage that healed, so the channel
 		// is not torn down for it.
 		runtime.stalled = false
+		runtime.rebuildFailed = false
 		m.logLocked(id, "Tailcat 通道已恢复")
 	}
 	state, message := channelVerdict(adbState, answered, runtime.tunnelMisses, runtime.stalled)
+	if runtime.stalled && runtime.rebuildFailed {
+		message = MsgTunnelRebuildFailed
+	}
 	previous := m.sessions[id].State
 	m.setStateLocked(id, func(s *Session) {
 		s.State = state
@@ -972,18 +911,26 @@ func (m *Manager) maybeDetectInterference(ctx context.Context, id uuid.UUID, gen
 	m.detectInterference(ctx, id, generation)
 }
 
-// retryOffline re-issues adb connect with a bounded, growing delay.
+// retryOffline recovers a lost device on a bounded, growing delay. An offline
+// device needs adb connect again; a dead tunnel needs a whole new channel,
+// because adb connect against a dead tunnel only waits out its timeout.
 func (m *Manager) retryOffline(ctx context.Context, id uuid.UUID, generation uuid.UUID) {
 	m.mu.Lock()
 	state := m.sessions[id].State
 	count := m.retryCounts[id]
 	next, hasNext := m.nextRetries[id]
 	runtime := m.runtimes[id]
+	// A stalled channel is rebuilt, not re-added: the ADB entry is a ghost.
+	rebuild := state == StateTunnelLost
 	attempt := false
-	if state == StateOffline && runtime != nil && count < maxOfflineRetries && (!hasNext || !time.Now().Before(next)) {
+	if (state == StateOffline || rebuild) && runtime != nil && count < maxOfflineRetries && (!hasNext || !time.Now().Before(next)) {
 		m.retryCounts[id] = count + 1
 		m.nextRetries[id] = time.Now().Add(retryDelay(count + 1))
 		attempt = true
+	}
+	var adbPath, serial string
+	if runtime != nil {
+		adbPath, serial = runtime.adb, runtime.serial
 	}
 	n := count + 1
 	m.mu.Unlock()
@@ -991,20 +938,48 @@ func (m *Manager) retryOffline(ctx context.Context, id uuid.UUID, generation uui
 	if !attempt {
 		return
 	}
-	m.log(id, "尝试恢复 ADB 连接（"+strconv.Itoa(n)+"/"+strconv.Itoa(maxOfflineRetries)+"）")
-	_, _ = m.runner.Run(ctx, Command{
-		Path:    runtime.adb,
-		Args:    []string{"connect", runtime.serial},
-		Timeout: 10 * time.Second,
-	}, nil)
-	m.refresh(ctx, id, generation, false)
+	suffix := "（" + strconv.Itoa(n) + "/" + strconv.Itoa(maxOfflineRetries) + "）"
+	if rebuild {
+		m.log(id, "正在重建 Tailcat 通道"+suffix)
+		// Everything that reads the dead channel stops before it goes, in
+		// Disconnect's order.
+		waitDones(m.cancelDeviceTasks(id))
+		m.StopLogcat(id)
+		m.mu.Lock()
+		m.stopResourceSamplingLocked(id)
+		m.mu.Unlock()
+		if err := m.rebuildChannel(ctx, id, generation); err != nil {
+			m.log(id, "Tailcat 通道重建失败："+err.Error())
+		}
+		m.refresh(ctx, id, generation, false)
+	} else {
+		m.log(id, "尝试恢复 ADB 连接"+suffix)
+		_, _ = m.runner.Run(ctx, Command{
+			Path:    adbPath,
+			Args:    []string{"connect", serial},
+			Timeout: 10 * time.Second,
+		}, nil)
+		m.refresh(ctx, id, generation, false)
+	}
 
 	m.mu.Lock()
-	if m.isCurrentLocked(id, generation) && n >= maxOfflineRetries && m.sessions[id].State == StateOffline {
+	defer m.mu.Unlock()
+	if !m.isCurrentLocked(id, generation) || n < maxOfflineRetries {
+		m.notify()
+		return
+	}
+	current := m.sessions[id].State
+	switch {
+	case rebuild && current == StateTunnelLost:
+		if runtime := m.runtimes[id]; runtime != nil {
+			runtime.rebuildFailed = true
+		}
+		m.setStateLocked(id, func(s *Session) { s.Err = MsgTunnelRebuildFailed })
+		m.logLocked(id, MsgTunnelRebuildFailed)
+	case !rebuild && current == StateOffline:
 		m.setStateLocked(id, func(s *Session) { s.Err = "自动恢复已尝试 6 次，请检查设备后重新连接" })
 	}
 	m.notify()
-	m.mu.Unlock()
 }
 
 // retryDelay grows 2s, 4s, 8s, 16s then stays at 30s.

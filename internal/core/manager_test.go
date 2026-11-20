@@ -106,11 +106,15 @@ type fakeOpener struct {
 	// the probes so a test can see the fast loop actually reached the channel.
 	pingErr error
 	pings   int
+	// attempts counts every Open call, including the ones that fail, so a test
+	// can see a rebuild that never got a channel.
+	attempts int
 }
 
 func (o *fakeOpener) Open(_ context.Context, req ForwardRequest, _ func(string)) (*ForwardConn, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	o.attempts++
 	if o.fail != nil {
 		return nil, o.fail
 	}
@@ -163,6 +167,12 @@ func (o *fakeOpener) setPingErr(err error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.pingErr = err
+}
+
+func (o *fakeOpener) attemptCount() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.attempts
 }
 
 func (o *fakeOpener) pingCount() int {

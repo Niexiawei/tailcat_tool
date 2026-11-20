@@ -347,3 +347,123 @@ func TestChannelVerdicts(t *testing.T) {
 		}
 	}
 }
+
+// stallForTest drives a device into tunnelLost without timers: quiet tunnel,
+// a device that does not answer, one deep tick.
+func stallForTest(t *testing.T, f *managerFixture, generation uuid.UUID) {
+	t.Helper()
+	f.opener.setPingErr(Error("no answer"))
+	f.runner.setHandler(silentDeviceHandler)
+	quietTunnel(t, f, generation)
+	f.m.refresh(context.Background(), f.id, generation, true)
+	if state := f.m.Session(f.id).State; state != StateTunnelLost {
+		t.Fatalf("state = %v, want %v before the rebuild", state, StateTunnelLost)
+	}
+}
+
+// A dead tunnel cannot be fixed by adb connect: the channel has to be replaced,
+// in Disconnect's order, and the monitor that noticed the stall must survive.
+func TestTunnelLostRebuildsTheChannel(t *testing.T) {
+	f := newManagerFixture(t)
+	generation := connectForTest(t, f)
+	oldSerial := f.m.Session(f.id).Serial
+	stallForTest(t, f, generation)
+
+	f.opener.setPingErr(nil)
+	f.runner.setHandler(healthyADB)
+	f.m.retryOffline(context.Background(), f.id, generation)
+
+	if n := f.opener.openCount(); n != 2 {
+		t.Fatalf("channels opened = %d, want 2 (the dead one plus the rebuilt one)", n)
+	}
+	if n := f.opener.closeCount(); n != 1 {
+		t.Fatalf("channels closed = %d, want 1", n)
+	}
+	session := f.m.Session(f.id)
+	if session.State != StateOnline {
+		t.Fatalf("state = %v, want online", session.State)
+	}
+	log := strings.Join(f.runner.commandLog(), "\n")
+	if !strings.Contains(log, "disconnect "+oldSerial) {
+		t.Fatalf("the dead ADB entry was not disconnected first:\n%s", log)
+	}
+	if !strings.Contains(log, "connect "+session.Serial) {
+		t.Fatalf("the new channel was not connected:\n%s", log)
+	}
+	f.m.mu.Lock()
+	keptGeneration := f.m.generations[f.id] == generation
+	stalled := f.m.runtimes[f.id].stalled
+	f.m.mu.Unlock()
+	if !keptGeneration {
+		t.Fatal("the rebuild changed the generation; the monitor that noticed the stall would stop")
+	}
+	if stalled {
+		t.Fatal("the fresh channel is still marked stalled")
+	}
+}
+
+// The rebuild budget is the one adb retries already use: six attempts, then the
+// device says what to do instead of retrying forever.
+func TestRebuildBudgetIsBounded(t *testing.T) {
+	f := newManagerFixture(t)
+	generation := connectForTest(t, f)
+	stallForTest(t, f, generation)
+	f.opener.fail = Error("no channel")
+
+	for i := 0; i < maxOfflineRetries; i++ {
+		f.m.mu.Lock()
+		delete(f.m.nextRetries, f.id)
+		f.m.mu.Unlock()
+		f.m.retryOffline(context.Background(), f.id, generation)
+	}
+
+	if n := f.opener.attemptCount(); n != 1+maxOfflineRetries {
+		t.Fatalf("Open attempts = %d, want %d", n, 1+maxOfflineRetries)
+	}
+	session := f.m.Session(f.id)
+	if session.State != StateTunnelLost {
+		t.Fatalf("state = %v, want %v", session.State, StateTunnelLost)
+	}
+	if session.Err != MsgTunnelRebuildFailed {
+		t.Fatalf("Err = %q, want %q", session.Err, MsgTunnelRebuildFailed)
+	}
+	// get-state keeps claiming "device"; the exhausted message must not be
+	// replaced by the in-progress one on the next tick.
+	f.m.refresh(context.Background(), f.id, generation, true)
+	if got := f.m.Session(f.id).Err; got != MsgTunnelRebuildFailed {
+		t.Fatalf("Err after another tick = %q, want %q", got, MsgTunnelRebuildFailed)
+	}
+}
+
+func TestRebuildStopsWhenTheGenerationIsGone(t *testing.T) {
+	f := newManagerFixture(t)
+	connectForTest(t, f)
+	if err := f.m.rebuildChannel(context.Background(), f.id, uuid.New()); err != nil {
+		t.Fatalf("rebuildChannel() error: %v", err)
+	}
+	if n := f.opener.attemptCount(); n != 1 {
+		t.Fatalf("Open attempts = %d, want 1 (only the original connect)", n)
+	}
+	if state := f.m.Session(f.id).State; state != StateOnline {
+		t.Fatalf("state = %v, want the original online", state)
+	}
+}
+
+// Sampling would keep timing out against the dead channel while it is being
+// rebuilt: it stops with the channel, like Disconnect does.
+func TestStalledChannelStopsItsReaders(t *testing.T) {
+	f := newManagerFixture(t)
+	generation := connectForTest(t, f)
+	samplerCtx, samplerCancel := context.WithCancel(context.Background())
+	f.m.mu.Lock()
+	f.m.samplers[f.id] = samplerCancel
+	f.m.mu.Unlock()
+
+	stallForTest(t, f, generation)
+	f.runner.setHandler(healthyADB)
+	f.m.retryOffline(context.Background(), f.id, generation)
+
+	if samplerCtx.Err() == nil {
+		t.Fatal("the resource sampler kept running against the dead channel")
+	}
+}

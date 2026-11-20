@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -100,4 +101,126 @@ func channelVerdict(adbState ConnectionState, answered bool, tunnelMisses int, s
 		return StateOffline, "本地通道运行中，ADB 尚未上线"
 	}
 	return adbState, ""
+}
+
+// openTailcatChannel builds one Tailcat channel and attaches ADB to it. The
+// caller owns the generation and the monitor: this returns once ADB accepted
+// the channel, or with an error the caller turns into a state. It never starts
+// a monitor and never resets a generation, so the same code serves a first
+// connect and a rebuild.
+func (m *Manager) openTailcatChannel(ctx context.Context, id uuid.UUID, generation uuid.UUID, profile Profile, adbPath, address string) error {
+	relay, err := NormalizeRelay(profile.RelaySource)
+	if err != nil {
+		return err
+	}
+	nodeKey, err := m.identities.NodeKey(ctx, id.String()+"-connection")
+	if err != nil {
+		return err
+	}
+
+	m.log(id, "正在建立独立 Tailcat 转发通道")
+	conn, err := m.forwarder.Open(ctx, ForwardRequest{
+		Address:       address,
+		PreferredPort: preferredPort(profile),
+		RemotePort:    remotePort(profile),
+		NodeKey:       nodeKey,
+		Relay:         relay,
+	}, func(line string) {
+		m.mu.Lock()
+		current := m.isCurrentLocked(id, generation)
+		m.mu.Unlock()
+		if current {
+			m.log(id, line)
+		}
+	})
+	if err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	if !m.isCurrentLocked(id, generation) {
+		m.mu.Unlock()
+		_ = conn.Close(ctx)
+		return nil
+	}
+	m.runtimes[id] = &runtimeState{conn: conn, serial: conn.Serial, adb: adbPath, generation: generation}
+	m.setStateLocked(id, func(s *Session) {
+		s.Serial = conn.Serial
+		s.Port = conn.Port
+	})
+	m.notify()
+	m.mu.Unlock()
+
+	res, err := m.runner.Run(ctx, Command{
+		Path:    adbPath,
+		Args:    []string{"connect", conn.Serial},
+		Timeout: adbConnectTimeout,
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if res.TimedOut {
+		m.log(id, "ADB 连接等待超时，通道保留，可重试或等待设备上线")
+	} else if trimmed := strings.TrimSpace(res.Output); trimmed != "" {
+		m.log(id, trimmed)
+	}
+
+	for attempt := 0; attempt < connectPollAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil
+		}
+		m.refresh(ctx, id, generation, false)
+		state := m.Session(id).State
+		if state == StateOnline || state == StateUnauthorized {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(m.connectPoll):
+		}
+	}
+	return nil
+}
+
+// rebuildChannel replaces a stalled channel with a fresh one, keeping the
+// device's generation so the monitor that noticed the stall survives. The old
+// listener and its ADB entry go first, in Disconnect's order: nothing may be
+// added to adb while the ghost is still there.
+func (m *Manager) rebuildChannel(ctx context.Context, id uuid.UUID, generation uuid.UUID) error {
+	m.mu.Lock()
+	if !m.isCurrentLocked(id, generation) {
+		m.mu.Unlock()
+		return nil
+	}
+	runtime := m.runtimes[id]
+	profile, ok := m.profileLocked(id)
+	var address string
+	var addrErr error
+	if !profile.DirectADB {
+		address, addrErr = m.addressLocked(id)
+	}
+	m.mu.Unlock()
+	if runtime == nil || !ok {
+		return nil
+	}
+
+	oldSerial, adbPath, oldConn := runtime.serial, runtime.adb, runtime.conn
+	if oldConn != nil {
+		_ = oldConn.Close(ctx)
+	}
+	if oldSerial != "" {
+		_, _ = m.runner.Run(ctx, Command{
+			Path:    adbPath,
+			Args:    []string{"disconnect", oldSerial},
+			Timeout: 3 * time.Second,
+		}, nil)
+	}
+	if addrErr != nil {
+		return addrErr
+	}
+	if !Plausible(address) {
+		return Error("设备没有有效连接凭据，请编辑设备后重试")
+	}
+	return m.openTailcatChannel(ctx, id, generation, profile, adbPath, address)
 }
