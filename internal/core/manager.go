@@ -132,6 +132,10 @@ type runtimeState struct {
 	// called quiet at tunnelMissesBeforeStalled, and only a probe that answers
 	// again resets it.
 	tunnelMisses int
+	// stalled marks a channel already reported as tunnelLost, so get-state
+	// (which answers from a cache) cannot bring it back and retryOffline
+	// rebuilds the channel instead of re-adding a dead ADB entry.
+	stalled bool
 }
 
 // ManagerOptions wires a Manager. Only Runner and Credentials are required.
@@ -613,7 +617,7 @@ func (m *Manager) Connect(ctx context.Context, id uuid.UUID) error {
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
-		m.refresh(ctx, id, generation)
+		m.refresh(ctx, id, generation, false)
 		state := m.Session(id).State
 		if state == StateOnline || state == StateUnauthorized {
 			break
@@ -843,7 +847,7 @@ func (m *Manager) pollLoop(ctx context.Context, id uuid.UUID, generation uuid.UU
 		if !current {
 			return
 		}
-		m.refresh(ctx, id, generation)
+		m.refresh(ctx, id, generation, true)
 		m.maybeDetectInterference(ctx, id, generation)
 		m.retryOffline(ctx, id, generation)
 	}
@@ -872,49 +876,83 @@ func (m *Manager) tunnelLoop(ctx context.Context, id uuid.UUID, generation uuid.
 	}
 }
 
-// refresh polls adb get-state and updates the session.
-func (m *Manager) refresh(ctx context.Context, id uuid.UUID, generation uuid.UUID) {
+// refresh polls adb get-state and updates the session. With roundTrip set it
+// also asks the device itself for one shell round trip, because get-state
+// answers from adb's cache and keeps saying "device" while the far end is
+// silent; only the monitor loop asks for that (see channelVerdict).
+//
+// It is the single writer of a session's state: the fast tunnel loop only
+// counts misses, so the UI cannot oscillate between two writers.
+func (m *Manager) refresh(ctx context.Context, id uuid.UUID, generation uuid.UUID, roundTrip bool) {
 	m.mu.Lock()
 	runtime := m.runtimes[id]
+	var adbPath, serial string
+	stalled := false
+	if runtime != nil {
+		adbPath, serial, stalled = runtime.adb, runtime.serial, runtime.stalled
+	}
 	m.mu.Unlock()
 	if runtime == nil {
 		return
 	}
 	res, err := m.runner.Run(ctx, Command{
-		Path:    runtime.adb,
-		Args:    []string{"-s", runtime.serial, "get-state"},
+		Path:    adbPath,
+		Args:    []string{"-s", serial, "get-state"},
 		Timeout: adbStateTimeout,
 	}, nil)
 	output := ""
 	if err == nil {
 		output = strings.TrimSpace(res.Output)
 	}
+	adbState := StateOffline
+	switch {
+	case err == nil && res.ExitCode == 0 && output == "device":
+		adbState = StateOnline
+	case strings.Contains(output, "unauthorized"):
+		adbState = StateUnauthorized
+	}
+
+	// A stalled channel has nothing to answer with, so its end-to-end check
+	// would only spend the full timeout every tick.
+	answered := true
+	if roundTrip && !stalled && adbState == StateOnline {
+		answered = m.adbRoundTrip(ctx, adbPath, serial) == nil
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.isCurrentLocked(id, generation) || m.runtimes[id] == nil {
+	runtime = m.runtimes[id]
+	if !m.isCurrentLocked(id, generation) || runtime == nil {
 		return
 	}
-	state := StateOffline
-	switch {
-	case err == nil && res.ExitCode == 0 && output == "device":
-		state = StateOnline
-	case strings.Contains(output, "unauthorized"):
-		state = StateUnauthorized
+	if runtime.stalled && runtime.tunnelMisses == 0 {
+		// The tunnel answers again: a short outage that healed, so the channel
+		// is not torn down for it.
+		runtime.stalled = false
+		m.logLocked(id, "Tailcat 通道已恢复")
 	}
+	state, message := channelVerdict(adbState, answered, runtime.tunnelMisses, runtime.stalled)
 	previous := m.sessions[id].State
 	m.setStateLocked(id, func(s *Session) {
 		s.State = state
-		if state == StateOffline {
-			s.Err = "本地通道运行中，ADB 尚未上线"
-		} else {
-			s.Err = ""
-		}
+		s.Err = message
 	})
 	if previous != state {
-		m.logLocked(id, state.Label())
+		if state == StateTunnelLost {
+			// One line, not two: the state label says less than this sentence.
+			m.logLocked(id, message)
+		} else {
+			m.logLocked(id, state.Label())
+		}
 	}
-	if state == StateOnline {
+	if state == StateTunnelLost && previous != StateTunnelLost {
+		runtime.stalled = true
+		m.retryCounts[id] = 0
+		delete(m.nextRetries, id)
+	}
+	// get-state keeps claiming the device is there while the tunnel is dead;
+	// resetting the rebuild budget on that claim would make it endless.
+	if state == StateOnline && !runtime.stalled {
 		m.retryCounts[id] = 0
 		delete(m.nextRetries, id)
 	}
@@ -959,7 +997,7 @@ func (m *Manager) retryOffline(ctx context.Context, id uuid.UUID, generation uui
 		Args:    []string{"connect", runtime.serial},
 		Timeout: 10 * time.Second,
 	}, nil)
-	m.refresh(ctx, id, generation)
+	m.refresh(ctx, id, generation, false)
 
 	m.mu.Lock()
 	if m.isCurrentLocked(id, generation) && n >= maxOfflineRetries && m.sessions[id].State == StateOffline {

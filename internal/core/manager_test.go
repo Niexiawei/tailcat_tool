@@ -340,7 +340,7 @@ func TestStaleGenerationIgnored(t *testing.T) {
 	f.m.generations[f.id] = uuid.New()
 	f.m.mu.Unlock()
 
-	f.m.refresh(context.Background(), f.id, oldGeneration)
+	f.m.refresh(context.Background(), f.id, oldGeneration, false)
 	if state := f.m.Session(f.id).State; state != StateOnline {
 		t.Fatalf("a stale generation changed the state to %v", state)
 	}

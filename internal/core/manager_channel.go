@@ -76,3 +76,28 @@ func (m *Manager) probeTunnel(ctx context.Context, id uuid.UUID, generation uuid
 		m.notify()
 	}
 }
+
+// channelVerdict is the one place that decides what one tick means, so every
+// row of the attribution table is one table test. It returns the state to show
+// and the sentence that goes with it.
+//
+// tunnelMisses counts unanswered tunnel probes; two in a row mean the channel
+// itself is quiet. get-state's answer is only trusted when answered is true:
+// with roundTrip the caller has asked the device for a real shell round trip.
+func channelVerdict(adbState ConnectionState, answered bool, tunnelMisses int, stalled bool) (ConnectionState, string) {
+	if stalled {
+		return StateTunnelLost, MsgTunnelLost
+	}
+	if tunnelMisses >= tunnelMissesBeforeStalled && (adbState != StateOnline || !answered) {
+		// Both layers are silent (or the device was never reachable): the
+		// tunnel is the lower one, so that is the cause worth naming.
+		return StateTunnelLost, MsgTunnelLost
+	}
+	if adbState == StateOnline && !answered {
+		return StateOffline, MsgAdbStuck
+	}
+	if adbState == StateOffline {
+		return StateOffline, "本地通道运行中，ADB 尚未上线"
+	}
+	return adbState, ""
+}

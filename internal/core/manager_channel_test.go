@@ -170,3 +170,180 @@ func TestDirectDeviceIsNeverPinged(t *testing.T) {
 	}
 	f.m.Disconnect(context.Background(), f.id)
 }
+
+// silentDeviceHandler is a device whose adb lies: get-state reports the cached
+// transport as "device" while a real round trip gets no answer at all.
+func silentDeviceHandler(_ context.Context, c Command) (Result, error) {
+	if contains(c.Args, "get-state") {
+		return Result{Output: "device\n"}, nil
+	}
+	if contains(c.Args, "shell") {
+		return Result{TimedOut: true, ExitCode: 1}, nil
+	}
+	return Result{}, nil
+}
+
+// quietTunnel drives the consecutive-miss counter to its threshold without
+// waiting for the fast loop, so the attribution tests stay deterministic.
+func quietTunnel(t *testing.T, f *managerFixture, generation uuid.UUID) {
+	t.Helper()
+	f.m.probeTunnel(context.Background(), f.id, generation)
+	f.m.probeTunnel(context.Background(), f.id, generation)
+}
+
+// Both layers silent: the tunnel is the lower one, so the device reads
+// "Tailcat 断开" rather than "ADB 离线".
+func TestTunnelQuietAndDeviceSilentShowsTunnelLost(t *testing.T) {
+	f := newManagerFixture(t)
+	generation := connectForTest(t, f)
+	f.opener.setPingErr(Error("no answer"))
+	f.runner.setHandler(silentDeviceHandler)
+	quietTunnel(t, f, generation)
+
+	f.m.refresh(context.Background(), f.id, generation, true)
+
+	session := f.m.Session(f.id)
+	if session.State != StateTunnelLost {
+		t.Fatalf("state = %v, want %v", session.State, StateTunnelLost)
+	}
+	if session.Err != MsgTunnelLost {
+		t.Fatalf("Err = %q, want %q", session.Err, MsgTunnelLost)
+	}
+}
+
+// The tunnel probe rides DERP while data may well be going direct: a quiet
+// probe with a device that still answers is a relay hiccup, not an outage.
+func TestTunnelQuietButDeviceAnswersStaysOnline(t *testing.T) {
+	f := newManagerFixture(t)
+	generation := connectForTest(t, f)
+	f.opener.setPingErr(Error("no answer"))
+	quietTunnel(t, f, generation)
+	before := len(sessionLogTexts(f.m.Session(f.id)))
+
+	f.m.refresh(context.Background(), f.id, generation, true)
+
+	if state := f.m.Session(f.id).State; state != StateOnline {
+		t.Fatalf("state = %v, want online", state)
+	}
+	if after := len(sessionLogTexts(f.m.Session(f.id))); after != before {
+		t.Fatalf("the tick added %d log lines, want 0", after-before)
+	}
+}
+
+// The tunnel answers, the device does not: that is a device-side outage and
+// still reads "ADB 离线".
+func TestStuckAdbShowsOfflineNotTunnelLost(t *testing.T) {
+	f := newManagerFixture(t)
+	generation := connectForTest(t, f)
+	f.runner.setHandler(silentDeviceHandler)
+	before := len(sessionLogTexts(f.m.Session(f.id)))
+
+	f.m.refresh(context.Background(), f.id, generation, true)
+
+	session := f.m.Session(f.id)
+	if session.State != StateOffline {
+		t.Fatalf("state = %v, want offline", session.State)
+	}
+	if session.Err != MsgAdbStuck {
+		t.Fatalf("Err = %q, want %q", session.Err, MsgAdbStuck)
+	}
+	if delta := len(sessionLogTexts(f.m.Session(f.id))) - before; delta != 1 {
+		t.Fatalf("the tick logged %d lines, want 1", delta)
+	}
+}
+
+// get-state keeps lying on every tick; the state must not oscillate and the log
+// must not grow one line per tick (2400 lines an hour).
+func TestSignalLossLogsOneLine(t *testing.T) {
+	f := newManagerFixture(t)
+	generation := connectForTest(t, f)
+	f.runner.setHandler(silentDeviceHandler)
+	f.m.refresh(context.Background(), f.id, generation, true)
+	after := len(sessionLogTexts(f.m.Session(f.id)))
+	for i := 0; i < 3; i++ {
+		f.m.refresh(context.Background(), f.id, generation, true)
+	}
+	if now := len(sessionLogTexts(f.m.Session(f.id))); now != after {
+		t.Fatalf("three more ticks added %d log lines, want 0", now-after)
+	}
+}
+
+// Before authorization no shell can answer, so the end-to-end check cannot run:
+// a quiet tunnel alone has to be enough.
+func TestTunnelLossWhileUnauthorized(t *testing.T) {
+	f := newManagerFixture(t)
+	f.runner.setHandler(func(_ context.Context, c Command) (Result, error) {
+		if contains(c.Args, "get-state") {
+			return Result{ExitCode: 1, Output: "error: device unauthorized\n"}, nil
+		}
+		return Result{}, nil
+	})
+	generation := connectForTest(t, f)
+	if state := f.m.Session(f.id).State; state != StateUnauthorized {
+		t.Fatalf("state = %v, want unauthorized before the test starts", state)
+	}
+	f.opener.setPingErr(Error("no answer"))
+	quietTunnel(t, f, generation)
+
+	f.m.refresh(context.Background(), f.id, generation, true)
+
+	if state := f.m.Session(f.id).State; state != StateTunnelLost {
+		t.Fatalf("state = %v, want %v", state, StateTunnelLost)
+	}
+}
+
+// A short outage heals on its own: the tunnel answers again, so the channel is
+// not torn down and get-state decides the device's state in the same tick.
+func TestTunnelRecoveryClearsTheStall(t *testing.T) {
+	f := newManagerFixture(t)
+	generation := connectForTest(t, f)
+	f.opener.setPingErr(Error("no answer"))
+	f.runner.setHandler(silentDeviceHandler)
+	quietTunnel(t, f, generation)
+	f.m.refresh(context.Background(), f.id, generation, true)
+	if state := f.m.Session(f.id).State; state != StateTunnelLost {
+		t.Fatalf("state = %v, want a stall before the test continues", state)
+	}
+
+	f.opener.setPingErr(nil)
+	f.runner.setHandler(healthyADB)
+	f.m.probeTunnel(context.Background(), f.id, generation)
+	f.m.refresh(context.Background(), f.id, generation, true)
+
+	if state := f.m.Session(f.id).State; state != StateOnline {
+		t.Fatalf("state = %v, want online after the tunnel answered again", state)
+	}
+	lines := strings.Join(sessionLogTexts(f.m.Session(f.id)), "\n")
+	if !strings.Contains(lines, "Tailcat 通道已恢复") {
+		t.Fatalf("the recovery was not logged:\n%s", lines)
+	}
+}
+
+// Every row of the attribution table in one place: this is the only function
+// that decides what a tick means.
+func TestChannelVerdicts(t *testing.T) {
+	cases := []struct {
+		name     string
+		adb      ConnectionState
+		answered bool
+		misses   int
+		stalled  bool
+		want     ConnectionState
+	}{
+		{"healthy", StateOnline, true, 0, false, StateOnline},
+		{"device silent, tunnel fine", StateOnline, false, 0, false, StateOffline},
+		{"both silent", StateOnline, false, 2, false, StateTunnelLost},
+		{"relay hiccup, device answers", StateOnline, true, 2, false, StateOnline},
+		{"tunnel quiet while adb offline", StateOffline, true, 2, false, StateTunnelLost},
+		{"tunnel quiet while unauthorized", StateUnauthorized, true, 2, false, StateTunnelLost},
+		{"unauthorized, everything fine", StateUnauthorized, true, 0, false, StateUnauthorized},
+		{"offline, everything fine", StateOffline, true, 0, false, StateOffline},
+		{"already stalled", StateOnline, true, 0, true, StateTunnelLost},
+	}
+	for _, c := range cases {
+		got, _ := channelVerdict(c.adb, c.answered, c.misses, c.stalled)
+		if got != c.want {
+			t.Fatalf("%s: channelVerdict = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

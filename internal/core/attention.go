@@ -338,6 +338,19 @@ func (m *Manager) AckAttention(id uuid.UUID) {
 	m.mu.Unlock()
 }
 
+// ForceSessionStateForTest sets one device's session state without sampling
+// anything. It exists so the view tests and the screenshot harness can render a
+// state that only a real outage reaches.
+func (m *Manager) ForceSessionStateForTest(id uuid.UUID, state ConnectionState, errText string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.setStateLocked(id, func(s *Session) {
+		s.State = state
+		s.Err = errText
+	})
+	m.notify()
+}
+
 // ForceAttentionForTest records an attention without sampling adb. It exists
 // so the view tests can render the dialog without a device.
 func (m *Manager) ForceAttentionForTest(id uuid.UUID, kind AttentionKind, detail string) {
