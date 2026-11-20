@@ -528,7 +528,7 @@ func statusDot(c *ui.Context, state core.ConnectionState) {
 	switch state {
 	case core.StateOnline:
 		color = theme.Success
-	case core.StateUnauthorized, core.StateOffline, core.StateNeedsAction:
+	case core.StateUnauthorized, core.StateOffline, core.StateNeedsAction, core.StateTunnelLost:
 		color = theme.Warning
 	case core.StateFailed:
 		color = theme.Danger

@@ -21,6 +21,11 @@ const (
 // TailcatSession is the part of a tailcat client this app uses.
 type TailcatSession interface {
 	DialTCPPort(ctx context.Context, port uint16) (net.Conn, error)
+	// DiscoPing asks the far end for one round trip. It is the only probe the
+	// tailcat client offers after startup: Client.Ping waits on a channel that
+	// is closed once, on the first meow ack, so it answers instantly forever
+	// after and cannot detect a dead peer.
+	DiscoPing(ctx context.Context) error
 	Close() error
 }
 
@@ -44,6 +49,12 @@ type ForwardRequest struct {
 type ForwardConn struct {
 	Port   int
 	Serial string
+	// TunnelPing asks the tunnel for one round trip; nil when this channel has
+	// no tunnel of its own (a direct ADB device, or a test opener that leaves it
+	// out). ADB's own get-state cannot answer this question: it reports a
+	// cached transport state and keeps saying "device" after the far end went
+	// silent.
+	TunnelPing func(ctx context.Context) error
 	// Close shuts the listener, the proxied connections, then the session.
 	Close func(ctx context.Context) error
 }
@@ -129,7 +140,12 @@ func (f *Forwarder) Open(ctx context.Context, req ForwardRequest, onLog func(str
 		return nil
 	}
 
-	return &ForwardConn{Port: port, Serial: net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), Close: closeFn}, nil
+	return &ForwardConn{
+		Port:       port,
+		Serial:     net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
+		TunnelPing: func(ctx context.Context) error { return session.DiscoPing(ctx) },
+		Close:      closeFn,
+	}, nil
 }
 
 func (f *Forwarder) dialer() TailcatDialer {
@@ -203,6 +219,11 @@ type libSession struct{ client *tailcat.Client }
 
 func (s *libSession) DialTCPPort(ctx context.Context, port uint16) (net.Conn, error) {
 	return s.client.DialTCPPort(ctx, port)
+}
+
+func (s *libSession) DiscoPing(ctx context.Context) error {
+	_, err := s.client.DiscoPing(ctx)
+	return err
 }
 
 func (s *libSession) Close() error { return s.client.Close() }

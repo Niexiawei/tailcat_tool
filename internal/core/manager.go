@@ -19,6 +19,17 @@ const (
 	maxOfflineRetries      = 6
 	adbConnectTimeout      = 15 * time.Second
 	adbStateTimeout        = 4 * time.Second
+	// adbRoundTripTimeout bounds one end-to-end check: a healthy device answers
+	// in tens of milliseconds, and a silent tunnel is what the timeout is for.
+	adbRoundTripTimeout = 4 * time.Second
+	// tunnelMissesBeforeStalled is how many tunnel probes in a row must go
+	// unanswered before the channel is called quiet: one lost disco packet is
+	// packet loss, two in a row is a dead far end.
+	tunnelMissesBeforeStalled = 2
+	// tunnelPingTimeout bounds one tunnel round trip. It is half the probe
+	// interval so a stalled probe cannot queue up behind the next tick.
+	tunnelPingTimeout     = 2 * time.Second
+	defaultTunnelInterval = 2 * time.Second
 )
 
 // ChannelOpener opens device channels (the forwarder in production).
@@ -103,9 +114,12 @@ type Manager struct {
 	nextTemporaryNumber int
 
 	monitorInterval time.Duration
-	connectPoll     time.Duration
-	ctx             context.Context
-	cancel          context.CancelFunc
+	// tunnelInterval drives the fast liveness loop, which is deliberately
+	// shorter than monitorInterval: adb's own state is polled on the slow loop.
+	tunnelInterval time.Duration
+	connectPoll    time.Duration
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 type runtimeState struct {
@@ -114,6 +128,17 @@ type runtimeState struct {
 	serial     string
 	adb        string
 	generation uuid.UUID
+	// tunnelMisses counts consecutive unanswered tunnel probes; the channel is
+	// called quiet at tunnelMissesBeforeStalled, and only a probe that answers
+	// again resets it.
+	tunnelMisses int
+	// stalled marks a channel already reported as tunnelLost, so get-state
+	// (which answers from a cache) cannot bring it back and retryOffline
+	// rebuilds the channel instead of re-adding a dead ADB entry.
+	stalled bool
+	// rebuildFailed means the rebuild budget is spent: the session keeps saying
+	// so instead of falling back to "正在重建通道" on the next tick.
+	rebuildFailed bool
 }
 
 // ManagerOptions wires a Manager. Only Runner and Credentials are required.
@@ -150,7 +175,11 @@ type ManagerOptions struct {
 	AppMetaCache AppMetaCache
 	// ResourceInterval is how often an open resource page re-reads a device.
 	ResourceInterval time.Duration
-	MonitorInterval  time.Duration
+	// MonitorInterval is how often the slow loop reads adb's own state.
+	MonitorInterval time.Duration
+	// TunnelInterval is how often the fast loop asks the tunnel for a round
+	// trip; zero uses two seconds.
+	TunnelInterval time.Duration
 	// ConnectPollInterval is the delay between get-state polls while
 	// connecting; tests use a small value.
 	ConnectPollInterval time.Duration
@@ -162,6 +191,10 @@ func NewManager(opts ManagerOptions) *Manager {
 	interval := opts.MonitorInterval
 	if interval <= 0 {
 		interval = defaultMonitorInterval
+	}
+	tunnelEvery := opts.TunnelInterval
+	if tunnelEvery <= 0 {
+		tunnelEvery = defaultTunnelInterval
 	}
 	pollInterval := opts.ConnectPollInterval
 	if pollInterval <= 0 {
@@ -208,6 +241,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		relayProbeInterval:  opts.RelayProbeInterval,
 		defaultNodeListURL:  DefaultNodeListURL,
 		monitorInterval:     interval,
+		tunnelInterval:      tunnelEvery,
 		resourceInterval:    resourceInterval,
 		appMeta:             opts.AppMeta,
 		appMetaCache:        opts.AppMetaCache,
@@ -526,76 +560,8 @@ func (m *Manager) Connect(ctx context.Context, id uuid.UUID) error {
 		return m.connectDirect(ctx, id, generation, profile, adbPath)
 	}
 
-	relay, err := NormalizeRelay(profile.RelaySource)
-	if err != nil {
+	if err := m.openTailcatChannel(ctx, id, generation, profile, adbPath, address); err != nil {
 		return m.failConnect(id, generation, err)
-	}
-	nodeKey, err := m.identities.NodeKey(ctx, id.String()+"-connection")
-	if err != nil {
-		return m.failConnect(id, generation, err)
-	}
-
-	m.log(id, "正在建立独立 Tailcat 转发通道")
-	conn, err := m.forwarder.Open(ctx, ForwardRequest{
-		Address:       address,
-		PreferredPort: preferredPort(profile),
-		RemotePort:    remotePort(profile),
-		NodeKey:       nodeKey,
-		Relay:         relay,
-	}, func(line string) {
-		m.mu.Lock()
-		current := m.isCurrentLocked(id, generation)
-		m.mu.Unlock()
-		if current {
-			m.log(id, line)
-		}
-	})
-	if err != nil {
-		return m.failConnect(id, generation, err)
-	}
-
-	m.mu.Lock()
-	if !m.isCurrentLocked(id, generation) {
-		m.mu.Unlock()
-		_ = conn.Close(ctx)
-		return nil
-	}
-	m.runtimes[id] = &runtimeState{conn: conn, serial: conn.Serial, adb: adbPath, generation: generation}
-	m.setStateLocked(id, func(s *Session) {
-		s.Serial = conn.Serial
-		s.Port = conn.Port
-	})
-	m.notify()
-	m.mu.Unlock()
-
-	res, err := m.runner.Run(ctx, Command{
-		Path:    adbPath,
-		Args:    []string{"connect", conn.Serial},
-		Timeout: adbConnectTimeout,
-	}, nil)
-	if err != nil {
-		return m.failConnect(id, generation, err)
-	}
-	if res.TimedOut {
-		m.log(id, "ADB 连接等待超时，通道保留，可重试或等待设备上线")
-	} else if trimmed := strings.TrimSpace(res.Output); trimmed != "" {
-		m.log(id, trimmed)
-	}
-
-	for attempt := 0; attempt < connectPollAttempts; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return nil
-		}
-		m.refresh(ctx, id, generation)
-		state := m.Session(id).State
-		if state == StateOnline || state == StateUnauthorized {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(m.connectPoll):
-		}
 	}
 	m.startMonitor(id, generation)
 	// Connecting is the moment the device identity becomes readable; doing it
@@ -792,73 +758,140 @@ func (m *Manager) startMonitor(id uuid.UUID, generation uuid.UUID) {
 	ctx, cancel := context.WithCancel(m.ctx)
 	m.monitors[id] = cancel
 	interval := m.monitorInterval
+	tunnelEvery := m.tunnelInterval
 	m.mu.Unlock()
 
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-			m.mu.Lock()
-			current := m.isCurrentLocked(id, generation)
-			m.mu.Unlock()
-			if !current {
-				return
-			}
-			m.refresh(ctx, id, generation)
-			m.maybeDetectInterference(ctx, id, generation)
-			m.retryOffline(ctx, id, generation)
-		}
-	}()
+	go m.pollLoop(ctx, id, generation, interval)
+	go m.tunnelLoop(ctx, id, generation, tunnelEvery)
 }
 
-// refresh polls adb get-state and updates the session.
-func (m *Manager) refresh(ctx context.Context, id uuid.UUID, generation uuid.UUID) {
+// pollLoop reads adb's own view of the device on a timer and owns every state
+// write for the device: refresh, interference detection, retries, rebuilds.
+func (m *Manager) pollLoop(ctx context.Context, id uuid.UUID, generation uuid.UUID, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		m.mu.Lock()
+		current := m.isCurrentLocked(id, generation)
+		m.mu.Unlock()
+		if !current {
+			return
+		}
+		m.refresh(ctx, id, generation, true)
+		m.maybeDetectInterference(ctx, id, generation)
+		m.retryOffline(ctx, id, generation)
+	}
+}
+
+// tunnelLoop asks the tunnel itself whether the far end still answers. It is
+// faster than pollLoop on purpose (a dead tunnel cannot be seen through adb's
+// cached get-state) and it never writes session state, so a lost disco packet
+// cannot flip the UI on its own.
+func (m *Manager) tunnelLoop(ctx context.Context, id uuid.UUID, generation uuid.UUID, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		m.mu.Lock()
+		current := m.isCurrentLocked(id, generation)
+		m.mu.Unlock()
+		if !current {
+			return
+		}
+		m.probeTunnel(ctx, id, generation)
+	}
+}
+
+// refresh polls adb get-state and updates the session. With roundTrip set it
+// also asks the device itself for one shell round trip, because get-state
+// answers from adb's cache and keeps saying "device" while the far end is
+// silent; only the monitor loop asks for that (see channelVerdict).
+//
+// It is the single writer of a session's state: the fast tunnel loop only
+// counts misses, so the UI cannot oscillate between two writers.
+func (m *Manager) refresh(ctx context.Context, id uuid.UUID, generation uuid.UUID, roundTrip bool) {
 	m.mu.Lock()
 	runtime := m.runtimes[id]
+	var adbPath, serial string
+	stalled := false
+	if runtime != nil {
+		adbPath, serial, stalled = runtime.adb, runtime.serial, runtime.stalled
+	}
 	m.mu.Unlock()
 	if runtime == nil {
 		return
 	}
 	res, err := m.runner.Run(ctx, Command{
-		Path:    runtime.adb,
-		Args:    []string{"-s", runtime.serial, "get-state"},
+		Path:    adbPath,
+		Args:    []string{"-s", serial, "get-state"},
 		Timeout: adbStateTimeout,
 	}, nil)
 	output := ""
 	if err == nil {
 		output = strings.TrimSpace(res.Output)
 	}
+	adbState := StateOffline
+	switch {
+	case err == nil && res.ExitCode == 0 && output == "device":
+		adbState = StateOnline
+	case strings.Contains(output, "unauthorized"):
+		adbState = StateUnauthorized
+	}
+
+	// A stalled channel has nothing to answer with, so its end-to-end check
+	// would only spend the full timeout every tick.
+	answered := true
+	if roundTrip && !stalled && adbState == StateOnline {
+		answered = m.adbRoundTrip(ctx, adbPath, serial) == nil
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.isCurrentLocked(id, generation) || m.runtimes[id] == nil {
+	runtime = m.runtimes[id]
+	if !m.isCurrentLocked(id, generation) || runtime == nil {
 		return
 	}
-	state := StateOffline
-	switch {
-	case err == nil && res.ExitCode == 0 && output == "device":
-		state = StateOnline
-	case strings.Contains(output, "unauthorized"):
-		state = StateUnauthorized
+	if runtime.stalled && runtime.tunnelMisses == 0 {
+		// The tunnel answers again: a short outage that healed, so the channel
+		// is not torn down for it.
+		runtime.stalled = false
+		runtime.rebuildFailed = false
+		m.logLocked(id, "Tailcat 通道已恢复")
+	}
+	state, message := channelVerdict(adbState, answered, runtime.tunnelMisses, runtime.stalled)
+	if runtime.stalled && runtime.rebuildFailed {
+		message = MsgTunnelRebuildFailed
 	}
 	previous := m.sessions[id].State
 	m.setStateLocked(id, func(s *Session) {
 		s.State = state
-		if state == StateOffline {
-			s.Err = "本地通道运行中，ADB 尚未上线"
-		} else {
-			s.Err = ""
-		}
+		s.Err = message
 	})
 	if previous != state {
-		m.logLocked(id, state.Label())
+		if state == StateTunnelLost {
+			// One line, not two: the state label says less than this sentence.
+			m.logLocked(id, message)
+		} else {
+			m.logLocked(id, state.Label())
+		}
 	}
-	if state == StateOnline {
+	if state == StateTunnelLost && previous != StateTunnelLost {
+		runtime.stalled = true
+		m.retryCounts[id] = 0
+		delete(m.nextRetries, id)
+	}
+	// get-state keeps claiming the device is there while the tunnel is dead;
+	// resetting the rebuild budget on that claim would make it endless.
+	if state == StateOnline && !runtime.stalled {
 		m.retryCounts[id] = 0
 		delete(m.nextRetries, id)
 	}
@@ -878,18 +911,26 @@ func (m *Manager) maybeDetectInterference(ctx context.Context, id uuid.UUID, gen
 	m.detectInterference(ctx, id, generation)
 }
 
-// retryOffline re-issues adb connect with a bounded, growing delay.
+// retryOffline recovers a lost device on a bounded, growing delay. An offline
+// device needs adb connect again; a dead tunnel needs a whole new channel,
+// because adb connect against a dead tunnel only waits out its timeout.
 func (m *Manager) retryOffline(ctx context.Context, id uuid.UUID, generation uuid.UUID) {
 	m.mu.Lock()
 	state := m.sessions[id].State
 	count := m.retryCounts[id]
 	next, hasNext := m.nextRetries[id]
 	runtime := m.runtimes[id]
+	// A stalled channel is rebuilt, not re-added: the ADB entry is a ghost.
+	rebuild := state == StateTunnelLost
 	attempt := false
-	if state == StateOffline && runtime != nil && count < maxOfflineRetries && (!hasNext || !time.Now().Before(next)) {
+	if (state == StateOffline || rebuild) && runtime != nil && count < maxOfflineRetries && (!hasNext || !time.Now().Before(next)) {
 		m.retryCounts[id] = count + 1
 		m.nextRetries[id] = time.Now().Add(retryDelay(count + 1))
 		attempt = true
+	}
+	var adbPath, serial string
+	if runtime != nil {
+		adbPath, serial = runtime.adb, runtime.serial
 	}
 	n := count + 1
 	m.mu.Unlock()
@@ -897,20 +938,48 @@ func (m *Manager) retryOffline(ctx context.Context, id uuid.UUID, generation uui
 	if !attempt {
 		return
 	}
-	m.log(id, "尝试恢复 ADB 连接（"+strconv.Itoa(n)+"/"+strconv.Itoa(maxOfflineRetries)+"）")
-	_, _ = m.runner.Run(ctx, Command{
-		Path:    runtime.adb,
-		Args:    []string{"connect", runtime.serial},
-		Timeout: 10 * time.Second,
-	}, nil)
-	m.refresh(ctx, id, generation)
+	suffix := "（" + strconv.Itoa(n) + "/" + strconv.Itoa(maxOfflineRetries) + "）"
+	if rebuild {
+		m.log(id, "正在重建 Tailcat 通道"+suffix)
+		// Everything that reads the dead channel stops before it goes, in
+		// Disconnect's order.
+		waitDones(m.cancelDeviceTasks(id))
+		m.StopLogcat(id)
+		m.mu.Lock()
+		m.stopResourceSamplingLocked(id)
+		m.mu.Unlock()
+		if err := m.rebuildChannel(ctx, id, generation); err != nil {
+			m.log(id, "Tailcat 通道重建失败："+err.Error())
+		}
+		m.refresh(ctx, id, generation, false)
+	} else {
+		m.log(id, "尝试恢复 ADB 连接"+suffix)
+		_, _ = m.runner.Run(ctx, Command{
+			Path:    adbPath,
+			Args:    []string{"connect", serial},
+			Timeout: 10 * time.Second,
+		}, nil)
+		m.refresh(ctx, id, generation, false)
+	}
 
 	m.mu.Lock()
-	if m.isCurrentLocked(id, generation) && n >= maxOfflineRetries && m.sessions[id].State == StateOffline {
+	defer m.mu.Unlock()
+	if !m.isCurrentLocked(id, generation) || n < maxOfflineRetries {
+		m.notify()
+		return
+	}
+	current := m.sessions[id].State
+	switch {
+	case rebuild && current == StateTunnelLost:
+		if runtime := m.runtimes[id]; runtime != nil {
+			runtime.rebuildFailed = true
+		}
+		m.setStateLocked(id, func(s *Session) { s.Err = MsgTunnelRebuildFailed })
+		m.logLocked(id, MsgTunnelRebuildFailed)
+	case !rebuild && current == StateOffline:
 		m.setStateLocked(id, func(s *Session) { s.Err = "自动恢复已尝试 6 次，请检查设备后重新连接" })
 	}
 	m.notify()
-	m.mu.Unlock()
 }
 
 // retryDelay grows 2s, 4s, 8s, 16s then stays at 30s.

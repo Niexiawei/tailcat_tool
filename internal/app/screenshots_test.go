@@ -134,6 +134,16 @@ func shotCases() []shotCase {
 			build: func(t *testing.T) *ViewModel { return shotDevice(t, readFixture, detailOverview) },
 		},
 		{
+			// The one state whose colour and wording are easy to get wrong: the
+			// device is not "ADB 离线", its Tailcat channel is gone.
+			name: "03b-device-tunnel-lost",
+			build: func(t *testing.T) *ViewModel {
+				vm := shotDevice(t, readFixture, detailOverview)
+				vm.Manager.ForceSessionStateForTest(vm.Manager.Profiles()[0].ID, core.StateTunnelLost, core.MsgTunnelLost)
+				return vm
+			},
+		},
+		{
 			name:   "04-device-resources",
 			build:  func(t *testing.T) *ViewModel { vm, _ := resourceFixture(t); return vm },
 			settle: 6,

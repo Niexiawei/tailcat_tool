@@ -18,6 +18,11 @@ const (
 	// (an external adb disconnect, a moved local port, a lost listener) and
 	// the user has to decide what happens next. Nothing retries in this state.
 	StateNeedsAction ConnectionState = "needsAction"
+	// StateTunnelLost means our Tailcat tunnel stopped answering: the channel
+	// is gone even though the local ADB entry may still look fine. It is not
+	// needsAction — nothing outside changed our setup, and the app is already
+	// rebuilding the channel on its own.
+	StateTunnelLost ConnectionState = "tunnelLost"
 )
 
 // Label returns the Chinese label shown in the UI.
@@ -41,6 +46,8 @@ func (s ConnectionState) Label() string {
 		return "连接失败"
 	case StateNeedsAction:
 		return "等待处理"
+	case StateTunnelLost:
+		return "Tailcat 断开"
 	default:
 		return string(s)
 	}

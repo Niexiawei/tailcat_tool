@@ -29,6 +29,18 @@ type fakeSession struct {
 	lastPort uint16
 	echo     string
 	logf     func(string, ...any)
+	// discoErr is what the next tunnel probe answers; discos counts them so a
+	// test can see the probe actually reached the session.
+	discoErr error
+	discos   int
+}
+
+// DiscoPing stands in for one tailcat disco ping round trip.
+func (f *fakeSession) DiscoPing(_ context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.discos++
+	return f.discoErr
 }
 
 func (f *fakeSession) DialTCPPort(_ context.Context, port uint16) (net.Conn, error) {
@@ -334,5 +346,31 @@ func TestForwardAllPortsBusy(t *testing.T) {
 	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "5556") {
 		t.Fatalf("error = %v, want one naming the exhausted range", err)
+	}
+}
+
+// A tailcat channel has to answer "is the tunnel still there?" without
+// touching adb: get-state answers from adb's own cache and says "device" even
+// when the far end went silent.
+func TestForwardConnTunnelPingReachesTheSession(t *testing.T) {
+	f, _, session := newForwarderForTest(t, "")
+	conn, err := f.Open(context.Background(), ForwardRequest{Address: sampleAddress, RemotePort: 5555}, nil)
+	if err != nil {
+		t.Fatalf("Open() error: %v", err)
+	}
+	defer conn.Close(context.Background())
+
+	if conn.TunnelPing == nil {
+		t.Fatal("a tailcat channel has no tunnel probe")
+	}
+	if err := conn.TunnelPing(context.Background()); err != nil {
+		t.Fatalf("TunnelPing() error: %v", err)
+	}
+	if session.discos != 1 {
+		t.Fatalf("session disco-pinged %d times, want 1", session.discos)
+	}
+	session.discoErr = Error("no answer")
+	if err := conn.TunnelPing(context.Background()); err == nil {
+		t.Fatal("TunnelPing() hid the tunnel's error")
 	}
 }

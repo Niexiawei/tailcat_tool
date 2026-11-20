@@ -29,3 +29,15 @@ const (
 // MsgTaskOutputMissing is what the output dialog says when a task's record is
 // gone (cleared history, or a row from another machine).
 const MsgTaskOutputMissing = "任务输出不存在，可能已被清理"
+
+// MsgAdbStuck means the tunnel answers but the device's ADB does not: it is a
+// device-side outage, not a channel one, so the recovery is adb's own retry.
+const MsgAdbStuck = "设备在 4 秒内没有应答，ADB 可能已卡住"
+
+// MsgTunnelLost is the session's explanation while the channel is being
+// rebuilt.
+const MsgTunnelLost = "Tailcat 通道已断开，正在重建通道"
+
+// MsgTunnelRebuildFailed is what the device says after the rebuild budget is
+// spent and nothing is retried any more.
+const MsgTunnelRebuildFailed = "Tailcat 通道重建失败，请检查网络后重新连接"

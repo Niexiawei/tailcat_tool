@@ -15,6 +15,7 @@ func TestStateLabels(t *testing.T) {
 		{StateDisconnecting, "正在断开"},
 		{StateFailed, "连接失败"},
 		{StateNeedsAction, "等待处理"},
+		{StateTunnelLost, "Tailcat 断开"},
 	}
 	for _, tc := range cases {
 		if got := tc.state.String(); got != tc.label {
@@ -29,7 +30,7 @@ func TestStateLabels(t *testing.T) {
 func TestStateBusy(t *testing.T) {
 	busy := []ConnectionState{StateConnecting, StateDisconnecting}
 	for _, s := range []ConnectionState{
-		StateDisconnected, StateOnline, StateOffline, StateUnauthorized, StateFailed, StateNeedsAction,
+		StateDisconnected, StateOnline, StateOffline, StateUnauthorized, StateFailed, StateNeedsAction, StateTunnelLost,
 	} {
 		if s.Busy() {
 			t.Errorf("%q.Busy() = true, want false", string(s))
