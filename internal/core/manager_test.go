@@ -102,6 +102,10 @@ type fakeOpener struct {
 	ports   []int
 	closedP []bool
 	ln      net.Listener
+	// pingErr is what every opened channel's tunnel probe answers; pings counts
+	// the probes so a test can see the fast loop actually reached the channel.
+	pingErr error
+	pings   int
 }
 
 func (o *fakeOpener) Open(_ context.Context, req ForwardRequest, _ func(string)) (*ForwardConn, error) {
@@ -124,6 +128,12 @@ func (o *fakeOpener) Open(_ context.Context, req ForwardRequest, _ func(string))
 	conn := &ForwardConn{
 		Port:   port,
 		Serial: fmt.Sprintf("127.0.0.1:%d", port),
+		TunnelPing: func(context.Context) error {
+			o.mu.Lock()
+			defer o.mu.Unlock()
+			o.pings++
+			return o.pingErr
+		},
 		Close: func(context.Context) error {
 			o.mu.Lock()
 			if !o.closedP[index] {
@@ -147,6 +157,18 @@ func (o *fakeOpener) closeCount() int {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.closes
+}
+
+func (o *fakeOpener) setPingErr(err error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.pingErr = err
+}
+
+func (o *fakeOpener) pingCount() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.pings
 }
 
 type managerFixture struct {

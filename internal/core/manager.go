@@ -22,6 +22,14 @@ const (
 	// adbRoundTripTimeout bounds one end-to-end check: a healthy device answers
 	// in tens of milliseconds, and a silent tunnel is what the timeout is for.
 	adbRoundTripTimeout = 4 * time.Second
+	// tunnelMissesBeforeStalled is how many tunnel probes in a row must go
+	// unanswered before the channel is called quiet: one lost disco packet is
+	// packet loss, two in a row is a dead far end.
+	tunnelMissesBeforeStalled = 2
+	// tunnelPingTimeout bounds one tunnel round trip. It is half the probe
+	// interval so a stalled probe cannot queue up behind the next tick.
+	tunnelPingTimeout     = 2 * time.Second
+	defaultTunnelInterval = 2 * time.Second
 )
 
 // ChannelOpener opens device channels (the forwarder in production).
@@ -106,9 +114,12 @@ type Manager struct {
 	nextTemporaryNumber int
 
 	monitorInterval time.Duration
-	connectPoll     time.Duration
-	ctx             context.Context
-	cancel          context.CancelFunc
+	// tunnelInterval drives the fast liveness loop, which is deliberately
+	// shorter than monitorInterval: adb's own state is polled on the slow loop.
+	tunnelInterval time.Duration
+	connectPoll    time.Duration
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 type runtimeState struct {
@@ -117,6 +128,10 @@ type runtimeState struct {
 	serial     string
 	adb        string
 	generation uuid.UUID
+	// tunnelMisses counts consecutive unanswered tunnel probes; the channel is
+	// called quiet at tunnelMissesBeforeStalled, and only a probe that answers
+	// again resets it.
+	tunnelMisses int
 }
 
 // ManagerOptions wires a Manager. Only Runner and Credentials are required.
@@ -153,7 +168,11 @@ type ManagerOptions struct {
 	AppMetaCache AppMetaCache
 	// ResourceInterval is how often an open resource page re-reads a device.
 	ResourceInterval time.Duration
-	MonitorInterval  time.Duration
+	// MonitorInterval is how often the slow loop reads adb's own state.
+	MonitorInterval time.Duration
+	// TunnelInterval is how often the fast loop asks the tunnel for a round
+	// trip; zero uses two seconds.
+	TunnelInterval time.Duration
 	// ConnectPollInterval is the delay between get-state polls while
 	// connecting; tests use a small value.
 	ConnectPollInterval time.Duration
@@ -165,6 +184,10 @@ func NewManager(opts ManagerOptions) *Manager {
 	interval := opts.MonitorInterval
 	if interval <= 0 {
 		interval = defaultMonitorInterval
+	}
+	tunnelEvery := opts.TunnelInterval
+	if tunnelEvery <= 0 {
+		tunnelEvery = defaultTunnelInterval
 	}
 	pollInterval := opts.ConnectPollInterval
 	if pollInterval <= 0 {
@@ -211,6 +234,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		relayProbeInterval:  opts.RelayProbeInterval,
 		defaultNodeListURL:  DefaultNodeListURL,
 		monitorInterval:     interval,
+		tunnelInterval:      tunnelEvery,
 		resourceInterval:    resourceInterval,
 		appMeta:             opts.AppMeta,
 		appMetaCache:        opts.AppMetaCache,
@@ -795,28 +819,57 @@ func (m *Manager) startMonitor(id uuid.UUID, generation uuid.UUID) {
 	ctx, cancel := context.WithCancel(m.ctx)
 	m.monitors[id] = cancel
 	interval := m.monitorInterval
+	tunnelEvery := m.tunnelInterval
 	m.mu.Unlock()
 
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-			m.mu.Lock()
-			current := m.isCurrentLocked(id, generation)
-			m.mu.Unlock()
-			if !current {
-				return
-			}
-			m.refresh(ctx, id, generation)
-			m.maybeDetectInterference(ctx, id, generation)
-			m.retryOffline(ctx, id, generation)
+	go m.pollLoop(ctx, id, generation, interval)
+	go m.tunnelLoop(ctx, id, generation, tunnelEvery)
+}
+
+// pollLoop reads adb's own view of the device on a timer and owns every state
+// write for the device: refresh, interference detection, retries, rebuilds.
+func (m *Manager) pollLoop(ctx context.Context, id uuid.UUID, generation uuid.UUID, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
-	}()
+		m.mu.Lock()
+		current := m.isCurrentLocked(id, generation)
+		m.mu.Unlock()
+		if !current {
+			return
+		}
+		m.refresh(ctx, id, generation)
+		m.maybeDetectInterference(ctx, id, generation)
+		m.retryOffline(ctx, id, generation)
+	}
+}
+
+// tunnelLoop asks the tunnel itself whether the far end still answers. It is
+// faster than pollLoop on purpose (a dead tunnel cannot be seen through adb's
+// cached get-state) and it never writes session state, so a lost disco packet
+// cannot flip the UI on its own.
+func (m *Manager) tunnelLoop(ctx context.Context, id uuid.UUID, generation uuid.UUID, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		m.mu.Lock()
+		current := m.isCurrentLocked(id, generation)
+		m.mu.Unlock()
+		if !current {
+			return
+		}
+		m.probeTunnel(ctx, id, generation)
+	}
 }
 
 // refresh polls adb get-state and updates the session.
