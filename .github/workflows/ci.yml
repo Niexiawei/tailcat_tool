@@ -88,10 +88,12 @@ jobs:
         with:
           name: tailcat-manager-${{ matrix.os }}
           if-no-files-found: error
+          # mygo build writes each target to its own directory:
+          # dist/windows-amd64, dist/linux-amd64, dist/darwin-universal.
           path: |
-            dist/*.dmg
-            dist/*.exe
-            dist/*.deb
-            dist/*.rpm
-            dist/*.tar.gz
-            dist/*.AppImage
+            dist/*/*.dmg
+            dist/*/*.exe
+            dist/*/*.deb
+            dist/*/*.rpm
+            dist/*/*.tar.gz
+            dist/*/*.AppImage
