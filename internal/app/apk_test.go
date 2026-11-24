@@ -1,0 +1,341 @@
+package app
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/Niexiawei/tailcat-tool/internal/core"
+	"github.com/egoist/mygo/ui"
+	"github.com/google/uuid"
+)
+
+// streamRunner answers commands and can feed the task's output sink, which is
+// the only way a view test sees an `adb pull` progress line.
+type streamRunner struct {
+	mu     sync.Mutex
+	answer func(ctx context.Context, c core.Command, emit func(string)) (core.Result, error)
+	calls  []string
+}
+
+func (r *streamRunner) Start(context.Context, core.Command, func(string)) (*core.Proc, error) {
+	return nil, core.Error("Start is not used in view tests")
+}
+
+func (r *streamRunner) Run(ctx context.Context, c core.Command, emit func(string)) (core.Result, error) {
+	r.mu.Lock()
+	r.calls = append(r.calls, strings.Join(c.Args, " "))
+	answer := r.answer
+	r.mu.Unlock()
+	return answer(ctx, c, emit)
+}
+
+func (r *streamRunner) commandLog() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.calls...)
+}
+
+// apkAnswer is the device the APK tests talk to: one installed application with
+// a base APK of 1024 bytes, and a pull that finishes immediately.
+func apkAnswer(_ context.Context, c core.Command, _ func(string)) (core.Result, error) {
+	joined := strings.Join(c.Args, " ")
+	switch {
+	case strings.Contains(joined, "get-state"):
+		return core.Result{Output: "device\n"}, nil
+	case strings.Contains(joined, "pm list packages"):
+		return core.Result{Output: "package:/data/app/~~x==/com.foo-y==/base.apk=com.foo\n"}, nil
+	case strings.Contains(joined, "stat -c"):
+		return core.Result{Output: "1024\n"}, nil
+	}
+	return core.Result{}, nil
+}
+
+// apkFixture connects one device whose adb answers through answer.
+func apkFixture(t *testing.T, answer func(ctx context.Context, c core.Command, emit func(string)) (core.Result, error)) (*ViewModel, *streamRunner) {
+	t.Helper()
+	if answer == nil {
+		answer = apkAnswer
+	}
+	runner := &streamRunner{answer: answer}
+	vm, _ := newRunnerViewModel(t, func(core.Command) (core.Result, error) { return core.Result{}, nil },
+		func(o *core.ManagerOptions) { o.Runner = runner })
+	profile := vm.Manager.Profiles()[0]
+	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	t.Cleanup(func() { vm.Manager.Shutdown(context.Background()) })
+	return vm, runner
+}
+
+// waitUntil fails the test when cond never becomes true: the APK flow does its
+// expensive half in a goroutine.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// releaseOnce closes ch at most once and registers the close to run before the
+// fixture's Shutdown, which waits for tasks: a blocked fake pull would hang the
+// whole test otherwise.
+func releaseOnce(t *testing.T, ch chan struct{}) func() {
+	var once sync.Once
+	release := func() { once.Do(func() { close(ch) }) }
+	t.Cleanup(release)
+	return release
+}
+
+// stubPickSaveFolder replaces the folder picker for one test.
+func stubPickSaveFolder(fn func(title string) (string, bool)) (restore func()) {
+	previous := pickSaveFolder
+	pickSaveFolder = fn
+	return func() { pickSaveFolder = previous }
+}
+
+func TestAPKFileNameDropsCharactersWindowsForbids(t *testing.T) {
+	got := apkFileName(`微信: "内测/版"`, "com.tencent.mm")
+	if strings.ContainsAny(got, `<>:"/\|?*`) {
+		t.Fatalf("apkFileName() = %q, still holds a forbidden character", got)
+	}
+	if !strings.HasSuffix(got, "com.tencent.mm.apk") {
+		t.Fatalf("apkFileName() = %q, want the package in the name", got)
+	}
+}
+
+func TestAPKFileNameFallsBackToThePackage(t *testing.T) {
+	if got := apkFileName("", "com.foo"); got != "com.foo.apk" {
+		t.Fatalf("apkFileName(\"\", com.foo) = %q", got)
+	}
+	if got := apkFileName("   ", "com.foo"); got != "com.foo.apk" {
+		t.Fatalf("apkFileName(\"   \", com.foo) = %q", got)
+	}
+}
+
+func TestAPKFileNameKeepsALongLabelFromBecomingAPathProblem(t *testing.T) {
+	got := apkFileName(strings.Repeat("很长的应用名", 20), "com.foo")
+	if len([]rune(got)) > 120 {
+		t.Fatalf("apkFileName() = %d runes, want a bounded name", len([]rune(got)))
+	}
+	if !strings.HasSuffix(got, "com.foo.apk") {
+		t.Fatalf("apkFileName() = %q", got)
+	}
+}
+
+func TestUniqueAPKPathNeverOverwritesWhatIsAlreadyThere(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "com.foo.apk")
+	if err := os.WriteFile(first, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second := filepath.Join(dir, "com.foo (2).apk")
+	if err := os.WriteFile(second, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := uniqueAPKPath(dir, "com.foo.apk", func(p string) bool {
+		_, err := os.Stat(p)
+		return err == nil
+	})
+	if got != filepath.Join(dir, "com.foo (3).apk") {
+		t.Fatalf("uniqueAPKPath() = %q", got)
+	}
+}
+
+func TestUniqueAPKPathUsesTheNameWhenNothingIsThere(t *testing.T) {
+	dir := t.TempDir()
+	if got := uniqueAPKPath(dir, "com.foo.apk", func(string) bool { return false }); got != filepath.Join(dir, "com.foo.apk") {
+		t.Fatalf("uniqueAPKPath() = %q", got)
+	}
+}
+
+func TestAPKSaveStartsOnePullOnly(t *testing.T) {
+	vm, runner := apkFixture(t, nil)
+	app := core.AppUsage{Package: "com.foo", Label: "示例"}
+	dir := t.TempDir()
+	vm.beginAPKSave(vm.Manager.Profiles()[0].ID, app, dir)
+	vm.beginAPKSave(vm.Manager.Profiles()[0].ID, app, dir)
+	waitUntil(t, "the pull to start", func() bool {
+		for _, call := range runner.commandLog() {
+			if strings.Contains(call, "pull") {
+				return true
+			}
+		}
+		return false
+	})
+	runs := 0
+	for _, call := range runner.commandLog() {
+		if strings.Contains(call, "pull") {
+			runs++
+		}
+	}
+	if runs != 1 {
+		t.Fatalf("the APK was pulled %d times, want 1: %v", runs, runner.commandLog())
+	}
+}
+
+func TestAPKSaveShowsTheProgressItReads(t *testing.T) {
+	stop := make(chan struct{})
+	vm, _ := apkFixture(t, func(ctx context.Context, c core.Command, emit func(string)) (core.Result, error) {
+		if !strings.Contains(strings.Join(c.Args, " "), "pull") {
+			return apkAnswer(ctx, c, emit)
+		}
+		// Newline-terminated: the app runs adb through a pipe, so this is what a
+		// real pull prints, and the task redactor only releases whole lines.
+		emit("[  0%] /data/app/~~x==/com.foo-y==/base.apk\n")
+		emit("[ 42%] /data/app/~~x==/com.foo-y==/base.apk\n")
+		<-stop
+		return core.Result{}, nil
+	})
+	release := releaseOnce(t, stop)
+	vm.beginAPKSave(vm.Manager.Profiles()[0].ID, core.AppUsage{Package: "com.foo", Label: "示例"}, t.TempDir())
+	waitUntil(t, "the pull to report progress", func() bool {
+		return strings.Contains(vm.apkTaskForTest().Output, "42%")
+	})
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	tt.Frame()
+	// The fake pull stays blocked until the dialog has been read; release it
+	// before asserting so a failed assertion cannot stall the fixture's
+	// Shutdown.
+	shown := tt.Texts()
+	release()
+	if !textsContain(shown, "42%") {
+		t.Fatalf("the dialog lost the progress it read; texts = %v", shown)
+	}
+	if !textsContain(shown, "正在保存") {
+		t.Fatalf("the dialog does not say what it is doing; texts = %v", shown)
+	}
+}
+
+// textsContain is HasText on an already captured frame.
+func textsContain(texts []string, want string) bool {
+	for _, text := range texts {
+		if strings.Contains(text, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAPKProgressFallsBackToTheBytesOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "com.foo.apk")
+	if err := os.WriteFile(path, make([]byte, 512), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	task := core.Task{Output: "no progress here\n"}
+	if got := apkProgress(task, 1024, path); got != 0.5 {
+		t.Fatalf("apkProgress() = %v, want 0.5", got)
+	}
+}
+
+func TestAPKProgressIsIndeterminateWithoutAnyTotal(t *testing.T) {
+	if got := apkProgress(core.Task{}, 0, filepath.Join(t.TempDir(), "missing.apk")); got != -1 {
+		t.Fatalf("apkProgress() = %v, want -1", got)
+	}
+}
+
+func TestAPKSaveReportsWhyThePullFailed(t *testing.T) {
+	vm, _ := apkFixture(t, func(ctx context.Context, c core.Command, emit func(string)) (core.Result, error) {
+		if strings.Contains(strings.Join(c.Args, " "), "pull") {
+			return core.Result{Output: "adb: error: failed to stat remote object\n", ExitCode: 1}, nil
+		}
+		return apkAnswer(ctx, c, emit)
+	})
+	vm.beginAPKSave(vm.Manager.Profiles()[0].ID, core.AppUsage{Package: "com.foo"}, t.TempDir())
+	waitUntil(t, "the pull to fail", func() bool {
+		task := vm.apkTaskForTest()
+		return task.ID != uuid.Nil && task.State == core.TaskFailed
+	})
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	tt.Frame()
+	tt.Frame()
+	if !tt.HasText("保存失败：") {
+		t.Fatalf("a failed pull shows no reason; texts = %v", tt.Texts())
+	}
+}
+
+func TestAPKSaveCancelStopsTheTask(t *testing.T) {
+	stop := make(chan struct{})
+	vm, _ := apkFixture(t, func(ctx context.Context, c core.Command, emit func(string)) (core.Result, error) {
+		if !strings.Contains(strings.Join(c.Args, " "), "pull") {
+			return apkAnswer(ctx, c, emit)
+		}
+		select {
+		case <-stop:
+			return core.Result{}, nil
+		case <-ctx.Done():
+			return core.Result{Cancelled: true}, nil
+		}
+	})
+	// Registered after the fixture, so it runs before the fixture's Shutdown:
+	// cleanups are last-registered-first.
+	releaseOnce(t, stop)
+	vm.beginAPKSave(vm.Manager.Profiles()[0].ID, core.AppUsage{Package: "com.foo"}, t.TempDir())
+	waitUntil(t, "the pull to start", func() bool {
+		task := vm.apkTaskForTest()
+		return task.ID != uuid.Nil && task.State == core.TaskRunning
+	})
+	// The dialog drops its task id when it closes, so keep it here.
+	taskID := vm.apkSnapshot().TaskID
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	tt.Frame()
+	if err := tt.Click("取消"); err != nil {
+		t.Fatalf("the progress dialog has no 取消: %v", err)
+	}
+	waitUntil(t, "the task to be cancelled", func() bool {
+		task, ok := apkTask(vm.Manager.Tasks(), taskID)
+		return ok && task.State == core.TaskCancelled
+	})
+	if state := vm.apkSnapshot(); state != nil {
+		t.Fatalf("cancelling left the dialog open: %+v", state)
+	}
+}
+
+func TestAPKSaveDoneShowsWhereTheFileWent(t *testing.T) {
+	vm, _ := apkFixture(t, nil)
+	// The reveal button is only drawn when there is something to call.
+	vm.OpenDir = func(string) error { return nil }
+	dir := t.TempDir()
+	vm.beginAPKSave(vm.Manager.Profiles()[0].ID, core.AppUsage{Package: "com.foo", Label: "示例"}, dir)
+	waitUntil(t, "the pull to finish", func() bool {
+		task := vm.apkTaskForTest()
+		return task.ID != uuid.Nil && task.State == core.TaskSucceeded
+	})
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	tt.Frame()
+	tt.Frame()
+	want := filepath.Join(dir, "示例_com.foo.apk")
+	if !tt.HasText("已保存到 " + want) {
+		t.Fatalf("the dialog does not say where the file went; texts = %v", tt.Texts())
+	}
+	if !tt.HasText("打开保存目录") {
+		t.Fatalf("the saved file cannot be revealed; texts = %v", tt.Texts())
+	}
+}
+
+// apkSnapshot reads the dialog state without racing the goroutine that fills it.
+func (vm *ViewModel) apkSnapshot() *apkSave {
+	vm.apkMu.Lock()
+	defer vm.apkMu.Unlock()
+	return vm.APK
+}
+
+// apkTaskForTest is the pull this dialog is watching, or a zero Task.
+func (vm *ViewModel) apkTaskForTest() core.Task {
+	state := vm.apkSnapshot()
+	if state == nil || state.TaskID == uuid.Nil {
+		return core.Task{}
+	}
+	task, _ := apkTask(vm.Manager.Tasks(), state.TaskID)
+	return task
+}
