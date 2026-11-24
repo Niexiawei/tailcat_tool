@@ -339,3 +339,54 @@ func (vm *ViewModel) apkTaskForTest() core.Task {
 	task, _ := apkTask(vm.Manager.Tasks(), state.TaskID)
 	return task
 }
+
+func TestAppRowOffersAPKDownload(t *testing.T) {
+	// Clicking must never reach the real file dialog in a headless test.
+	defer stubPickSaveFolder(func(string) (string, bool) { return "", false })()
+	vm, _ := resourceFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	if err := tt.Click("保存应用安装包"); err != nil {
+		t.Fatalf("the row has no 保存应用安装包 button: %v", err)
+	}
+}
+
+// The folder is a question every time: cancelling the picker must leave no
+// dialog and start nothing.
+func TestAPKDownloadAlwaysAsksForAFolder(t *testing.T) {
+	var asked int
+	defer stubPickSaveFolder(func(string) (string, bool) { asked++; return "", false })()
+	vm, runner := resourceFixture(t)
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	if err := tt.Click("保存应用安装包"); err != nil {
+		t.Fatalf("the row has no 保存应用安装包 button: %v", err)
+	}
+	if asked != 1 {
+		t.Fatalf("the dialog asked for a folder %d times, want 1", asked)
+	}
+	if state := vm.apkSnapshot(); state != nil {
+		t.Fatalf("cancelling the picker still opened the dialog: %+v", state)
+	}
+	for _, call := range runner() {
+		if strings.Contains(call, "pull") {
+			t.Fatalf("cancelling the picker still pulled: %q", call)
+		}
+	}
+}
+
+// The button belongs to the row it sits on, not to whichever application the
+// page happens to list first.
+func TestAPKDownloadActionUsesTheRowsOwnPackage(t *testing.T) {
+	defer stubPickSaveFolder(func(string) (string, bool) { return t.TempDir(), true })()
+	vm, _ := resourceFixture(t)
+	profile := vm.Manager.Profiles()[0]
+	// Filter down to the second application so the only visible icon is its own.
+	vm.resourceStateFor(profile.ID).filter = "system_server"
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	if err := tt.Click("保存应用安装包"); err != nil {
+		t.Fatalf("the row has no 保存应用安装包 button: %v", err)
+	}
+	state := vm.apkSnapshot()
+	if state == nil || state.Package != "system_server" {
+		t.Fatalf("the dialog opened for %+v, want system_server", state)
+	}
+}

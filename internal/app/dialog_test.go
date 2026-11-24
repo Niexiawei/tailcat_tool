@@ -32,6 +32,20 @@ func TestDialogsCloseWithoutPanic(t *testing.T) {
 		{"file detail", func(vm *ViewModel) {
 			vm.FileDetail = &FileDetail{Device: vm.Selection, Entry: core.RemoteEntry{Name: "log.txt", Path: "/sdcard/log.txt", Size: 2048}}
 		}, func(vm *ViewModel) { vm.FileDetail = nil }},
+		{"apk save", func(vm *ViewModel) {
+			vm.beginAPKSave(vm.Selection, core.AppUsage{Package: "com.foo"}, t.TempDir())
+		}, func(vm *ViewModel) {
+			vm.apkMu.Lock()
+			vm.APK = nil
+			vm.apkMu.Unlock()
+		}},
+		{"install apk", func(vm *ViewModel) {
+			vm.openInstallDialog(vm.Selection, "/tmp/示例.apk")
+		}, func(vm *ViewModel) {
+			vm.installMu.Lock()
+			vm.APKInstall = nil
+			vm.installMu.Unlock()
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

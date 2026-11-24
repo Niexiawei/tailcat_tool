@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -525,6 +526,53 @@ func shotCases() []shotCase {
 				return vm
 			},
 			settle: 12,
+		},
+		{
+			// The progress bar is the one thing a text assertion cannot judge:
+			// is it thick enough, does the sentence fit around it.
+			name: "33-apk-save-progress",
+			build: func(t *testing.T) *ViewModel {
+				stop := make(chan struct{})
+				vm, _ := apkFixture(t, func(ctx context.Context, c core.Command, emit func(string)) (core.Result, error) {
+					if !strings.Contains(strings.Join(c.Args, " "), "pull") {
+						return apkAnswer(ctx, c, emit)
+					}
+					emit("[ 42%] /data/app/~~x==/com.foo-y==/base.apk\n")
+					<-stop
+					return core.Result{}, nil
+				})
+				// Released after the shot, before the fixture's Shutdown.
+				releaseOnce(t, stop)
+				vm.beginAPKSave(vm.Manager.Profiles()[0].ID, core.AppUsage{Package: "com.foo", Label: "示例应用"}, t.TempDir())
+				waitUntil(t, "the pull to report progress", func() bool {
+					return strings.Contains(vm.apkTaskForTest().Output, "42%")
+				})
+				return vm
+			},
+			settle: 6,
+		},
+		{
+			name: "34-install-apk-dialog",
+			build: func(t *testing.T) *ViewModel {
+				vm := usersFixture(t)
+				vm.OpenDevice(vm.Manager.Profiles()[0].ID)
+				vm.openInstallDialog(vm.Manager.Profiles()[0].ID, `C:\Users\me\Downloads\示例应用_1.2.3.apk`)
+				waitUntil(t, "the user list to load", func() bool {
+					state := vm.installSnapshot()
+					return state != nil && !state.Loading
+				})
+				return vm
+			},
+			settle: 6,
+		},
+		{
+			name: "03c-device-overview-users",
+			build: func(t *testing.T) *ViewModel {
+				vm := usersFixture(t)
+				vm.DetailTab = detailOverview
+				vm.OpenDevice(vm.Manager.Profiles()[0].ID)
+				return vm
+			},
 		},
 		{
 			name: "32-startup-problems",
