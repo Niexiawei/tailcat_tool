@@ -382,3 +382,33 @@ func TestAPKDownloadActionUsesTheRowsOwnPackage(t *testing.T) {
 		t.Fatalf("the dialog opened for %+v, want system_server", state)
 	}
 }
+
+// Closing while the device is still being asked where its APK is must not leave
+// a pull running with nobody watching it.
+func TestAPKSaveClosedWhileLocatingStartsNoPull(t *testing.T) {
+	release := make(chan struct{})
+	vm, runner := apkFixture(t, func(ctx context.Context, c core.Command, emit func(string)) (core.Result, error) {
+		if strings.Contains(strings.Join(c.Args, " "), "pm list packages") {
+			<-release
+		}
+		return apkAnswer(ctx, c, emit)
+	})
+	stop := releaseOnce(t, release)
+	vm.beginAPKSave(vm.Manager.Profiles()[0].ID, core.AppUsage{Package: "com.foo"}, t.TempDir())
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	tt.Frame()
+	if err := tt.Click("关闭"); err != nil {
+		t.Fatalf("the locating dialog has no 关闭: %v", err)
+	}
+	if state, open := vm.apkState(); open {
+		t.Fatalf("closing left the dialog open: %+v", state)
+	}
+	stop()
+	// Give the lookup time to come back and (wrongly) start a pull.
+	time.Sleep(50 * time.Millisecond)
+	for _, call := range runner.commandLog() {
+		if strings.Contains(call, "pull") {
+			t.Fatalf("a closed dialog still started a pull: %q", call)
+		}
+	}
+}

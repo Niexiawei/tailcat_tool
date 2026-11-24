@@ -112,6 +112,11 @@ func (vm *ViewModel) runAPKSave(state *apkSave) {
 		vm.failAPKSave(state, err.Error())
 		return
 	}
+	if _, open := vm.apkState(); !open {
+		// Closed while the lookup ran: starting the pull now would leave a task
+		// nobody is watching.
+		return
+	}
 	local := uniqueAPKPath(state.Dir, apkFileName(state.Label, state.Package), fileExists)
 	taskID, err := vm.Manager.BeginADBTask(context.Background(), state.Device,
 		"保存 APK "+state.Package, []string{"pull", apk.Path, local}, apkExportTimeout)
@@ -123,9 +128,13 @@ func (vm *ViewModel) runAPKSave(state *apkSave) {
 	if vm.APK == state {
 		state.APKPath, state.Total, state.LocalPath, state.TaskID = apk.Path, apk.Size, local, taskID
 		state.Stage = apkStageDownloading
+		vm.apkMu.Unlock()
+		vm.requestFrame()
+		return
 	}
 	vm.apkMu.Unlock()
-	vm.requestFrame()
+	// Closed between the check above and the task starting.
+	vm.Manager.CancelTask(taskID)
 }
 
 func (vm *ViewModel) failAPKSave(state *apkSave, reason string) {
