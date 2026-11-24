@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"path/filepath"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
@@ -32,19 +31,26 @@ func (vm *ViewModel) promote(profile core.Profile) {
 	vm.Notify("已保存到我的设备，当前会话保持")
 }
 
-// chooseAPK asks for an APK and installs it.
+// chooseAPK asks for an APK, then which device user it is installed for.
 func (vm *ViewModel) chooseAPK(profile core.Profile) {
+	path, ok := pickAPKFile("选择要安装到 " + profile.Name + " 的 APK")
+	if !ok {
+		return
+	}
+	vm.openInstallDialog(profile.ID, path)
+}
+
+// pickAPKFile asks for the APK to install. It is a variable so tests never open
+// a real file dialog; false means the user cancelled.
+var pickAPKFile = func(title string) (string, bool) {
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-		Title:   "选择要安装到 " + profile.Name + " 的 APK",
+		Title:   title,
 		Filters: []mygo.FileFilter{{Name: "APK", Extensions: []string{"apk"}}},
 	})
 	if err != nil || len(paths) == 0 {
-		return
+		return "", false
 	}
-	if _, err := vm.Manager.BeginADBTask(context.Background(), profile.ID, "安装 "+fileName(paths[0]),
-		[]string{"install", "-r", paths[0]}, 600*1e9); err != nil {
-		vm.Fail(err)
-	}
+	return paths[0], true
 }
 
 // chooseUpload asks for a local path and uploads it.

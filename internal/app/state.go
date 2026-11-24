@@ -79,6 +79,10 @@ type ViewModel struct {
 	// the path lookup and the pull run on goroutines.
 	APK   *apkSave
 	apkMu sync.Mutex
+	// APKInstall is the 「安装 APK」 dialog; nil closes it. installMu guards it
+	// because the device's profile list is read on a goroutine.
+	APKInstall *installDraft
+	installMu  sync.Mutex
 
 	SettingsDraft core.ToolSettings
 	SettingsError string

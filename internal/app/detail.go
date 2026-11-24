@@ -40,6 +40,7 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 	vm.DerpDeleteView(c)
 	vm.CacheConfirmView(c)
 	vm.APKView(c)
+	vm.InstallView(c)
 }
 
 // routedPage builds the page the router shows.
