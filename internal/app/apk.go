@@ -242,6 +242,27 @@ func (vm *ViewModel) APKView(c *ui.Context) {
 	}
 }
 
+// apkState is a copy of the dialog state, taken under the lock: the goroutine
+// that runs the export keeps writing to the real one.
+func (vm *ViewModel) apkState() (apkSave, bool) {
+	vm.apkMu.Lock()
+	defer vm.apkMu.Unlock()
+	if vm.APK == nil {
+		return apkSave{}, false
+	}
+	return *vm.APK, true
+}
+
+// apkTaskID is the pull the dialog is watching; uuid.Nil when there is none.
+func (vm *ViewModel) apkTaskID() uuid.UUID {
+	vm.apkMu.Lock()
+	defer vm.apkMu.Unlock()
+	if vm.APK == nil {
+		return uuid.Nil
+	}
+	return vm.APK.TaskID
+}
+
 // apkTask finds the pull this dialog is watching.
 func apkTask(tasks []core.Task, id uuid.UUID) (core.Task, bool) {
 	for _, task := range tasks {

@@ -42,8 +42,8 @@ func TestInstallDialogOffersEveryUser(t *testing.T) {
 	vm := usersFixture(t)
 	vm.openInstallDialog(vm.Manager.Profiles()[0].ID, "/tmp/示例.apk")
 	waitUntil(t, "the user list to load", func() bool {
-		state := vm.installSnapshot()
-		return state != nil && !state.Loading
+		state, open := vm.installSnapshot()
+		return open && !state.Loading
 	})
 	tt := ui.NewTester(vm.ContentView, 1000, 800)
 	tt.Frame()
@@ -64,11 +64,11 @@ func TestInstallDialogSaysWhichUserItWillUse(t *testing.T) {
 	vm := usersFixture(t)
 	vm.openInstallDialog(vm.Manager.Profiles()[0].ID, "/tmp/示例.apk")
 	waitUntil(t, "the user list to load", func() bool {
-		state := vm.installSnapshot()
-		return state != nil && !state.Loading
+		state, open := vm.installSnapshot()
+		return open && !state.Loading
 	})
-	state := vm.installSnapshot()
-	if !state.Chosen || state.UserID != 0 {
+	state, open := vm.installSnapshot()
+	if !open || !state.Chosen || state.UserID != 0 {
 		t.Fatalf("install draft = %+v, want the device's current user chosen", state)
 	}
 }
@@ -84,8 +84,8 @@ func TestInstallFallsBackToTheDefaultUserWhenTheListFails(t *testing.T) {
 	})
 	vm.openInstallDialog(vm.Manager.Profiles()[0].ID, "/tmp/示例.apk")
 	waitUntil(t, "the user list to fail", func() bool {
-		state := vm.installSnapshot()
-		return state != nil && !state.Loading && state.Err != ""
+		state, open := vm.installSnapshot()
+		return open && !state.Loading && state.Err != ""
 	})
 	tt := ui.NewTester(vm.ContentView, 1000, 800)
 	tt.Frame()
@@ -114,15 +114,17 @@ func TestInstallStartsOneTaskOnly(t *testing.T) {
 	vm, runner := apkFixture(t, nil)
 	vm.openInstallDialog(vm.Manager.Profiles()[0].ID, "/tmp/示例.apk")
 	waitUntil(t, "the user list to load", func() bool {
-		state := vm.installSnapshot()
-		return state != nil && !state.Loading
+		state, open := vm.installSnapshot()
+		return open && !state.Loading
 	})
 	tt := ui.NewTester(vm.ContentView, 1000, 800)
 	tt.Frame()
 	if err := tt.Click("安装"); err != nil {
 		t.Fatalf("the install dialog has no 安装 button: %v", err)
 	}
-	vm.submitInstall(vm.installSnapshot())
+	if state, open := vm.installSnapshot(); open {
+		vm.submitInstall(&state)
+	}
 	waitUntil(t, "the install task", func() bool {
 		for _, call := range runner.commandLog() {
 			if strings.Contains(call, " install ") {
@@ -140,7 +142,7 @@ func TestInstallStartsOneTaskOnly(t *testing.T) {
 	if runs != 1 {
 		t.Fatalf("the APK was installed %d times, want 1: %v", runs, runner.commandLog())
 	}
-	if state := vm.installSnapshot(); state != nil {
+	if state, open := vm.installSnapshot(); open {
 		t.Fatalf("a started install left the dialog open: %+v", state)
 	}
 }
@@ -149,15 +151,15 @@ func TestInstallDialogCancelStartsNothing(t *testing.T) {
 	vm, runner := apkFixture(t, nil)
 	vm.openInstallDialog(vm.Manager.Profiles()[0].ID, "/tmp/示例.apk")
 	waitUntil(t, "the user list to load", func() bool {
-		state := vm.installSnapshot()
-		return state != nil && !state.Loading
+		state, open := vm.installSnapshot()
+		return open && !state.Loading
 	})
 	tt := ui.NewTester(vm.ContentView, 1000, 800)
 	tt.Frame()
 	if err := tt.Click("取消"); err != nil {
 		t.Fatalf("the install dialog has no 取消 button: %v", err)
 	}
-	if state := vm.installSnapshot(); state != nil {
+	if state, open := vm.installSnapshot(); open {
 		t.Fatalf("cancel left the dialog open: %+v", state)
 	}
 	for _, call := range runner.commandLog() {
@@ -171,7 +173,7 @@ func TestChooseAPKOpensTheUserDialog(t *testing.T) {
 	vm, _ := apkFixture(t, nil)
 	defer stubPickAPKFile(func(string) (string, bool) { return "/tmp/示例.apk", true })()
 	vm.chooseAPK(vm.Manager.Profiles()[0])
-	if state := vm.installSnapshot(); state == nil || state.Path != "/tmp/示例.apk" {
+	if state, open := vm.installSnapshot(); !open || state.Path != "/tmp/示例.apk" {
 		t.Fatalf("chooseAPK() opened no dialog: %+v", state)
 	}
 }
@@ -180,7 +182,7 @@ func TestChooseAPKCancelledOpensNothing(t *testing.T) {
 	vm, _ := apkFixture(t, nil)
 	defer stubPickAPKFile(func(string) (string, bool) { return "", false })()
 	vm.chooseAPK(vm.Manager.Profiles()[0])
-	if state := vm.installSnapshot(); state != nil {
+	if state, open := vm.installSnapshot(); open {
 		t.Fatalf("a cancelled file picker still opened a dialog: %+v", state)
 	}
 }

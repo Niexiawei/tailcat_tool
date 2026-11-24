@@ -558,8 +558,8 @@ func shotCases() []shotCase {
 				vm.OpenDevice(vm.Manager.Profiles()[0].ID)
 				vm.openInstallDialog(vm.Manager.Profiles()[0].ID, `C:\Users\me\Downloads\示例应用_1.2.3.apk`)
 				waitUntil(t, "the user list to load", func() bool {
-					state := vm.installSnapshot()
-					return state != nil && !state.Loading
+					state, open := vm.installSnapshot()
+					return open && !state.Loading
 				})
 				return vm
 			},

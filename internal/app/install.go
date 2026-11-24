@@ -213,7 +213,7 @@ func (vm *ViewModel) InstallView(c *ui.Context) {
 			})
 		})
 	})
-	if !open && vm.installSnapshot() != nil {
+	if _, live := vm.installSnapshot(); !open && live {
 		vm.closeInstallDialog(state)
 	}
 }
@@ -229,9 +229,13 @@ func installUserChoiceLabel(users []core.DeviceUser, chosen int) string {
 	return "选择用户"
 }
 
-// installSnapshot reads the dialog without holding its lock at call sites.
-func (vm *ViewModel) installSnapshot() *installDraft {
+// installSnapshot is a copy of the dialog state, taken under the lock: the
+// goroutine that reads the profile list keeps writing to the real one.
+func (vm *ViewModel) installSnapshot() (installDraft, bool) {
 	vm.installMu.Lock()
 	defer vm.installMu.Unlock()
-	return vm.APKInstall
+	if vm.APKInstall == nil {
+		return installDraft{}, false
+	}
+	return *vm.APKInstall, true
 }

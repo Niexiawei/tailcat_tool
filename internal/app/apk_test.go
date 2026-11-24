@@ -286,7 +286,7 @@ func TestAPKSaveCancelStopsTheTask(t *testing.T) {
 		return task.ID != uuid.Nil && task.State == core.TaskRunning
 	})
 	// The dialog drops its task id when it closes, so keep it here.
-	taskID := vm.apkSnapshot().TaskID
+	taskID := vm.apkTaskID()
 	tt := ui.NewTester(vm.ContentView, 1000, 800)
 	tt.Frame()
 	if err := tt.Click("取消"); err != nil {
@@ -296,7 +296,7 @@ func TestAPKSaveCancelStopsTheTask(t *testing.T) {
 		task, ok := apkTask(vm.Manager.Tasks(), taskID)
 		return ok && task.State == core.TaskCancelled
 	})
-	if state := vm.apkSnapshot(); state != nil {
+	if state, open := vm.apkState(); open {
 		t.Fatalf("cancelling left the dialog open: %+v", state)
 	}
 }
@@ -323,21 +323,13 @@ func TestAPKSaveDoneShowsWhereTheFileWent(t *testing.T) {
 	}
 }
 
-// apkSnapshot reads the dialog state without racing the goroutine that fills it.
-func (vm *ViewModel) apkSnapshot() *apkSave {
-	vm.apkMu.Lock()
-	defer vm.apkMu.Unlock()
-	return vm.APK
-}
-
 // apkTaskForTest is the pull this dialog is watching, or a zero Task.
 func (vm *ViewModel) apkTaskForTest() core.Task {
-	state := vm.apkSnapshot()
-	if state == nil || state.TaskID == uuid.Nil {
-		return core.Task{}
+	if id := vm.apkTaskID(); id != uuid.Nil {
+		task, _ := apkTask(vm.Manager.Tasks(), id)
+		return task
 	}
-	task, _ := apkTask(vm.Manager.Tasks(), state.TaskID)
-	return task
+	return core.Task{}
 }
 
 func TestAppRowOffersAPKDownload(t *testing.T) {
@@ -363,7 +355,7 @@ func TestAPKDownloadAlwaysAsksForAFolder(t *testing.T) {
 	if asked != 1 {
 		t.Fatalf("the dialog asked for a folder %d times, want 1", asked)
 	}
-	if state := vm.apkSnapshot(); state != nil {
+	if state, open := vm.apkState(); open {
 		t.Fatalf("cancelling the picker still opened the dialog: %+v", state)
 	}
 	for _, call := range runner() {
@@ -385,8 +377,8 @@ func TestAPKDownloadActionUsesTheRowsOwnPackage(t *testing.T) {
 	if err := tt.Click("保存应用安装包"); err != nil {
 		t.Fatalf("the row has no 保存应用安装包 button: %v", err)
 	}
-	state := vm.apkSnapshot()
-	if state == nil || state.Package != "system_server" {
+	state, open := vm.apkState()
+	if !open || state.Package != "system_server" {
 		t.Fatalf("the dialog opened for %+v, want system_server", state)
 	}
 }
