@@ -27,7 +27,7 @@
 
 ### 已知限制
 
-- 安装到指定用户需要 platform-tools 25 以上的 adb；更老的 adb 会报 `unknown option`，任务以失败结束、错误原样显示。
+- 安装到指定用户靠 adb 的 `install --user`（本机 platform-tools 34 实测有效：对「只装在 user 0 的应用」执行 `--user 10` 后 user 10 也能看到它）。更老的 platform-tools 若静默忽略该参数，安装会落到设备默认用户，界面不会察觉。
 
 ## 2026-11-20
 
