@@ -176,7 +176,7 @@ adb -s <serial> install -r <本地.apk 绝对路径>
 - 创建：`internal/core/pull.go`
 - 创建：`internal/core/pull_test.go`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```go
 func TestParsePullPercentReadsTheLastProgressLine(t *testing.T) {
@@ -202,21 +202,21 @@ func TestParsePullPercentRejectsImpossibleValues(t *testing.T) {
 }
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`go test ./internal/core -run ParsePullPercent -v`
 预期：FAIL，`undefined: ParsePullPercent`
 
-- [ ] **步骤 3：实现 `func ParsePullPercent(output string) (int, bool)`**
+- [x] **步骤 3：实现 `func ParsePullPercent(output string) (int, bool)`**
 
 按 `\r` 和 `\n` 切行；每行 `TrimSpace` 后必须以 `[` 开头，取第一个 `]` 之前的内容；内容去掉空格后必须以 `%` 结尾、且 `strconv.Atoi` 能读成 `0..100`；返回**最后一条**合格记录。注释写清 §2.3 的两种来源与"为什么是最后一条"。
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行：`go test ./internal/core -run ParsePullPercent -v`
 预期：PASS（3 个用例）
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```sh
 git add internal/core/pull.go internal/core/pull_test.go
@@ -234,7 +234,7 @@ git commit -m "feat: read adb pull progress from task output"
 - 修改：`internal/core/manager_tasks.go`（`RefreshDeviceInformation` 顺带读用户）
 - 修改：`internal/core/messages.go`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```go
 func TestParseDeviceUsersReadsIdNameAndCurrent(t *testing.T) {
@@ -269,12 +269,12 @@ func TestDeviceUsersRequiresAnOnlineDevice(t *testing.T) // 未 connect → err�
 func TestDeviceUsersUsesOneShellRoundTrip(t *testing.T)  // 只发一条含 "pm list users" 的 shell，另一条是 get-state
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`go test ./internal/core -run 'DeviceUser|ParseCurrentUser|ParseDeviceUsers' -v`
 预期：FAIL，`undefined: ParseDeviceUsers`
 
-- [ ] **步骤 3：实现**
+- [x] **步骤 3：实现**
 
 ```go
 // DeviceUser is one Android user profile on the device: the numbers adb install
@@ -327,12 +327,12 @@ MsgAPKPackageInvalid = "包名无法用于查询安装包"
 MsgUsersUnreadable = "读不到设备上的用户列表"
 ```
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行：`go test ./internal/core -run 'DeviceUser|ParseCurrentUser|ParseDeviceUsers|RefreshDeviceInformation' -v && go test ./internal/core`
 预期：全部 PASS
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```sh
 git add internal/core/users.go internal/core/users_test.go internal/core/session.go internal/core/manager_tasks.go internal/core/messages.go
@@ -347,7 +347,7 @@ git commit -m "feat: read the device's user profiles and keep them on the sessio
 - 创建：`internal/core/manager_apk.go`
 - 创建：`internal/core/manager_apk_test.go`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```go
 func TestAppAPKReadsTheBasePathFromThePackageListing(t *testing.T) {
@@ -379,12 +379,12 @@ func TestAppAPKRejectsAPackageNameThatCouldRunACommand(t *testing.T)     // "com
 func TestAppAPKRequiresAnOnlineDevice(t *testing.T)                      // 未 connect → err，且没发命令
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`go test ./internal/core -run AppAPK -v`
 预期：FAIL，`f.m.AppAPK undefined`
 
-- [ ] **步骤 3：实现**
+- [x] **步骤 3：实现**
 
 ```go
 // AppAPK is one application's installable base package as the device holds it.
@@ -403,12 +403,12 @@ func (m *Manager) AppAPK(ctx context.Context, id uuid.UUID, pkg string) (AppAPK,
 
 `validPackageName(pkg string) bool`：非空、≤ 255 字节、只含 `[A-Za-z0-9_.]`——理由见审查重点 1。
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行：`go test ./internal/core -run AppAPK -v && go test ./internal/core`
 预期：PASS
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```sh
 git add internal/core/manager_apk.go internal/core/manager_apk_test.go
@@ -424,7 +424,7 @@ git commit -m "feat: resolve a package's base APK path and size from the device"
 - 创建/修改：`internal/app/apk_test.go`（或新建 `internal/app/users_test.go`，本计划用后者）
 - 创建：`internal/app/users_test.go`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```go
 func TestDeviceUsersTextListsEveryProfile(t *testing.T) {
@@ -447,12 +447,12 @@ func TestOverviewShowsEveryDeviceUser(t *testing.T) {
 }
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`go test ./internal/app -run DeviceUser -v`
 预期：FAIL，`undefined: deviceUsersText`
 
-- [ ] **步骤 3：实现**
+- [x] **步骤 3：实现**
 
 `internal/app/detail.go` 的 `overview`，在 `detailRow(c, "Shell 权限", session.ShellID)` 之后加：
 
@@ -462,12 +462,12 @@ detailRow(c, "设备用户", deviceUsersText(session.Users))
 
 `deviceUsersText(users []core.DeviceUser) string`：空 → `core.PlaceholderUnknown`；否则每项 `itoa(ID) + " " + Name`，`Current` 的追加 `（当前）`，用 ` · ` 连接。
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行：`go test ./internal/app -run 'DeviceUser|OverviewShowsEveryDeviceUser' -v`
 预期：PASS
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```sh
 git add internal/app/detail.go internal/app/users_test.go
@@ -484,7 +484,7 @@ git commit -m "feat: show every device user on the overview page"
 - 修改：`internal/app/detail.go`（`ContentView` 末尾调 `vm.APKView(c)`）
 - 创建：`internal/app/apk_test.go`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```go
 func TestAPKFileNameDropsCharactersWindowsForbids(t *testing.T) {
@@ -526,12 +526,12 @@ func TestAPKSaveCancelStopsTheTask(t *testing.T)         // 点「取消」→ T
 func TestAPKSaveDoneShowsWhereTheFileWent(t *testing.T)  // 「已保存到 <LocalPath>」+「打开保存目录」
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`go test ./internal/app -run 'APK' -v`
 预期：FAIL，`undefined: apkFileName`
 
-- [ ] **步骤 3：实现**
+- [x] **步骤 3：实现**
 
 ```go
 // apkSave is the 「保存 APK」 dialog: which application, where it is going, and
@@ -581,12 +581,12 @@ task, found := apkTask(vm.Manager.Tasks(), state.TaskID)
 
 判断 `TaskSucceeded` / `TaskFailed` / `TaskCancelled` 推进 Stage，`value := apkProgress(task, state.Total, state.LocalPath)` 画 `components.Progress(c, value)`。`取消` → `vm.Manager.CancelTask(state.TaskID)` 并关窗；`打开保存目录` → `vm.OpenDir(state.Dir)`；`关闭` → `vm.APK = nil`。
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行：`go test ./internal/app -run 'APK' -v && go test ./internal/app`
 预期：PASS
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```sh
 git add internal/app/apk.go internal/app/apk_test.go internal/app/state.go internal/app/detail.go
@@ -604,7 +604,7 @@ git commit -m "feat: export an app's APK with an always-asked folder and live pr
 - 修改：`internal/app/detail.go`（`ContentView` 末尾调 `vm.InstallView(c)`）
 - 创建：`internal/app/install_test.go`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```go
 func TestInstallArgsTargetTheChosenUser(t *testing.T) {
@@ -626,12 +626,12 @@ func TestInstallStartsOneTaskOnly(t *testing.T)
 func TestInstallDialogCancelStartsNothing(t *testing.T)
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`go test ./internal/app -run Install -v`
 预期：FAIL，`undefined: installArgs`
 
-- [ ] **步骤 3：实现**
+- [x] **步骤 3：实现**
 
 ```go
 // installDraft is the 「安装 APK」 dialog: the file the user picked and which
@@ -663,12 +663,12 @@ func installUserLabel(user core.DeviceUser) string
 
 `InstallView(c)`：`components.Dialog`，宽 480；按 §1.4 渲染；`components.Select(c, &state.UserID)` 的 `Popup` 里每个用户一个 `sel.Item(user.ID)`；`安装` → `vm.Manager.BeginADBTask(ctx, device, "安装 "+fileName(path), installArgs(path, state.UserID, state.Chosen), 10*time.Minute)` → 成功关窗、失败写 `Err` 留在弹窗里。
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行：`go test ./internal/app -run Install -v && go test ./internal/app`
 预期：PASS
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```sh
 git add internal/app/install.go internal/app/install_test.go internal/app/actions.go internal/app/state.go internal/app/detail.go
@@ -686,7 +686,7 @@ git commit -m "feat: choose which device user an APK is installed for"
 - 修改：`docs/CHANGELOG.md`
 - 测试：`internal/app/apk_test.go`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```go
 func TestAppRowOffersAPKDownloadAfterTheMetaButton(t *testing.T) {
@@ -700,12 +700,12 @@ func TestAppRowOffersAPKDownloadAfterTheMetaButton(t *testing.T) {
 func TestAPKDownloadActionUsesTheRowsOwnPackage(t *testing.T) // 点第二行的图标，弹窗里的包名是那一行的
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`go test ./internal/app -run 'AppRowOffersAPK|APKDownloadAction' -v`
 预期：FAIL，`Click("保存应用安装包")` 找不到目标
 
-- [ ] **步骤 3：实现接线与文档**
+- [x] **步骤 3：实现接线与文档**
 
 `resources.go` 的 `appCell` case 0，`vm.appMetaAction(c, device, app)` 之后加：
 
@@ -731,13 +731,13 @@ vm.apkDownloadAction(c, device, app)
 - 安装到指定用户需要 platform-tools 25 以上的 adb；更老的 adb 会报 `unknown option`，任务以失败结束、错误原样显示。
 ```
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行：`gofmt -l . && go vet ./... && go test ./...`
 预期：`gofmt -l .` 无输出；`vet` 无报告；全部 PASS
 另外人工核对一次：`TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v`，看三张新 PNG（进度条、用户下拉、概览一行是否挤在一起）。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```sh
 git add -A
