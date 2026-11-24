@@ -41,3 +41,20 @@ const MsgTunnelLost = "Tailcat 通道已断开，正在重建通道"
 // MsgTunnelRebuildFailed is what the device says after the rebuild budget is
 // spent and nothing is retried any more.
 const MsgTunnelRebuildFailed = "Tailcat 通道重建失败，请检查网络后重新连接"
+
+// Why an APK export or an install-for-a-user could not go ahead. The package
+// name is the user's only handle on the application, so a failure that cannot
+// read its APK says what is missing instead of quoting adb.
+const (
+	// MsgAPKPathMissing means the device has no APK for the package: a process
+	// that is not an installed application, or one installed only for another
+	// user.
+	MsgAPKPathMissing = "设备上没有这个应用的安装包"
+	// MsgAPKPathUnknown means the device would not answer where the APK is.
+	MsgAPKPathUnknown = "读不到应用的安装包路径"
+	// MsgAPKPackageInvalid is a package name that cannot be asked about safely.
+	MsgAPKPackageInvalid = "包名无法用于查询安装包"
+	// MsgUsersUnreadable means the device would not list its users, so the
+	// install dialog cannot offer a choice.
+	MsgUsersUnreadable = "读不到设备上的用户列表"
+)
