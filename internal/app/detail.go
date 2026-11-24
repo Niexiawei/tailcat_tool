@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 
 	"github.com/Niexiawei/tailcat-tool/internal/core"
 	"github.com/egoist/mygo/ui"
@@ -303,6 +304,7 @@ func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.
 		detailRow(c, "Android", session.Android)
 		detailRow(c, "设备序列号", session.DeviceSerial)
 		detailRow(c, "Shell 权限", session.ShellID)
+		detailRow(c, "设备用户", deviceUsersText(session.Users))
 
 		ui.Row(c).Gap(6).Children(func() {
 			// Diagnosing measures the Tailcat channel, which a direct
@@ -347,6 +349,24 @@ func detailRow(c *ui.Context, label, value string) {
 		ui.Column(c).Width(90).Shrink(0).Children(func() { components.Text(c, label).FontSize(11) })
 		components.Text(c, value).FontSize(11)
 	})
+}
+
+// deviceUsersText lists every Android profile the device reported: the number
+// adb install takes, the profile's own name, and a marker on the one running
+// now. Nothing read yet is a placeholder rather than an empty line.
+func deviceUsersText(users []core.DeviceUser) string {
+	if len(users) == 0 {
+		return core.PlaceholderUnknown
+	}
+	parts := make([]string, 0, len(users))
+	for _, user := range users {
+		label := itoa(user.ID) + " " + user.Name
+		if user.Current {
+			label += "（当前）"
+		}
+		parts = append(parts, label)
+	}
+	return strings.Join(parts, " · ")
 }
 
 func orPlaceholder(value, fallback string) string {
