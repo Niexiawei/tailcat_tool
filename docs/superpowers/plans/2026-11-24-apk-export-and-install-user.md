@@ -169,7 +169,7 @@ adb -s <serial> install -r <本地.apk 绝对路径>
 | `internal/core/pull.go` | `ParsePullPercent`：从任务输出读 `adb pull` 百分比（纯函数） |
 | `internal/core/users.go` | `DeviceUser`、`ParseDeviceUsers`、`ParseCurrentUser`（纯函数）、`Manager.DeviceUsers`、`readDeviceUsers` |
 | `internal/core/manager_apk.go` | `AppAPK`、`Manager.AppAPK`、`validPackageName` |
-| `internal/app/apk.go` | `apkSave` 状态机、`openAPKSave` / `beginAPKSave` / `APKView`、`apkFileName` / `uniqueAPKPath` / `apkProgress` / `pickSaveFolder` |
+| `internal/app/apk.go` | `apkSave` 状态机、`beginAPKSave` / `runAPKSave` / `APKView`、`apkFileName` / `uniqueAPKPath` / `apkProgress` / `pickSaveFolder` |
 | `internal/app/install.go` | `installDraft`、`openInstallDialog` / `submitInstall` / `InstallView`、`installUserLabel` / `installArgs` |
 | `internal/app/apk_test.go` | 上面两块的纯函数与视图测试 |
 
