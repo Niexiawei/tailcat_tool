@@ -8,7 +8,9 @@
 
 **技术栈：** Go（纯，无 cgo）、mygo `ui`（`Tester` 做视图测试）、onevra `components.Dialog` / `components.Progress` / `components.Select` / `components.IconButton` / `lucide.Download`、adb 命令行（`pm list users`、`am get-current-user`、`pm list packages -f`、`stat`、`pull`、`install --user`）。
 
-**规格：** 本文档 §1（用户可见行为，逐字文案）、§2（为什么这样做）、§3（现状与"为什么安装要保持 `-r`"）。执行前把 §4 的六条决定读一遍——它们是可以被推翻的，但要先推翻再写代码。
+**规格：** 本文档 §1（用户可见行为，逐字文案）、§2（为什么这样做）、§3（现状与"为什么安装要保持 `-r`"）。执行前把 §4 的决定读一遍——它们是可以被推翻的，但要先推翻再写代码。
+
+> **本文件的两种用途：** 任务 1–7 是已经执行完的实现记录（复选框全勾上、提交在 `feat/apk-export-install-user` 上）；验收后用户又提了 5 处改动，**§1 已按最终行为改写**，改动清单与钉住它们的测试在 §6。两者都已并入 `main`，不要按 §6 之前的旧描述再实现一遍。
 
 ## 全局约束
 
@@ -19,7 +21,7 @@
 - 表格只经 `internal/app/table.go` 的 `tableCard`；行内按钮用 `components.IconButton`，行激活只认 `RowClicked()`。
 - 行式元素用 `FillWidth()`，不要用 `Fill()`。
 - 每个改变用户行为的提交，同一次提交里带 `docs/CHANGELOG.md`（当天没有 `## 2026-11-24` 就新建在最上面）。
-- 分支 `feat/apk-download-install-user`；提交前缀 `feat:` / `test:` / `docs:`。
+- 分支 `feat/apk-export-install-user`（已合并进 `main`）；提交前缀 `feat:` / `fix:` / `test:` / `docs:`。
 
 ## 审查重点（Review Focus）
 
@@ -29,6 +31,8 @@
 4. **把 APK 装错了用户**——用户列表为空、或 `pm list users` 读失败时不能默默装到 user 0 却不说明；装到哪个用户必须在弹窗里看得见（测试 `TestInstallDialogSaysWhichUserItWillUse`、`TestInstallFallsBackToTheDefaultUserWhenTheListFails`）。
 5. **一条命令解析拖垮概览**——`pm list users` 在部分设备上直接报 `SecurityException` 或输出乱码，解析必须容忍并让概览显示 `—` 而不是空白或崩溃（测试 `TestParseDeviceUsersSkipsGarbage`、`TestOverviewShowsEveryDeviceUser`）。
 6. **下载中关窗把任务丢了**——关窗必须是"取消任务"或"任务继续跑在任务列表里"，不能留下没人管也没取消的 `adb pull`，也不能重复点出两个任务（测试 `TestAPKSaveStartsOnePullOnly`、`TestAPKSaveCancelStopsTheTask`）。
+7. **「打开目录」启动了却看不见**——GUI 子进程不能继承给控制台子进程准备的隐藏标志（`CREATE_NO_WINDOW`/`HideWindow`）：已有文件管理器窗口时它只转发请求、不显示窗口，用户看到的是「点了没反应」（`TestVisibleCommandShowsItsWindow`）。
+8. **长值被窗口右边缘裁掉**——详情行的值必须有 `Grow(1).MinWidth(0)`，否则按自身宽度铺到窗外，且没有横向滚动能看到被裁的部分（截图 `03c-device-overview-users.png`、`03-device-overview.png`）。
 
 ---
 
@@ -56,31 +60,45 @@
 
 说明行固定为 `只保存设备上的基础安装包（base.apk），不含拆分包。`（`apkStageLocating` 与 `apkStageDownloading` 都显示）。失败不自动重试，留在弹窗里让用户看清楚再关。
 
-### 1.4 入口二：「安装 APK」→ 选用户
+### 1.4 入口二：「安装 APK」→ 先在弹窗里选文件，再选用户
 
-概览「设备操作」里的「安装 APK」保留原位置。点它 → 系统文件选择（APK 过滤，与今天一致）→ 选中文件后弹出「安装 APK」弹窗：
+概览「设备操作」里的「安装 APK」保留原位置。点它**立刻弹出**「安装 APK」弹窗，文件在弹窗里选（原先的做法是先弹系统文件选择、再弹窗，验收后改掉了，见 §6）。
 
 | 元素 | 内容 |
 |---|---|
 | 标题 | `安装 APK` |
-| 行 | `文件：<文件名>`（完整路径用 `components.Tooltip` 挂在同一行） |
+| 行 | `APK 文件` ｜ 未选时灰色 `未选择 APK 文件`，选中后显示**完整路径**（长路径在弹窗内换行） |
+| 按钮 | `选择 APK 文件`（`ButtonOutline`，独立一行、保持自身宽度；直接放在弹窗列里会被拉成整条横幅，读成主操作） |
 | 行 | 说明 `覆盖安装：同包名的应用会被替换，应用数据保留。` |
 | 行 | `安装到用户` + `components.Select`（选项形如 `0 · Owner（当前）`、`10 · 工作资料`） |
 | 加载中 | `components.Spinner` + `正在读取设备用户…` |
 | 读不到用户 | `读不到设备上的用户列表，将安装到默认用户`（**仍然可以安装**，走今天的行为，见 §4） |
-| 按钮 | `取消`（`ButtonOutline`）、`安装`（`ButtonPrimary`） |
+| 按钮 | `取消`（`ButtonOutline`）、`安装`（`ButtonPrimary`，**没选文件时禁用**；后台还有一道校验，键盘路径也起不来任务） |
 
 安装命令：`install -r --user <id> <path>`；用户列表读不到或用户没选（列表里只有一个用户也照常选中它）时退回 `install -r <path>`。也就是说**安装方式仍然是覆盖安装，只是多了用户这一维**。
 
-### 1.5 概览页：设备用户
+### 1.5 概览页：设备用户（表格）
 
-概览的详情行在「Shell 权限」之后新增一行：
+概览在「Shell 权限」之后新增一节：
 
-| 标签 | 值 |
+| 列 | 内容 |
 |---|---|
-| `设备用户` | `0 Owner（当前） · 10 工作资料`；一个用户都没有时 `—` |
+| `用户`（70） | adb 认的数字，如 `0`、`10` |
+| `名称`（最小 140） | 设备自己给的名字，如 `Owner`、`工作资料` |
+| `状态`（90，**居中对齐**） | `当前用户`（绿色徽标）/ `运行中` / `未启动` |
 
-数据来自 `Session.Users`，连接时与点「刷新信息」时都会重新读一次（§2.2）。
+一个用户都没有时显示 `—`（不是只有表头的空表）。数据来自 `Session.Users`，连接时与点「刷新信息」时都会重新读一次（§2.2）。
+
+> 这一节最初是一行 `0 Owner（当前） · 10 工作资料` 的文字，验收后改成表格；状态列居中是因为表头、文字与徽标宽度不同，左对齐时读起来不在一条线上（见 §6）。
+
+### 1.6 概览页：Shell 权限放进框里
+
+`id` 在真机上是一行很长的 groups。它有自己的标签行和一个带内边距的圆角边框，长串在框内换行、左右都留白：
+
+- 标签 `Shell 权限` 单独一行，值在下面的框里（等宽字体）；
+- 没读到值时框里显示 `—`，不留一个空框（空框读起来像渲染坏了）。
+
+同时修了所有详情行的根因：值文本以前没有 `Grow(1).MinWidth(0)`，长值按自身宽度铺到窗口右边被裁掉、又没有横向滚动；现在都在页内换行。
 
 ---
 
@@ -123,7 +141,7 @@ adb -s <serial> install -r <本地.apk 绝对路径>
 
 `-r` 是 replace/reinstall：**已安装的同包名应用会被覆盖，应用数据保留**（不动 `/data/data/<pkg>`）。具体边界：同签名且版本号 ≥ 现装 → 覆盖成功；签名不同 → `INSTALL_FAILED_UPDATE_INCOMPATIBLE`；降级 → `INSTALL_FAILED_VERSION_DOWNGRADE`（没有 `-d`）；`testOnly` 的 APK → `INSTALL_FAILED_TEST_ONLY`（没有 `-t`）；不指定用户 → 装到默认用户。
 
-本次**不动** `-r`、不加 `-d`/`-t`，只加 `--user <id>`。`--user` 需要 platform-tools 25 以上；更老的 adb 会说 `unknown option` 并让任务失败，错误原样（脱敏后）显示给用户——这条写进 CHANGELOG 的「已知限制」。
+本次**不动** `-r`、不加 `-d`/`-t`，只加 `--user <id>`。`--user` 的行为已实测（emulator-5554 + platform-tools 34 / adb 1.0.41，两个用户）：对「只装在 user 0 的应用」执行 `install -r --user 10` 后 user 10 也能看到它，说明 adb 确实转发该参数；`--user 99` 报 Success 是 PackageManager 把未知 id 归到当前用户，不是 adb 丢参数。更老的 platform-tools 若**静默忽略**该参数，安装会落到默认用户而界面不会察觉——这条写进 CHANGELOG 的「已知限制」，也写进 `docs/architecture.md` 的决策表（没有改走「先 push 再 `pm install`」的理由）。
 
 ---
 
@@ -138,6 +156,9 @@ adb -s <serial> install -r <本地.apk 绝对路径>
 | 安装用户默认值 | 设备报告的**当前用户**；报告不出来时选列表第一个 | 99% 的情况用户就想装到自己正在用的那个 |
 | 用户列表读不到 | 弹窗写明「将安装到默认用户」，仍然允许安装（走今天的命令） | 老设备/权限受限设备上不能把安装功能整个废掉 |
 | `pm list users` 一个用户都没有 | 视为"读不到"，同上 | 与「空列表"混淆会让人以为设备没用户 |
+| 安装文件在哪选 | 弹窗内选（选中后显示完整路径），没有文件时「安装」禁用 | 用户要求；比「先选文件再弹窗」多一步确认，换来的是路径与目标用户同屏可见 |
+| 打开保存目录 | 用可见窗口派生（`VisibleCommand`）+ 成功后提示 | 修复「点了没反应」；代价是多一个派生函数 |
+| 概览的设备用户 | 表格而不是一行文字；状态列居中 | 用户多了要比对，一行文字读不清；代价是概览多占一块高度 |
 
 ## 5. 文件结构
 
@@ -746,8 +767,24 @@ git commit -m "feat: export APKs and install for a chosen device user from the a
 
 ---
 
+## 6. 第二轮：验收后的改动
+
+第一轮合并（`5082314` 之后）用户验收时提了 5 处改动。它们不是新计划，而是对本文件 §1 的修正；改动、原因与钉住它的测试如下，`§1` 已按最终行为改写。
+
+| # | 现象 | 改动 | 钉住它的测试 |
+|---|---|---|---|
+| 1 | 「打开保存目录」点了没反应 | `platform.RevealDir` 之前用 `Command()`，它带 `CREATE_NO_WINDOW`+`HideWindow`——那是给 adb 这类控制台子进程准备的。`explorer` 以隐藏方式启动时，已有资源管理器窗口的情况下只转发请求、不弹窗口。新增 `platform.VisibleCommand`（只保留进程组，不带隐藏标志），三平台 `RevealDir` 改用它；打开成功后提示「已打开保存目录」，即使文件管理器开在窗口后面也有反馈 | `TestVisibleCommandShowsItsWindow`（先把实现改回旧标志确认它红：`CreationFlags = 0x8000200, want no CREATE_NO_WINDOW`）、`TestAPKSaveRevealSaysItOpenedTheFolder` |
+| 2 | 「设备用户」一句话读不清（用户多了没法比） | 概览里的一行文字换成表格：`用户` / `名称` / `状态`，走统一的 `tableCard`；空列表显示 `—` 而不是只有表头 | `TestDeviceUserStatusWords`、`TestOverviewShowsEveryDeviceUser`、`TestOverviewSaysNothingWhenTheUserListIsEmpty` |
+| 3 | 状态列左对齐时，表头、文字、徽标宽度不同、读起来不在一条线上 | 该列 `Align: ui.Center`（表格同时给表头与单元格加 `Justify(Center)`） | `TestDeviceUserStatusColumnIsCentred`（改之前红：`"未启动" centres at 814.5, header at 812.0`，容差 2px） |
+| 4 | Shell 权限的长 groups 顶到窗口右边被裁掉 | 值放进带内边距的圆角框（等宽字体，长串在框内换行），空值显示 `—`；同时给 `detailRow` 的值加 `Grow(1).MinWidth(0)`——这才是所有详情行长值被裁的根因（没有横向滚动能看被裁掉的部分） | 截图 `03c-device-overview-users.png`（长 `id` 在框内两行结束）、`03-device-overview.png`（空值时框里是 `—`） |
+| 5 | 安装 APK 先弹系统文件选择再弹窗，用户看不到自己选了哪个文件 | 点「安装 APK」直接开弹窗，文件在弹窗里用「选择 APK 文件」选，选中后显示完整路径；没选文件时「安装」禁用，`submitInstall` 里还有一道空路径校验（键盘路径也起不来任务）。「选择 APK 文件」放在独立 Row 里：直接放进弹窗列会被拉成整条横幅，读成主操作 | `TestChooseAPKOpensTheDialogBeforeAskingForAFile`（选文件之前 `pickAPKFile` 一次都不许调用）、`TestInstallDialogPicksTheAPKAndShowsItsPath`、`TestInstallWaitsForAFileBeforeItStarts`；截图 `34-install-apk-dialog.png`、`34b-install-apk-dialog-empty.png` |
+
+第二轮改动的文件：`internal/platform/exec.go`（+`VisibleCommand`）、`kill_unix.go` / `kill_windows.go`（+`configureVisibleProcess`）、`reveal_*.go`、`internal/app/install.go`、`internal/app/actions.go`、`internal/app/detail.go`、`internal/app/state.go`（+`UserTable`），以及各自的测试与截图用例。
+
+写进 `docs/CHANGELOG.md` 的条目（`## 2026-11-24`）：保存 APK、安装选用户 + 弹窗内选文件、概览设备用户表（状态列居中）+ Shell 权限加框、打开保存目录修复、`--user` 需要较新 platform-tools 的已知限制。设计取舍另有一行在 `docs/architecture.md` 的「设计决策记录」（打开目录用 `VisibleCommand`）。
+
 ## 自检
 
-- **规格覆盖**：§1.1 入口 → 任务 7；§1.2 每次问目录 → 任务 5（`pickSaveFolder`、`beginAPKSave`）；§1.3 四个阶段 → 任务 5；§1.4 安装选用户 → 任务 6；§1.5 概览用户 → 任务 4；§2.2 一条 shell → 任务 2（`TestDeviceUsersUsesOneShellRoundTrip`）；§2.3 两个进度来源 → 任务 1/5；§3 安装方式不变 → 任务 6（`TestInstallArgsWithoutAUserKeepTodaysCommand` + `-r` 保持）；§4 六条决定 → 任务 3（命名、重名）、任务 5（不设默认、取消即取消）、任务 6（默认当前用户、列表失败仍可装）。
+- **规格覆盖**：§1.1 入口 → 任务 7；§1.2 每次问目录 → 任务 5（`pickSaveFolder`、`beginAPKSave`）；§1.3 四个阶段 → 任务 5；§1.4 安装选用户（第二轮改为弹窗内选文件）→ 任务 6 + §6；§1.5 概览用户表格与 §1.6 Shell 权限框 → 任务 4 + §6；§2.2 一条 shell → 任务 2（`TestDeviceUsersUsesOneShellRoundTrip`）；§2.3 两个进度来源 → 任务 1/5；§3 安装方式不变 → 任务 6（`TestInstallArgsWithoutAUserKeepTodaysCommand` + `-r` 保持）；§4 的决定 → 任务 3（命名、重名）、任务 5（不设默认、取消即取消）、任务 6（默认当前用户、列表失败仍可装）、§6（弹窗内选文件、可见窗口打开目录、设备用户用表格）。
 - **类型一致性**：`core.AppAPK{Path,Size}`、`core.DeviceUser{ID,Name,Current,Running}`、`Session.Users []DeviceUser`、`ParseDeviceUsers(string,int) []DeviceUser`、`ParseCurrentUser(string) (int,bool)`、`ParsePullPercent(string) (int,bool)`、`apkSave.{Device,Package,Label,Dir,Error,Stage,APKPath,Total,LocalPath,TaskID}`、`apkStageLocating/Downloading/Done/Failed`、`apkFileName(label,pkg) string`、`uniqueAPKPath(dir,name string, exists func(string) bool) string`、`apkProgress(task core.Task, total int64, localPath string) float64`、`installDraft.{Device,Path,Users,UserID,Chosen,Loading,Err}`、`installArgs(path string, userID int, keepUser bool) []string`、`installUserLabel(core.DeviceUser) string`。
 - **未决（本计划不做）**：安装失败的「重试」按钮、`-d`（允许降级）/`-t`（testOnly）/`-g`（授予全部运行时权限）、split APK 打包导出。要做就作为新需求重走设计。
