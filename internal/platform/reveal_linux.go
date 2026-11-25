@@ -7,7 +7,7 @@ import "fmt"
 // RevealDir opens dir in the desktop's file manager, for the startup page's
 // buttons.
 func RevealDir(dir string) error {
-	if err := Command("xdg-open", dir).Start(); err != nil {
+	if err := VisibleCommand("xdg-open", dir).Start(); err != nil {
 		return fmt.Errorf("无法打开目录：%v", err)
 	}
 	return nil

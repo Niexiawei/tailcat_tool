@@ -412,3 +412,32 @@ func TestAPKSaveClosedWhileLocatingStartsNoPull(t *testing.T) {
 		}
 	}
 }
+
+// Revealing the folder must be visible in the app too: on Windows the file
+// manager can open behind the window, and then the user only sees that the
+// button did nothing.
+func TestAPKSaveRevealSaysItOpenedTheFolder(t *testing.T) {
+	vm, _ := apkFixture(t, nil)
+	dir := t.TempDir()
+	opened := ""
+	vm.OpenDir = func(path string) error { opened = path; return nil }
+	vm.beginAPKSave(vm.Manager.Profiles()[0].ID, core.AppUsage{Package: "com.foo", Label: "示例"}, dir)
+	waitUntil(t, "the pull to finish", func() bool {
+		task := vm.apkTaskForTest()
+		return task.ID != uuid.Nil && task.State == core.TaskSucceeded
+	})
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	tt.Frame()
+	if err := tt.Click("打开保存目录"); err != nil {
+		t.Fatalf("the saved dialog has no 打开保存目录: %v", err)
+	}
+	if opened != dir {
+		t.Fatalf("the reveal asked for %q, want %q", opened, dir)
+	}
+	// The frame after the click drains the queue into the context, so the
+	// confirmation is read off the window rather than off the queue.
+	tt.Frame()
+	if !tt.HasText("已打开保存目录") {
+		t.Fatalf("no confirmation that the folder opened; texts = %v", tt.Texts())
+	}
+}

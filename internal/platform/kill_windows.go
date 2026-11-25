@@ -34,6 +34,17 @@ func configureProcess(cmd *exec.Cmd) {
 	cmd.SysProcAttr.HideWindow = true
 }
 
+// configureVisibleProcess keeps the process group but leaves the window alone:
+// the children this is for (explorer) must show the window the user asked for.
+// CREATE_NO_WINDOW is ignored by GUI programs, but HideWindow is not — an
+// explorer told to start hidden opens the folder without ever showing it.
+func configureVisibleProcess(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= createNewProcessGroup
+}
+
 // Terminate stops the process tree. Windows has no SIGTERM, and an adb or
 // scrcpy child tree left behind would keep the local port busy, so termination
 // is forceful here by design.

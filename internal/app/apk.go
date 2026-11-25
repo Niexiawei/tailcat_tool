@@ -232,6 +232,10 @@ func (vm *ViewModel) APKView(c *ui.Context) {
 					if components.Button(c, "打开保存目录", components.ButtonOutline).Clicked() {
 						if err := vm.OpenDir(dir); err != nil {
 							vm.Fail(err)
+						} else {
+							// Say it happened: the file manager can open behind this
+							// window, which otherwise reads as a dead button.
+							vm.Notify("已打开保存目录")
 						}
 					}
 				}
