@@ -38,6 +38,8 @@ func (vm *ViewModel) ContentView(c *ui.Context) {
 	vm.DerpEditorView(c)
 	vm.DerpDeleteView(c)
 	vm.CacheConfirmView(c)
+	vm.APKView(c)
+	vm.InstallView(c)
 }
 
 // routedPage builds the page the router shows.
@@ -302,7 +304,8 @@ func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.
 		detailRow(c, "设备代号", session.Product)
 		detailRow(c, "Android", session.Android)
 		detailRow(c, "设备序列号", session.DeviceSerial)
-		detailRow(c, "Shell 权限", session.ShellID)
+		detailBoxRow(c, "Shell 权限", session.ShellID)
+		vm.deviceUsersSection(c, session.Users)
 
 		ui.Row(c).Gap(6).Children(func() {
 			// Diagnosing measures the Tailcat channel, which a direct
@@ -345,8 +348,83 @@ func (vm *ViewModel) overview(c *ui.Context, profile core.Profile, session core.
 func detailRow(c *ui.Context, label, value string) {
 	ui.Row(c).FillWidth().Gap(10).Children(func() {
 		ui.Column(c).Width(90).Shrink(0).Children(func() { components.Text(c, label).FontSize(11) })
-		components.Text(c, value).FontSize(11)
+		// Grow + MinWidth(0) is what lets a long value wrap inside the page:
+		// without it the text keeps its intrinsic width and runs to the window
+		// edge, where it is clipped with nothing to scroll.
+		components.Text(c, value).FontSize(11).Grow(1).MinWidth(0)
 	})
+}
+
+// detailBoxRow shows a value that is long enough to wrap: `id` on a device is
+// one long line of groups. The framed box ends the lines inside the page and
+// gives the text room on both sides, which a bare row cannot: the label column
+// is fixed, so the value had no right margin at all.
+func detailBoxRow(c *ui.Context, label, value string) {
+	theme := c.Theme()
+	ui.Column(c).FillWidth().Gap(3).Children(func() {
+		components.Text(c, label).FontSize(11)
+		ui.Box(c).FillWidth().Padding(theme.Space(1), theme.Space(1.5)).
+			Radius(theme.Radius).Border(1, theme.Border).Children(func() {
+			// An empty box reads as a rendering bug; the placeholder says the
+			// value was not read yet.
+			components.Text(c, orPlaceholder(value, core.PlaceholderUnknown)).FontSize(11).Font("monospace")
+		})
+	})
+}
+
+// deviceUsersSection lists the device's Android profiles. It is a table rather
+// than one line of text because each profile carries three things the user
+// compares across users — the number adb takes, its name, and which one is
+// running now — and a "·"-joined sentence made that unreadable past two users.
+func (vm *ViewModel) deviceUsersSection(c *ui.Context, users []core.DeviceUser) {
+	theme := c.Theme()
+	components.Text(c, "设备用户").FontSize(13).Bold()
+	if len(users) == 0 {
+		components.Text(c, core.PlaceholderUnknown).FontSize(11).TextColor(theme.TextMuted)
+		return
+	}
+	tableCard(c, &vm.UserTable, userColumns(), len(users), tableOptions{
+		Label: "设备用户表", Rows: len(users),
+	}, func(row, col int) {
+		user := users[row]
+		switch col {
+		case 0:
+			components.Text(c, itoa(user.ID)).FontSize(11)
+		case 1:
+			components.Text(c, user.Name).FontSize(11).SingleLine()
+		default:
+			if user.Current {
+				cellBadge(c, deviceUserStatus(user), components.BadgeSuccess)
+				return
+			}
+			components.Text(c, deviceUserStatus(user)).FontSize(11).TextColor(theme.TextMuted)
+		}
+	})
+}
+
+// userColumns are the profile table's columns: what adb takes, what the user
+// calls it, and whether it is running.
+func userColumns() []ui.TableColumn {
+	return []ui.TableColumn{
+		{Title: "用户", ID: "user", Width: 70},
+		{Title: "名称", ID: "name", MinWidth: 140},
+		// Centre: the cell holds a short word or a pill, and both read as one
+		// block under the header only when they sit on its axis.
+		{Title: "状态", ID: "state", Width: 90, Align: ui.Center},
+	}
+}
+
+// deviceUserStatus says which of the three things is true of a profile. A
+// device reports both a running flag and the current user; only one profile can
+// be current, so 当前用户 wins.
+func deviceUserStatus(user core.DeviceUser) string {
+	switch {
+	case user.Current:
+		return "当前用户"
+	case user.Running:
+		return "运行中"
+	}
+	return "未启动"
 }
 
 func orPlaceholder(value, fallback string) string {

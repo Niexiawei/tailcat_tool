@@ -31,3 +31,23 @@ func TestCommandKeepsTheConsoleOffScreen(t *testing.T) {
 		t.Fatal("HideWindow is false")
 	}
 }
+
+// A reveal child must show its window. CREATE_NO_WINDOW is ignored by GUI
+// programs, but HideWindow is not: an explorer started hidden opens the folder
+// and never shows it, which reads as "打开保存目录 没反应".
+func TestVisibleCommandShowsItsWindow(t *testing.T) {
+	cmd := VisibleCommand("explorer", `C:\`)
+	if cmd.SysProcAttr == nil {
+		t.Fatal("VisibleCommand left SysProcAttr nil")
+	}
+	if got := cmd.SysProcAttr.CreationFlags; got&createNoWindow != 0 {
+		t.Fatalf("CreationFlags = %#x, want no CREATE_NO_WINDOW", got)
+	}
+	// The group stays: Terminate is what stops whatever the child spawned.
+	if got := cmd.SysProcAttr.CreationFlags; got&createNewProcessGroup == 0 {
+		t.Fatalf("CreationFlags = %#x, want CREATE_NEW_PROCESS_GROUP kept", got)
+	}
+	if cmd.SysProcAttr.HideWindow {
+		t.Fatal("HideWindow is set: the window the user asked for would never appear")
+	}
+}

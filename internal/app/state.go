@@ -75,6 +75,15 @@ type ViewModel struct {
 	TransferRemotePath string
 	TransferError      string
 
+	// APK is the 「保存 APK」 dialog; nil closes it. apkMu guards it because
+	// the path lookup and the pull run on goroutines.
+	APK   *apkSave
+	apkMu sync.Mutex
+	// APKInstall is the 「安装 APK」 dialog; nil closes it. installMu guards it
+	// because the device's profile list is read on a goroutine.
+	APKInstall *installDraft
+	installMu  sync.Mutex
+
 	SettingsDraft core.ToolSettings
 	SettingsError string
 	// SettingsLoaded marks the draft as filled from the manager. The page loads
@@ -118,6 +127,8 @@ type ViewModel struct {
 
 	// CacheDevice is the device whose cached app metadata the page shows.
 	CacheDevice uuid.UUID
+	// UserTable keeps the overview's device-user table layout across frames.
+	UserTable ui.ListState
 	// CacheTable keeps the cache page's column layout and scroll across frames.
 	CacheTable ui.ListState
 	// CacheConfirmOpen asks before dropping cached rows; an empty

@@ -470,6 +470,7 @@ func (vm *ViewModel) appCell(c *ui.Context, col int, state *resourceState, devic
 				components.Text(c, "7 天前更新").FontSize(10).TextColor(theme.TextMuted)
 			}
 			vm.appMetaAction(c, device, app)
+			vm.apkDownloadAction(c, device, app)
 		})
 	case 1:
 		components.Text(c, itoa(len(app.Processes))+" 个进程").FontSize(11).TextColor(theme.TextMuted)

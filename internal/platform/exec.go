@@ -17,3 +17,13 @@ func Command(name string, args ...string) *exec.Cmd {
 	configureProcess(cmd)
 	return cmd
 }
+
+// VisibleCommand builds a child that is supposed to show a window of its own:
+// the file manager or shell we ask to reveal a path. It keeps the process
+// group, and drops the console hiding that also suppresses the window the user
+// asked for — an explorer started hidden is indistinguishable from 打开没反应.
+func VisibleCommand(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	configureVisibleProcess(cmd)
+	return cmd
+}

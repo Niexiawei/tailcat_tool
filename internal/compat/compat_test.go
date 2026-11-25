@@ -161,6 +161,7 @@ var (
 	_                                                                                                                       = components.TreeVirtualizedState[string]{}.Open
 	_                                                                                                                       = (*components.TreeVirtualizedState[string]).Rows
 	_ func() *ui.SVG                                                                                                        = lucide.Search
+	_ func() *ui.SVG                                                                                                        = lucide.Download
 	_ string                                                                                                                = sidebar.ShellOptions{}.Title
 	_ func(*ui.Context)                                                                                                     = sidebar.ShellOptions{}.Content
 	_ func(*ui.Context)                                                                                                     = sidebar.ShellOptions{}.ContentTitle

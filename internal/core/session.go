@@ -16,9 +16,12 @@ type Session struct {
 	Android      string
 	DeviceSerial string
 	ShellID      string
-	Route        string
-	Err          string
-	Logs         []SessionLog
+	// Users is every Android profile the device listed, with the one it says
+	// is running now marked. Empty until a refresh read it.
+	Users []DeviceUser
+	Route string
+	Err   string
+	Logs  []SessionLog
 }
 
 // SessionLog is one timestamped line of channel output.

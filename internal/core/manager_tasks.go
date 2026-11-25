@@ -376,7 +376,10 @@ func (m *Manager) Diagnose(ctx context.Context, id uuid.UUID) error {
 }
 
 // RefreshDeviceInformation reads the model, product, Android version, serial
-// and shell identity from the device.
+// and shell identity from the device, then the list of Android users it has.
+// The user list is a separate read: a device that will not list its profiles
+// still has a model and a version worth showing, so that failure is logged and
+// never turns this into an error.
 func (m *Manager) RefreshDeviceInformation(ctx context.Context, id uuid.UUID) error {
 	target, err := m.operationTarget(ctx, id)
 	if err != nil {
@@ -414,5 +417,20 @@ func (m *Manager) RefreshDeviceInformation(ctx context.Context, id uuid.UUID) er
 	})
 	m.notify()
 	m.mu.Unlock()
+	m.refreshDeviceUsers(ctx, id, target)
 	return nil
+}
+
+// refreshDeviceUsers reads the profile list into the session. It runs after the
+// fields above are published so the overview shows them even when this fails.
+func (m *Manager) refreshDeviceUsers(ctx context.Context, id uuid.UUID, target operationTarget) {
+	users, err := m.readDeviceUsers(ctx, target)
+	if err != nil {
+		m.log(id, "读取设备用户："+sanitizeError(err).Error())
+		return
+	}
+	if !m.targetIsCurrent(id, target) {
+		return
+	}
+	m.storeDeviceUsers(id, users)
 }

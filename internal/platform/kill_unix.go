@@ -17,6 +17,11 @@ func configureProcess(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Setpgid = true
 }
 
+// configureVisibleProcess is the same as configureProcess here: a unix child
+// only shows a window when its program asks for one, so there is nothing to
+// un-hide.
+func configureVisibleProcess(cmd *exec.Cmd) { configureProcess(cmd) }
+
 // Terminate asks the process group to stop.
 func Terminate(pid int) {
 	if pid <= 0 {
