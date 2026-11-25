@@ -47,6 +47,8 @@ func apkAnswer(_ context.Context, c core.Command, _ func(string)) (core.Result, 
 	switch {
 	case strings.Contains(joined, "get-state"):
 		return core.Result{Output: "device\n"}, nil
+	case strings.Contains(joined, "pm list users"):
+		return core.Result{Output: "Users:\n\tUserInfo{0:Owner:c13} running\n\tUserInfo{10:工作资料:404}\n@@CURRENT\n0\n"}, nil
 	case strings.Contains(joined, "pm list packages"):
 		return core.Result{Output: "package:/data/app/~~x==/com.foo-y==/base.apk=com.foo\n"}, nil
 	case strings.Contains(joined, "stat -c"):

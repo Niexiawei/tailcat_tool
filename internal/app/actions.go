@@ -31,13 +31,10 @@ func (vm *ViewModel) promote(profile core.Profile) {
 	vm.Notify("已保存到我的设备，当前会话保持")
 }
 
-// chooseAPK asks for an APK, then which device user it is installed for.
+// chooseAPK opens the install dialog; the APK itself is chosen there, so the
+// path is visible next to the user it will be installed for.
 func (vm *ViewModel) chooseAPK(profile core.Profile) {
-	path, ok := pickAPKFile("选择要安装到 " + profile.Name + " 的 APK")
-	if !ok {
-		return
-	}
-	vm.openInstallDialog(profile.ID, path)
+	vm.openInstallDialog(profile.ID, "")
 }
 
 // pickAPKFile asks for the APK to install. It is a variable so tests never open

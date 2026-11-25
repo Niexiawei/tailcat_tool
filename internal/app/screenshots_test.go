@@ -566,6 +566,21 @@ func shotCases() []shotCase {
 			settle: 6,
 		},
 		{
+			// The dialog as it opens: no file yet, so the primary action waits.
+			name: "34b-install-apk-dialog-empty",
+			build: func(t *testing.T) *ViewModel {
+				vm := usersFixture(t)
+				vm.OpenDevice(vm.Manager.Profiles()[0].ID)
+				vm.openInstallDialog(vm.Manager.Profiles()[0].ID, "")
+				waitUntil(t, "the user list to load", func() bool {
+					state, open := vm.installSnapshot()
+					return open && !state.Loading
+				})
+				return vm
+			},
+			settle: 6,
+		},
+		{
 			name: "03c-device-overview-users",
 			build: func(t *testing.T) *ViewModel {
 				vm := usersFixture(t)

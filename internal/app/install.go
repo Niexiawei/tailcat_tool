@@ -40,8 +40,9 @@ type installDraft struct {
 	Err string
 }
 
-// openInstallDialog shows the dialog and reads the device's profiles in the
-// background: a work profile can appear between connecting and installing.
+// openInstallDialog shows the dialog — the file is chosen inside it — and reads
+// the device's profiles in the background: a work profile can appear between
+// connecting and installing.
 func (vm *ViewModel) openInstallDialog(device uuid.UUID, path string) {
 	state := &installDraft{Device: device, Path: path, Loading: true}
 	vm.installMu.Lock()
@@ -115,6 +116,17 @@ func (vm *ViewModel) submitInstall(state *installDraft) {
 	if state == nil {
 		return
 	}
+	if state.Path == "" {
+		// The button is disabled without a file; this is the guard behind it,
+		// so a keyboard path to it cannot start an install of nothing.
+		vm.installMu.Lock()
+		if vm.APKInstall == state {
+			state.Err = "请选择要安装的 APK 文件"
+		}
+		vm.installMu.Unlock()
+		vm.requestFrame()
+		return
+	}
 	_, err := vm.Manager.BeginADBTask(context.Background(), state.Device,
 		"安装 "+fileName(state.Path), installArgs(state.Path, state.UserID, state.Chosen), installTimeout)
 	vm.installMu.Lock()
@@ -162,9 +174,31 @@ func (vm *ViewModel) InstallView(c *ui.Context) {
 		panel.Padding(20).Gap(10).Width(480)
 		panel.Children(func() {
 			components.Text(c, "安装 APK").FontSize(18).Bold()
-			ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-				components.Text(c, "文件："+fileName(path)).FontSize(11).SingleLine()
-				components.Tooltip(c, components.Text(c, "完整路径").FontSize(10).TextColor(c.Theme().TextMuted), path)
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				components.Text(c, "APK 文件").FontSize(11).Width(70).Shrink(0)
+				if path == "" {
+					components.Text(c, "未选择 APK 文件").FontSize(11).TextColor(c.Theme().TextMuted)
+					return
+				}
+				// The whole path, wrapped: the user is about to overwrite an
+				// application and needs to see which build they picked.
+				components.Text(c, path).FontSize(11).Grow(1).MinWidth(0)
+			})
+			// A row of its own so the button keeps its width: a Button directly
+			// in the dialog column stretches into a full-width bar, which reads
+			// as the primary action of this dialog.
+			ui.Row(c).FillWidth().Children(func() {
+				if !components.Button(c, "选择 APK 文件", components.ButtonOutline).Clicked() {
+					return
+				}
+				if picked, ok := pickAPKFile("选择要安装的 APK 文件"); ok && picked != "" {
+					vm.installMu.Lock()
+					if vm.APKInstall == state {
+						state.Path = picked
+					}
+					vm.installMu.Unlock()
+					c.Invalidate()
+				}
 			})
 			components.Text(c, installOverwriteNote).FontSize(11).TextColor(c.Theme().TextMuted)
 			switch {
@@ -203,7 +237,9 @@ func (vm *ViewModel) InstallView(c *ui.Context) {
 					open = false
 				}
 				button := components.Button(c, "安装", components.ButtonPrimary)
-				if loading {
+				if loading || path == "" {
+					// Nothing to install without a file, and the list is what
+					// says which users there are.
 					button.Disabled(true)
 					return
 				}

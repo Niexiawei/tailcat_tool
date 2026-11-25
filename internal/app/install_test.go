@@ -49,7 +49,9 @@ func TestInstallDialogOffersEveryUser(t *testing.T) {
 	tt.Frame()
 	for _, want := range []string{
 		"安装 APK",
-		"文件：示例.apk",
+		"APK 文件",
+		"/tmp/示例.apk",
+		"选择 APK 文件",
 		"覆盖安装：同包名的应用会被替换，应用数据保留。",
 		"安装到用户",
 		"0 · Owner（当前）",
@@ -169,21 +171,76 @@ func TestInstallDialogCancelStartsNothing(t *testing.T) {
 	}
 }
 
-func TestChooseAPKOpensTheUserDialog(t *testing.T) {
+// 安装 APK opens the dialog first: the file is chosen inside it, not before it.
+func TestChooseAPKOpensTheDialogBeforeAskingForAFile(t *testing.T) {
 	vm, _ := apkFixture(t, nil)
-	defer stubPickAPKFile(func(string) (string, bool) { return "/tmp/示例.apk", true })()
+	asked := 0
+	defer stubPickAPKFile(func(string) (string, bool) {
+		asked++
+		return "/tmp/示例.apk", true
+	})()
 	vm.chooseAPK(vm.Manager.Profiles()[0])
-	if state, open := vm.installSnapshot(); !open || state.Path != "/tmp/示例.apk" {
-		t.Fatalf("chooseAPK() opened no dialog: %+v", state)
+	if asked != 0 {
+		t.Fatalf("the file picker ran %d times before the dialog appeared", asked)
+	}
+	state, open := vm.installSnapshot()
+	if !open {
+		t.Fatal("chooseAPK() opened no dialog")
+	}
+	if state.Path != "" {
+		t.Fatalf("the dialog opened with a path the user never chose: %q", state.Path)
 	}
 }
 
-func TestChooseAPKCancelledOpensNothing(t *testing.T) {
+// The dialog's own button picks the file and then shows where it is.
+func TestInstallDialogPicksTheAPKAndShowsItsPath(t *testing.T) {
 	vm, _ := apkFixture(t, nil)
-	defer stubPickAPKFile(func(string) (string, bool) { return "", false })()
-	vm.chooseAPK(vm.Manager.Profiles()[0])
-	if state, open := vm.installSnapshot(); open {
-		t.Fatalf("a cancelled file picker still opened a dialog: %+v", state)
+	const chosen = `C:\Users\me\Downloads\示例应用_1.2.3.apk`
+	defer stubPickAPKFile(func(title string) (string, bool) {
+		if !strings.Contains(title, "APK") {
+			t.Fatalf("the picker title = %q, want it to say APK", title)
+		}
+		return chosen, true
+	})()
+	vm.openInstallDialog(vm.Manager.Profiles()[0].ID, "")
+	waitUntil(t, "the user list to load", func() bool {
+		state, open := vm.installSnapshot()
+		return open && !state.Loading
+	})
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	tt.Frame()
+	if !tt.HasText("未选择 APK 文件") {
+		t.Fatalf("the dialog does not say it has no file; texts = %v", tt.Texts())
+	}
+	if err := tt.Click("选择 APK 文件"); err != nil {
+		t.Fatalf("the dialog has no 选择 APK 文件 button: %v", err)
+	}
+	tt.Frame()
+	if !tt.HasText(chosen) {
+		t.Fatalf("the chosen path is not shown; texts = %v", tt.Texts())
+	}
+}
+
+// Without a file there is nothing to install, and pressing 安装 must not start
+// a task that can only fail.
+func TestInstallWaitsForAFileBeforeItStarts(t *testing.T) {
+	vm, runner := apkFixture(t, nil)
+	vm.openInstallDialog(vm.Manager.Profiles()[0].ID, "")
+	waitUntil(t, "the user list to load", func() bool {
+		state, open := vm.installSnapshot()
+		return open && !state.Loading
+	})
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	tt.Frame()
+	// Disabled or guarded, pressing it must not start an install of nothing.
+	_ = tt.Click("安装")
+	for _, call := range runner.commandLog() {
+		if strings.Contains(call, " install ") {
+			t.Fatalf("an install ran with no file: %q", call)
+		}
+	}
+	if _, open := vm.installSnapshot(); !open {
+		t.Fatal("the dialog closed with no file chosen")
 	}
 }
 
