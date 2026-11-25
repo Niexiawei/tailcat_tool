@@ -408,7 +408,9 @@ func userColumns() []ui.TableColumn {
 	return []ui.TableColumn{
 		{Title: "用户", ID: "user", Width: 70},
 		{Title: "名称", ID: "name", MinWidth: 140},
-		{Title: "状态", ID: "state", Width: 90},
+		// Centre: the cell holds a short word or a pill, and both read as one
+		// block under the header only when they sit on its axis.
+		{Title: "状态", ID: "state", Width: 90, Align: ui.Center},
 	}
 }
 

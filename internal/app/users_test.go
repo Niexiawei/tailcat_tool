@@ -97,3 +97,27 @@ func TestOverviewSaysNothingWhenTheUserListIsEmpty(t *testing.T) {
 		t.Fatalf("an empty user list has no placeholder; texts = %v", tt.Texts())
 	}
 }
+
+// The 状态 column holds a short word or a pill; both are centred on the
+// header's axis, which is what makes the column read as one block.
+func TestDeviceUserStatusColumnIsCentred(t *testing.T) {
+	vm := usersFixture(t)
+	vm.OpenDevice(vm.Manager.Profiles()[0].ID)
+	vm.DetailTab = detailOverview
+	tt := ui.NewTester(vm.ContentView, 900, 900)
+	tt.Frame()
+
+	center := func(text string) float32 {
+		rect, ok := tt.Find(text)
+		if !ok {
+			t.Fatalf("no %q found; texts = %v", text, tt.Texts())
+		}
+		return rect.X + rect.W/2
+	}
+	header := center("状态")
+	for _, text := range []string{"未启动", "当前用户"} {
+		if got := center(text); got < header-2 || got > header+2 {
+			t.Fatalf("%q centres at %.1f, header at %.1f: the column is not centred", text, got, header)
+		}
+	}
+}
