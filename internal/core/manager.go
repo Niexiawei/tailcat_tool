@@ -591,6 +591,8 @@ func clearDeviceInfo(s *Session) {
 	s.Android = ""
 	s.DeviceSerial = ""
 	s.ShellID = ""
+	// Users 也是连接期的事实：断开后留着一张用户表，读起来像设备还在。
+	s.Users = nil
 }
 
 func (m *Manager) failConnect(id uuid.UUID, generation uuid.UUID, err error) error {

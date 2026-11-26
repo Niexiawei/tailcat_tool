@@ -121,3 +121,23 @@ func TestDeviceUserStatusColumnIsCentred(t *testing.T) {
 		}
 	}
 }
+
+// 概览读的是 Session.Users，断开后那一节必须回到 —。
+func TestOverviewStopsShowingUsersAfterDisconnect(t *testing.T) {
+	vm := newTestViewModel(t)
+	profile := vm.Manager.Profiles()[0]
+	vm.Manager.ForceSessionUsersForTest(profile.ID, []core.DeviceUser{{ID: 0, Name: "Owner", Current: true}})
+	vm.OpenDevice(profile.ID)
+
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	tt.Frame()
+	if !tt.HasText("Owner") {
+		t.Fatalf("the fixture never showed a user; texts = %v", tt.Texts())
+	}
+
+	vm.Manager.Disconnect(context.Background(), profile.ID)
+	tt.Frame()
+	if tt.HasText("Owner") {
+		t.Fatalf("the user list survived the disconnect; texts = %v", tt.Texts())
+	}
+}
