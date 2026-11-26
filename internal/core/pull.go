@@ -5,14 +5,15 @@ import (
 	"strings"
 )
 
-// ParsePullPercent reads how far an `adb pull` has got from what it printed.
+// ParseTransferPercent reads how far an `adb pull` or `adb push` has got from
+// what it printed.
 //
 // The progress line is "[ 42%] /data/app/~~x==/com.foo-y==/base.apk", terminated
 // by \r on a TTY and by \n through a pipe — and some adb builds print it not at
 // all. Callers therefore treat "no answer" as indeterminate progress rather
 // than as zero, and only ever look at the last record: the earlier ones are
 // history, and reading them would make the bar jump backwards.
-func ParsePullPercent(output string) (int, bool) {
+func ParseTransferPercent(output string) (int, bool) {
 	percent, found := 0, false
 	for _, raw := range strings.FieldsFunc(output, func(r rune) bool { return r == '\r' || r == '\n' }) {
 		line := strings.TrimSpace(raw)
