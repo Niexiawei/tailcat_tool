@@ -48,8 +48,6 @@ type fileState struct {
 	conn uuid.UUID
 	// path is the directory the right pane lists.
 	path string
-	// selected is the row highlighted in the table.
-	selected string
 	// crumb is what the breadcrumbs wrote when an ancestor was activated.
 	crumb int
 	// tree owns expansion, the cursor and the scroll offset. Keys are device
@@ -60,12 +58,10 @@ type fileState struct {
 	// user folded and forget what those rows were hiding.
 	open  map[string]bool
 	table ui.ListState
-	// chosen is the row the table highlights, and chosenPath is the directory
-	// its index belongs to. They live here rather than in the build pass
-	// because the table writes the choice between frames, as the arrow keys
-	// move it; recomputing it from selected every frame would undo that.
-	chosen     int
-	chosenPath string
+	// noRow keeps the table's cursor at "nothing chosen". The list only paints
+	// a row's hover while it has a cursor, so the pointer is -1 rather than
+	// nil: hover works, nothing is ever selected.
+	noRow int
 }
 
 // filePaneKey names one independent browser of one device: the file tab has
@@ -107,7 +103,7 @@ func (vm *ViewModel) paneStateFor(key filePaneKey) *fileState {
 	}
 	state, ok := vm.files[key]
 	if !ok {
-		state = &fileState{treeWidth: 240, path: filePageRoot, selected: filePageRoot, crumb: -1, chosen: -1}
+		state = &fileState{treeWidth: 240, path: filePageRoot, crumb: -1}
 		// Open the way down to the folder the page starts on, so the tree shows
 		// where that folder lives instead of a single closed row.
 		openTreeTo(state, state.path)
@@ -139,7 +135,7 @@ func (vm *ViewModel) syncPaneState(key filePaneKey, conn uuid.UUID) *fileState {
 // by the manager when the new connection starts.
 func (vm *ViewModel) resetFileState(device uuid.UUID, state *fileState, conn uuid.UUID) {
 	width := state.treeWidth
-	*state = fileState{treeWidth: width, conn: conn, path: filePageRoot, selected: filePageRoot, crumb: -1, chosen: -1}
+	*state = fileState{treeWidth: width, conn: conn, path: filePageRoot, crumb: -1}
 	openTreeTo(state, state.path)
 	vm.forgetFileEntries(device)
 }
@@ -342,7 +338,6 @@ func (vm *ViewModel) prefetchDir(profile core.Profile, path string) {
 // a selection the tree cannot show is a selection the user cannot find again.
 func (vm *ViewModel) showDir(profile core.Profile, state *fileState, dir string) {
 	state.path = dir
-	state.selected = dir
 	state.crumb = -1
 	openTreeTo(state, dir)
 	vm.ensureDirs(profile, dir)
@@ -630,47 +625,31 @@ func (vm *ViewModel) fileBrowser(c *ui.Context, profile core.Profile, state *fil
 			components.Text(c, "这个文件夹是空的").FontSize(11).TextColor(theme.TextMuted).Grow(1)
 			return
 		}
-		// The chosen row is the path the page selected: a click on another row
-		// reports Changed, which is what opens it.
-		if state.chosenPath != state.path {
-			// A new directory: the highlight starts on the row the page
-			// selected, if this listing holds it.
-			state.chosenPath = state.path
-			state.chosen = -1
-			for i, entry := range listing.Entries {
-				if entry.Path == state.selected {
-					state.chosen = i
-					break
-				}
-			}
-		}
-		state.table.Selected = &state.chosen
-		// The chosen row is a band of the accent color: round it at the
-		// theme's radius instead of running it edge to edge.
+		// The table keeps no chosen row: a click opens the entry at once, so a
+		// highlight that stays behind reads as "it selected instead of
+		// entering". The cursor is held at -1 (a click writes the row in, this
+		// puts it back before the row is built), which is what lets the list
+		// paint the pointer's row; RoundRows gives that row the theme's radius.
+		state.noRow = -1
+		state.table.Selected = &state.noRow
 		state.table.RoundRows = true
-		// A click opens the entry; the arrow keys only move the highlight, as a
-		// file manager's do. Changed reports both, RowClicked only the
-		// pointer's click.
 		opened := -1
-		table := tableCard(c, &state.table, fileColumns(), len(listing.Entries), tableOptions{
+		tableCard(c, &state.table, fileColumns(), len(listing.Entries), tableOptions{
 			Label: opts.Label, Grow: true, Unframed: opts.Unframed,
 		}, func(row, col int) {
 			entry := listing.Entries[row]
 			// RowClicked only reports from the element under the pointer, so
-			// the cell's content has to be as wide as the cell, padding
-			// included: otherwise a click beside the text highlights the row
-			// and nothing else, which reads as "it selected instead of
-			// entering". Grow takes the column's free width; the negative
-			// margin takes back the padding the table puts around a cell.
-			// RowClicked only reports from the element under the pointer, so
 			// the cell's content has to be as big as the cell: as wide as the
-			// column (Grow, plus the padding the table puts around a cell) and
-			// as tall as the row (Space(8), the theme's least row height).
-			// Otherwise a click beside the text, or on a row's bottom edge,
-			// only highlights the row, which reads as "it selected instead of
-			// entering".
+			// column (Grow, plus the negative margin that takes back the
+			// padding the table puts around a cell) and as tall as the row
+			// (Space(8), the theme's least row height). Otherwise a click
+			// beside the text, or on a row's bottom edge, opens nothing.
+			// Justify centers the icon and name in that height (a Box stacks its
+			// children, so the vertical axis is Justify, not AlignItems), and
+			// Padding keeps them off the row's own edges.
 			cell := ui.Box(c).Grow(1).MinWidth(0).
 				Height(c.Theme().Space(8)).
+				Justify(ui.Center).
 				Margin(-c.Theme().Space(2.5)).
 				Padding(0, c.Theme().Space(2.5)).
 				Children(func() {
@@ -682,15 +661,7 @@ func (vm *ViewModel) fileBrowser(c *ui.Context, profile core.Profile, state *fil
 				opened = row
 			}
 		})
-		// A click only reports from the cell's content (mygo asks the element
-		// under the pointer), so a click in the row's padding just chooses the
-		// row. The second click, or Enter, arrives through Submitted: taking it
-		// keeps "clicked the folder, it only selected" from sticking.
-		if opened < 0 && table.Submitted() {
-			opened = state.chosen
-		}
 		if opened >= 0 && opened < len(listing.Entries) {
-			state.selected = listing.Entries[opened].Path
 			choose(listing.Entries[opened])
 		}
 	})
@@ -799,7 +770,6 @@ func (vm *ViewModel) fileCell(c *ui.Context, col int, entry core.RemoteEntry) {
 // activateEntry is what clicking a row does: a folder opens, a file shows its
 // attributes and the two transfers.
 func (vm *ViewModel) activateEntry(profile core.Profile, state *fileState, entry core.RemoteEntry) {
-	state.selected = entry.Path
 	if entry.Folder() {
 		vm.showDir(profile, state, entry.Path)
 		return

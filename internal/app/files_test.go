@@ -716,57 +716,6 @@ func TestFileTreeMirrorsTheDeviceFilesystemFromOneRoot(t *testing.T) {
 	}
 }
 
-// TestFileRowStaysChosenAfterOpeningIt pins that a click both opens the entry
-// and leaves its row chosen: the table's choice is the path the page selected.
-func TestFileRowStaysChosenAfterOpeningIt(t *testing.T) {
-	vm, _ := newFilesViewModel(t, readFixture)
-	tt := ui.NewTester(vm.ContentView, 1000, 760)
-	waitForText(t, tt, "Download")
-	if err := tt.Click("Download"); err != nil {
-		t.Fatalf("Click(Download) error: %v", err)
-	}
-	tt.Frame()
-	profile := vm.Manager.Profiles()[0]
-	if got := vm.fileStateFor(profile.ID).selected; got != "/sdcard/Download" {
-		t.Fatalf("selected = %q, want /sdcard/Download", got)
-	}
-}
-
-// TestFileTableKeyboardMovesTheChoice pins that the table's choice lives in the
-// page's state, not in a variable that dies with the frame: the arrow keys must
-// move the highlight between frames.
-func TestFileTableKeyboardMovesTheChoice(t *testing.T) {
-	vm, _ := newFilesViewModel(t, readFixture)
-	tt := ui.NewTester(vm.ContentView, 1000, 760)
-	waitForText(t, tt, "Download")
-	profile := vm.Manager.Profiles()[0]
-	state := vm.fileStateFor(profile.ID)
-	rect, ok := tt.Find("设备文件列表")
-	if !ok {
-		t.Fatalf("the table is not labelled; texts = %v", tt.Texts())
-	}
-	// The empty area under the last row focuses the table without opening a
-	// row, which is how a user gets to the arrow keys.
-	tt.ClickAt(rect.X+rect.W/2, rect.Y+rect.H-20)
-	tt.Frame()
-	if !tt.Focused("设备文件列表") {
-		t.Fatalf("the table does not take the keyboard; access = %v", tt.AccessAll())
-	}
-	tt.KeyDown(ui.KeyDown)
-	tt.Frame()
-	if state.chosen != 0 {
-		t.Fatalf("the choice = %d after Down, want the first row", state.chosen)
-	}
-	tt.KeyDown(ui.KeyDown)
-	tt.Frame()
-	if state.chosen != 1 {
-		t.Fatalf("the choice = %d after two Downs, want the second row", state.chosen)
-	}
-	if state.selected != "/sdcard" {
-		t.Fatalf("moving the choice opened %q; keys must not activate a folder", state.selected)
-	}
-}
-
 // TestFileTreePrefetchesInParallel pins the shape of the read-ahead: a folder
 // with many subfolders is read eight at a time, not one shell round trip after
 // another. Sequentially, a big /sdcard grew its arrows over tens of seconds.
@@ -941,7 +890,8 @@ func pickerFixture(t *testing.T) (*ui.Tester, *fileState) {
 // 单击行内任意位置都要进得去，包括文字下沿那片留白：用户点的是「这一行」，
 // 不是「这一行的字」。（曾经点下沿只会选中，看起来像点不动。）
 func TestClickOnTheBottomEdgeOfARowOpensTheFolder(t *testing.T) {
-	for _, dy := range []float32{4, 6, 8, 10} {
+	// 文字高 16 DIP、行高 32：文字下沿再往下 2–6 DIP 仍在行内。
+	for _, dy := range []float32{2, 4, 6} {
 		tt, picker := pickerFixture(t)
 		rect, ok := tt.Find("system")
 		if !ok {
@@ -951,38 +901,7 @@ func TestClickOnTheBottomEdgeOfARowOpensTheFolder(t *testing.T) {
 		tt.Frame()
 		tt.Frame()
 		if picker.path != "/system" {
-			t.Fatalf("a click %.0f DIP below the label did not open the folder: path=%q chosen=%d", dy, picker.path, picker.chosen)
+			t.Fatalf("a click %.0f DIP below the label did not open the folder: path=%q", dy, picker.path)
 		}
-	}
-}
-
-// 选中一行后按回车也进去：键盘用户没有指针可点。（表格的 Submitted。）
-func TestEnterOpensTheChosenFolder(t *testing.T) {
-	vm, _ := newFilesViewModel(t, readFixture)
-	profile := vm.Manager.Profiles()[0]
-	picker := vm.pickerStateFor(profile.ID)
-	vm.showDir(profile, picker, "/sdcard")
-	tt := ui.NewTester(func(c *ui.Context) {
-		vm.pickerPane(c, profile, picker, pickFolder, nil)
-	}, 760, 420)
-	waitForText(t, tt, "照片.jpg")
-
-	// 点一个文件行：它不进入（上传目标只能是目录），但表格拿到焦点并选中该行。
-	file, ok := tt.Find("log.txt")
-	if !ok {
-		t.Fatal("the picker has no log.txt row")
-	}
-	tt.ClickAt(file.X+20, file.Y+file.H/2)
-	tt.Frame()
-	if picker.path != "/sdcard" {
-		t.Fatalf("clicking a file left the folder: %q", picker.path)
-	}
-	// 上移一行到 Download（log.txt 的上一行），回车进入。
-	tt.Key(0, ui.KeyUp)
-	tt.Key(0, ui.KeyEnter)
-	tt.Frame()
-	tt.Frame()
-	if picker.path != "/sdcard/Download" {
-		t.Fatalf("Enter on the chosen row did not open it: path=%q chosen=%d", picker.path, picker.chosen)
 	}
 }
