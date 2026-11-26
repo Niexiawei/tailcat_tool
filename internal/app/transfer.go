@@ -100,10 +100,12 @@ func (vm *ViewModel) transferSnapshot() (transferDraft, bool) {
 func (vm *ViewModel) openTransfer(device uuid.UUID, upload bool) {
 	vm.transferMu.Lock()
 	vm.Transfer = &transferDraft{
-		Device:     device,
-		Upload:     upload,
-		Stage:      transferStageForm,
-		RemotePath: filePageRoot,
+		Device: device,
+		Upload: upload,
+		Stage:  transferStageForm,
+		// /sdcard is the one folder every Android device has and the shell can
+		// write to; the user still edits it or picks another one by browsing.
+		RemotePath: "/sdcard",
 		PickerMode: pickModeFor(upload),
 	}
 	vm.transferMu.Unlock()

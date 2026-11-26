@@ -495,7 +495,8 @@ TAILCAT_SHOT_DIR=/tmp/shots go test ./internal/app -run TestScreenshots -v
 | logcat 流的启动与按设备登记（`StartLogcat` / `StopLogcat`） | `internal/core/manager_logcat.go` |
 | 内嵌终端、`lineConsole` | `internal/app/terminal.go` |
 | 表单（连接方式单选、中继分段与「预设 + 历史」合并选择；选中预设后来源框锁定，选「自定义」解锁为多行输入） | `internal/app/editor.go` |
-| 上传/下载表单 | `internal/app/transfer.go` |
+| 上传/下载弹窗（表单 / 选择设备路径 / 进度） | `internal/app/transfer.go` |
+| 进度块（`batchSnapshot` / `progressBlock`） | `internal/app/taskprogress.go` |
 | 连通测试表（`tableCard`、状态图标） | `internal/app/reachability.go` |
 | 错误回流（连接、探测、终端） | `internal/app/detail.go`、`internal/app/actions.go`、`internal/app/app.go` |
 | 日志时间线查询、迁移、清理、清空 | `internal/history/sqlite.go` |
@@ -551,7 +552,7 @@ ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(1).
 
 组件按 `children(path)` 是否为 `nil` 决定画不画箭头，所以「键为空切片」和「键为 `nil`」是两种意思，别写反。
 
-树只有一个根 `/`，默认展开到 `/sdcard`（`openTreeTo(state, "/sdcard")`），右侧默认列出 `/sdcard`。所以启动时会预取 `/` 下十几个目录——这是「点进去不用等」的价格，跳过 `/proc`、`/sys`、`/dev`、`/acct`。
+树只有一个根 `/`。**每次连接**都从根开始（`filePageRoot = "/"`，`openTreeTo(state, "/")`），右侧列 `/`，没有任何文件夹被自动打开；同一次连接内才记住目录与展开状态（`fileState.conn` 与 `Session.ConnID` 一比，换了连接就 `resetFileState`）。所以启动时会预取 `/` 下十几个目录——这是「点进去不用等」的价格，跳过 `/proc`、`/sys`、`/dev`、`/acct`，以及 shell 读不了的 `/data`。
 
 **左侧必须跟着右侧走**（`showDir` + `revealInTree`），两件事缺一件用户就会觉得树没反应：
 
@@ -607,7 +608,9 @@ for f in ./* ./.[!.]* ; do …; stat -c '%F|%s|%a|%A|%Y|%n' "$f"; done
 - 文件列表区域的「正在读取」和「读取失败」都是**居中**的一整块（`AlignItems(Center).Justify(Center)`），不是贴在左上角的一行字——它们是这一栏的全部内容，不是它的一行。
 - 点**文件**行：打开 `FileDetailView` —— 属性四行（文件名 / 文件大小 / 最后修改时间 / 文件权限 `%A (八进制)`）+ 主按钮「下载到本地…」+ 次按钮「上传到此文件夹…」。目录行改成「下载此文件夹…」。
 - 弹窗按 §3.6 的固定骨架：右上角一个 `IconButton` 关闭，`if !open` 是唯一收口；**不要在**对话框里用 `components.Tabs`。
-- 错误呈现分两类：读目录失败是**页面状态**（「读取失败：…」+「重试」），不弹提示条；发起下载/上传失败才是事件（`vm.Fail`）。
+- 错误呈现分两类：读目录失败是**页面状态**（「读取失败：…」+「重试」），不弹提示条；发起下载/上传失败才是事件（`vm.Fail`）。连接正在切换（`ErrDeviceNotReady`）或读被取消（`ErrCancelled`）**不算失败**：不写进 `fileErrs`，设备回来后页面自己重读。
+- 「上传」「下载」的弹窗（`transferDraft`）三个阶段共用**同一个** `components.Dialog`：表单 → 浏览设备（`pickerPane`，复用 `folderTree` + `fileBrowser`，自己有独立的 `filePaneKey{device,filePanePicker}` 状态）→ 运行（`progressBlock`）。关窗不杀任务，`取消` 才 `CancelTask`；结果每帧从 `Manager.Tasks()` 读，不存阶段。
+- 文件页的「上传到此文件夹…」与文件属性的「下载到本地…」选完本地路径后走 `beginTransferFromPage`：弹窗直接进运行阶段，进度与结果都在那里。
 - 树里不渲染「正在读取…」「没有子文件夹」这类**额外行**：缩进要自己算，而且会让树的行数与目录数对不上。状态直接挂在节点行上——读取中给 `components.Spinner`，失败给红色「读取失败」小字并把原因挂 `Tooltip`。要动手重试就点该目录，右侧那块居中区域会给出完整原因和「重试」。
 
 ### 13.5 测试手法
