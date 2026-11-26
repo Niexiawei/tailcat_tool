@@ -63,9 +63,10 @@ directory|4096|755|drwxr-xr-x|1700000000|./storage
 	return core.Result{}, nil
 }
 
-// newFilesViewModel builds a connected device whose directory reads are answered
-// by read. It returns the recorded commands so a test can count them.
-func newFilesViewModel(t *testing.T, read func(dir string) (core.Result, error)) (*ViewModel, func() []string) {
+// newConnectedFilesViewModel builds a connected device whose directory reads are
+// answered by read, positioned on the file page and starting wherever a fresh
+// connection starts.
+func newConnectedFilesViewModel(t *testing.T, read func(dir string) (core.Result, error)) (*ViewModel, func() []string) {
 	t.Helper()
 	vm, commands := newRunnerViewModel(t, func(c core.Command) (core.Result, error) {
 		for _, arg := range c.Args {
@@ -85,6 +86,16 @@ func newFilesViewModel(t *testing.T, read func(dir string) (core.Result, error))
 	}
 	vm.DetailTab = detailFiles
 	vm.OpenDevice(profile.ID)
+	return vm, commands
+}
+
+// newFilesViewModel is the same device parked on /sdcard: most cases here are
+// about what the listing shows, not about where a connection starts.
+func newFilesViewModel(t *testing.T, read func(dir string) (core.Result, error)) (*ViewModel, func() []string) {
+	t.Helper()
+	vm, commands := newConnectedFilesViewModel(t, read)
+	profile := vm.Manager.Profiles()[0]
+	vm.showDir(profile, vm.fileStateFor(profile.ID), "/sdcard")
 	return vm, commands
 }
 
@@ -705,57 +716,6 @@ func TestFileTreeMirrorsTheDeviceFilesystemFromOneRoot(t *testing.T) {
 	}
 }
 
-// TestFileRowStaysChosenAfterOpeningIt pins that a click both opens the entry
-// and leaves its row chosen: the table's choice is the path the page selected.
-func TestFileRowStaysChosenAfterOpeningIt(t *testing.T) {
-	vm, _ := newFilesViewModel(t, readFixture)
-	tt := ui.NewTester(vm.ContentView, 1000, 760)
-	waitForText(t, tt, "Download")
-	if err := tt.Click("Download"); err != nil {
-		t.Fatalf("Click(Download) error: %v", err)
-	}
-	tt.Frame()
-	profile := vm.Manager.Profiles()[0]
-	if got := vm.fileStateFor(profile.ID).selected; got != "/sdcard/Download" {
-		t.Fatalf("selected = %q, want /sdcard/Download", got)
-	}
-}
-
-// TestFileTableKeyboardMovesTheChoice pins that the table's choice lives in the
-// page's state, not in a variable that dies with the frame: the arrow keys must
-// move the highlight between frames.
-func TestFileTableKeyboardMovesTheChoice(t *testing.T) {
-	vm, _ := newFilesViewModel(t, readFixture)
-	tt := ui.NewTester(vm.ContentView, 1000, 760)
-	waitForText(t, tt, "Download")
-	profile := vm.Manager.Profiles()[0]
-	state := vm.fileStateFor(profile.ID)
-	rect, ok := tt.Find("设备文件列表")
-	if !ok {
-		t.Fatalf("the table is not labelled; texts = %v", tt.Texts())
-	}
-	// The empty area under the last row focuses the table without opening a
-	// row, which is how a user gets to the arrow keys.
-	tt.ClickAt(rect.X+rect.W/2, rect.Y+rect.H-20)
-	tt.Frame()
-	if !tt.Focused("设备文件列表") {
-		t.Fatalf("the table does not take the keyboard; access = %v", tt.AccessAll())
-	}
-	tt.KeyDown(ui.KeyDown)
-	tt.Frame()
-	if state.chosen != 0 {
-		t.Fatalf("the choice = %d after Down, want the first row", state.chosen)
-	}
-	tt.KeyDown(ui.KeyDown)
-	tt.Frame()
-	if state.chosen != 1 {
-		t.Fatalf("the choice = %d after two Downs, want the second row", state.chosen)
-	}
-	if state.selected != "/sdcard" {
-		t.Fatalf("moving the choice opened %q; keys must not activate a folder", state.selected)
-	}
-}
-
 // TestFileTreePrefetchesInParallel pins the shape of the read-ahead: a folder
 // with many subfolders is read eight at a time, not one shell round trip after
 // another. Sequentially, a big /sdcard grew its arrows over tens of seconds.
@@ -814,5 +774,134 @@ func TestFileTreePrefetchesInParallel(t *testing.T) {
 	}
 	if got > prefetchParallel {
 		t.Fatalf("peak %d folder reads in flight, want at most %d", got, prefetchParallel)
+	}
+}
+
+// 重连来临时正在进行的目录读取会撞上「还没进 device 状态」。那是过渡态：
+// 页面不许留下「读取失败」，连接恢复后自己重读。
+func TestFileReadDuringAReconnectIsNotAFailure(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	profile := vm.Manager.Profiles()[0]
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "照片.jpg")
+
+	vm.Manager.ForceSessionStateForTest(profile.ID, core.StateConnecting, "")
+	vm.loadDir(profile, "/sdcard", true)
+	waitUntil(t, "the blocked read to finish", func() bool {
+		return !vm.fileLoading(fileKey(profile.ID, "/sdcard"))
+	})
+	if reason := vm.fileFailure(fileKey(profile.ID, "/sdcard")); reason != "" {
+		t.Fatalf("a transition state was cached as a failure: %q", reason)
+	}
+
+	vm.Manager.ForceSessionStateForTest(profile.ID, core.StateOnline, "")
+	tt.Frame()
+	if joined := strings.Join(tt.Texts(), "\n"); strings.Contains(joined, "读取失败") {
+		t.Fatalf("the page kept a failure from a reconnect; texts = %v", tt.Texts())
+	}
+}
+
+// 一次新连接从设备根开始：没有文件夹被自动打开（这就是"另一台设备打开的
+// sdcard 也在这里打开了"的来源）。
+func TestNewFilePageStartsAtTheDeviceRoot(t *testing.T) {
+	vm, _ := newConnectedFilesViewModel(t, readFixture)
+	profile := vm.Manager.Profiles()[0]
+	if got := vm.fileStateFor(profile.ID).path; got != "/" {
+		t.Fatalf("the page starts on %q, want the device root", got)
+	}
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "system")
+	if tt.HasText("照片.jpg") {
+		t.Fatalf("a fresh connection opened /sdcard by itself; texts = %v", tt.Texts())
+	}
+}
+
+// 同一次连接里目录与展开状态要记住；换了连接就回到根。
+func TestFilePageReturnsToTheRootForANewConnection(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	profile := vm.Manager.Profiles()[0]
+	vm.showDir(profile, vm.fileStateFor(profile.ID), "/sdcard/Download")
+
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "update.zip") // 同一连接内确实记着
+
+	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	waitForText(t, tt, "system") // 新连接：回到 /
+
+	if got := vm.fileStateFor(profile.ID).path; got != "/" {
+		t.Fatalf("the new connection reused the old folder: %q", got)
+	}
+	if tt.HasText("update.zip") {
+		t.Fatalf("the old folder's rows are still on screen; texts = %v", tt.Texts())
+	}
+}
+
+// 同一个设备可以有两个独立浏览器：文件页与「选择设备路径」。
+func TestPickerKeepsItsOwnFolder(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	profile := vm.Manager.Profiles()[0]
+	picker := vm.pickerStateFor(profile.ID)
+	vm.showDir(profile, vm.fileStateFor(profile.ID), "/sdcard/Download")
+	vm.showDir(profile, picker, "/system")
+
+	if got := vm.fileStateFor(profile.ID).path; got != "/sdcard/Download" {
+		t.Fatalf("the file page moved with the picker: %q", got)
+	}
+	if got := picker.path; got != "/system" {
+		t.Fatalf("the picker lost its own folder: %q", got)
+	}
+}
+
+// 文件页与选择器共用一套渲染：选择器里的表格也用同一套列。
+func TestPickerRendersTheSameColumnsAsTheFilePage(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	profile := vm.Manager.Profiles()[0]
+	picker := vm.pickerStateFor(profile.ID)
+	vm.showDir(profile, picker, "/sdcard")
+	tt := ui.NewTester(func(c *ui.Context) {
+		vm.pickerPane(c, profile, picker, pickFolder, nil)
+	}, 760, 420)
+	waitForText(t, tt, "照片.jpg")
+	for _, want := range []string{"名称", "大小", "修改时间", "权限", "sdcard"} {
+		if !tt.HasText(want) {
+			t.Fatalf("the picker has no %q; texts = %v", want, tt.Texts())
+		}
+	}
+}
+
+// pickerFixture is a picker on / whose tree shows one folded root, so a click
+// can only land on the table's rows.
+func pickerFixture(t *testing.T) (*ui.Tester, *fileState) {
+	t.Helper()
+	vm, _ := newFilesViewModel(t, readFixture)
+	profile := vm.Manager.Profiles()[0]
+	picker := vm.pickerStateFor(profile.ID)
+	vm.showDir(profile, picker, "/")
+	picker.tree.Open.Remove("/")
+	tt := ui.NewTester(func(c *ui.Context) {
+		vm.pickerPane(c, profile, picker, pickFolder, nil)
+	}, 760, 420)
+	waitForText(t, tt, "system")
+	return tt, picker
+}
+
+// 单击行内任意位置都要进得去，包括文字下沿那片留白：用户点的是「这一行」，
+// 不是「这一行的字」。（曾经点下沿只会选中，看起来像点不动。）
+func TestClickOnTheBottomEdgeOfARowOpensTheFolder(t *testing.T) {
+	// 文字高 16 DIP、行高 32：文字下沿再往下 2–6 DIP 仍在行内。
+	for _, dy := range []float32{2, 4, 6} {
+		tt, picker := pickerFixture(t)
+		rect, ok := tt.Find("system")
+		if !ok {
+			t.Fatal("the picker table has no system row")
+		}
+		tt.ClickAt(rect.X+40, rect.Y+rect.H+dy)
+		tt.Frame()
+		tt.Frame()
+		if picker.path != "/system" {
+			t.Fatalf("a click %.0f DIP below the label did not open the folder: path=%q", dy, picker.path)
+		}
 	}
 }

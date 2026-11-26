@@ -351,6 +351,14 @@ func (m *Manager) ForceSessionStateForTest(id uuid.UUID, state ConnectionState, 
 	m.notify()
 }
 
+// ForceSessionUsersForTest sets one device's user list without asking a device.
+func (m *Manager) ForceSessionUsersForTest(id uuid.UUID, users []DeviceUser) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.setStateLocked(id, func(s *Session) { s.Users = users })
+	m.notify()
+}
+
 // ForceAttentionForTest records an attention without sampling adb. It exists
 // so the view tests can render the dialog without a device.
 func (m *Manager) ForceAttentionForTest(id uuid.UUID, kind AttentionKind, detail string) {

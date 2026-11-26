@@ -520,8 +520,12 @@ func (m *Manager) Connect(ctx context.Context, id uuid.UUID) error {
 	m.generations[id] = generation
 	m.retryCounts[id] = 0
 	delete(m.nextRetries, id)
+	// A reconnection starts a new browsing session: the folders the previous
+	// channel read must not be served to this one.
+	m.forgetDirListingsLocked(id)
 	m.setStateLocked(id, func(s *Session) {
 		s.State = StateConnecting
+		s.ConnID = generation
 		s.Err = ""
 		// The previous device's identity must not linger while a new
 		// connection is being built.
@@ -591,6 +595,8 @@ func clearDeviceInfo(s *Session) {
 	s.Android = ""
 	s.DeviceSerial = ""
 	s.ShellID = ""
+	// Users 也是连接期的事实：断开后留着一张用户表，读起来像设备还在。
+	s.Users = nil
 }
 
 func (m *Manager) failConnect(id uuid.UUID, generation uuid.UUID, err error) error {
@@ -682,6 +688,7 @@ func (m *Manager) Disconnect(ctx context.Context, id uuid.UUID) {
 	if m.isCurrentLocked(id, generation) {
 		m.setStateLocked(id, func(s *Session) {
 			s.State = StateDisconnected
+			s.ConnID = uuid.Nil
 			s.Serial = ""
 			s.Port = 0
 			s.Err = ""
@@ -1114,7 +1121,7 @@ func (m *Manager) validateTargetLocked(ctx context.Context, id uuid.UUID, serial
 	m.notify()
 	m.mu.Unlock()
 	if state == StateOffline {
-		return Error("该设备的 ADB 尚未进入 device 状态")
+		return ErrDeviceNotReady
 	}
 	return nil
 }

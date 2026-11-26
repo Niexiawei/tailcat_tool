@@ -21,6 +21,11 @@ import (
 // rows shared a key and a state, and the tree claimed they were siblings.
 var fileRoots = []string{"/"}
 
+// filePageRoot is where a fresh connection's file page starts. It is the device
+// root on purpose: /sdcard is what a remembered folder looks like, and every
+// device opening it read as "it copied the other device's state".
+const filePageRoot = "/"
+
 // FileDetail is the entry whose attribute dialog is open; nil closes it.
 type FileDetail struct {
 	Device uuid.UUID
@@ -33,19 +38,16 @@ var (
 	saveLocalPath  = mygo.Dialog.Save
 )
 
-// pullTimeout bounds one download; a folder of photos through a relay is not
-// fast, and the task stays cancellable meanwhile.
-const pullTimeout = 30 * time.Minute
-
 // fileState is one device's file page state. Everything that is not device data
 // lives here, so the page stays a function of state.
 type fileState struct {
 	// treeWidth is the first pane of the split, in DIPs.
 	treeWidth float32
+	// conn is the connection this state belongs to. A new connection starts
+	// from filePageRoot instead of inheriting the previous one's folder.
+	conn uuid.UUID
 	// path is the directory the right pane lists.
 	path string
-	// selected is the row highlighted in the table.
-	selected string
 	// crumb is what the breadcrumbs wrote when an ancestor was activated.
 	crumb int
 	// tree owns expansion, the cursor and the scroll offset. Keys are device
@@ -56,33 +58,115 @@ type fileState struct {
 	// user folded and forget what those rows were hiding.
 	open  map[string]bool
 	table ui.ListState
-	// chosen is the row the table highlights, and chosenPath is the directory
-	// its index belongs to. They live here rather than in the build pass
-	// because the table writes the choice between frames, as the arrow keys
-	// move it; recomputing it from selected every frame would undo that.
-	chosen     int
-	chosenPath string
+	// noRow keeps the table's cursor at "nothing chosen". The list only paints
+	// a row's hover while it has a cursor, so the pointer is -1 rather than
+	// nil: hover works, nothing is ever selected.
+	noRow int
 }
 
-// fileStateFor returns one device's page state, creating it on first use.
+// filePaneKey names one independent browser of one device: the file tab has
+// one, the transfer dialog's device picker has its own, so browsing in either
+// one never moves the other.
+type filePaneKey struct {
+	device uuid.UUID
+	pane   int
+}
+
+const (
+	filePanePage = iota
+	filePanePicker
+)
+
+func filePagePane(device uuid.UUID) filePaneKey {
+	return filePaneKey{device: device, pane: filePanePage}
+}
+func filePickerPane(device uuid.UUID) filePaneKey {
+	return filePaneKey{device: device, pane: filePanePicker}
+}
+
+// fileStateFor returns the file page's state of one device, creating it on
+// first use.
 func (vm *ViewModel) fileStateFor(device uuid.UUID) *fileState {
+	return vm.paneStateFor(filePagePane(device))
+}
+
+// pickerStateFor returns the transfer dialog's device picker of one device. It
+// is a browser of its own: opening a folder in the picker leaves the page where
+// the user was reading.
+func (vm *ViewModel) pickerStateFor(device uuid.UUID) *fileState {
+	return vm.paneStateFor(filePickerPane(device))
+}
+
+func (vm *ViewModel) paneStateFor(key filePaneKey) *fileState {
 	if vm.files == nil {
-		vm.files = map[uuid.UUID]*fileState{}
+		vm.files = map[filePaneKey]*fileState{}
 	}
-	state, ok := vm.files[device]
+	state, ok := vm.files[key]
 	if !ok {
-		state = &fileState{treeWidth: 240, path: "/sdcard", selected: "/sdcard", crumb: -1}
+		state = &fileState{treeWidth: 240, path: filePageRoot, crumb: -1}
 		// Open the way down to the folder the page starts on, so the tree shows
 		// where that folder lives instead of a single closed row.
 		openTreeTo(state, state.path)
-		vm.files[device] = state
+		vm.files[key] = state
 	}
 	return state
+}
+
+// syncFileState returns the state of the connection now on screen, resetting it
+// when the device reconnected. A state created before its first frame (conn is
+// zero) is adopted rather than reset, so callers may prepare a folder up front.
+func (vm *ViewModel) syncFileState(device uuid.UUID, conn uuid.UUID) *fileState {
+	return vm.syncPaneState(filePagePane(device), conn)
+}
+
+func (vm *ViewModel) syncPaneState(key filePaneKey, conn uuid.UUID) *fileState {
+	state := vm.paneStateFor(key)
+	switch {
+	case state.conn != uuid.Nil && state.conn != conn:
+		vm.resetFileState(key.device, state, conn)
+	default:
+		state.conn = conn
+	}
+	return state
+}
+
+// resetFileState drops everything the previous connection left: the folder, the
+// tree, the table and the cached failures. Its directory listings are dropped
+// by the manager when the new connection starts.
+func (vm *ViewModel) resetFileState(device uuid.UUID, state *fileState, conn uuid.UUID) {
+	width := state.treeWidth
+	*state = fileState{treeWidth: width, conn: conn, path: filePageRoot, crumb: -1}
+	openTreeTo(state, state.path)
+	vm.forgetFileEntries(device)
+}
+
+// forgetFileEntries drops the per-path bookkeeping of one device.
+func (vm *ViewModel) forgetFileEntries(device uuid.UUID) {
+	prefix := device.String() + "|"
+	vm.fileMu.Lock()
+	for key := range vm.fileErrs {
+		if strings.HasPrefix(key, prefix) {
+			delete(vm.fileErrs, key)
+		}
+	}
+	for key := range vm.fileLoads {
+		if strings.HasPrefix(key, prefix) {
+			delete(vm.fileLoads, key)
+		}
+	}
+	vm.fileMu.Unlock()
 }
 
 // fileKey names one directory read, for the in-flight and failure maps.
 func fileKey(device uuid.UUID, path string) string {
 	return device.String() + "|" + path
+}
+
+// transientFileError reports a read that failed only because the channel was
+// changing: a cancelled read, or one that arrived before ADB reached `device`.
+// Neither is the folder's fault, so neither is cached as a failure.
+func transientFileError(err error) bool {
+	return errors.Is(err, core.ErrCancelled) || errors.Is(err, core.ErrDeviceNotReady)
 }
 
 // beginFileLoad claims one directory read, reporting false when one is already
@@ -174,9 +258,10 @@ func (vm *ViewModel) loadDir(profile core.Profile, path string, force bool) {
 	vm.clearFileFailure(key)
 	go func() {
 		listing, err := vm.Manager.ListRemoteDir(context.Background(), profile.ID, path)
-		// A cancelled read means the device went away mid-listing, which the
-		// page already says with its own state; it is not a failure to report.
-		if errors.Is(err, core.ErrCancelled) {
+		// A read that only lost the channel is not the folder's fault: the page
+		// says so with its own state, and reading again once the device is back
+		// is the fix. Caching it as a failure would pin the pane on 「读取失败」.
+		if transientFileError(err) {
 			err = nil
 		}
 		vm.endFileLoad(key, err)
@@ -190,7 +275,7 @@ func (vm *ViewModel) loadDir(profile core.Profile, path string, force bool) {
 
 // prefetchSkip are the pseudo filesystems a file manager has no use for: their
 // listings are huge, change constantly and cannot be opened as files.
-var prefetchSkip = map[string]bool{"/proc": true, "/sys": true, "/dev": true, "/acct": true}
+var prefetchSkip = map[string]bool{"/proc": true, "/sys": true, "/dev": true, "/acct": true, "/data": true}
 
 // prefetchParallel is the ceiling on read-ahead at once. Eight shell round trips
 // fill a tree in a fraction of the sequential time without burying the device's
@@ -241,9 +326,9 @@ func (vm *ViewModel) prefetchDir(profile core.Profile, path string) {
 		return
 	}
 	_, err := vm.Manager.ListRemoteDir(context.Background(), profile.ID, path)
-	// A cancelled read means the device went away mid-listing, which the page
-	// already says with its own state; it is not a failure to report.
-	if errors.Is(err, core.ErrCancelled) {
+	// Same rule as loadDir: a channel that changed under a read-ahead is not a
+	// failure of the folder.
+	if transientFileError(err) {
 		err = nil
 	}
 	vm.endFileLoad(key, err)
@@ -253,7 +338,6 @@ func (vm *ViewModel) prefetchDir(profile core.Profile, path string) {
 // a selection the tree cannot show is a selection the user cannot find again.
 func (vm *ViewModel) showDir(profile core.Profile, state *fileState, dir string) {
 	state.path = dir
-	state.selected = dir
 	state.crumb = -1
 	openTreeTo(state, dir)
 	vm.ensureDirs(profile, dir)
@@ -303,7 +387,7 @@ func (vm *ViewModel) filesPage(c *ui.Context, profile core.Profile, session core
 		vm.filesOffline(c, session)
 		return
 	}
-	state := vm.fileStateFor(profile.ID)
+	state := vm.syncFileState(profile.ID, session.ConnID)
 	vm.ensureDirs(profile, state.path)
 	theme := c.Theme()
 	// The whole browser sits in one frame, the way the console does: a file
@@ -456,10 +540,47 @@ func (vm *ViewModel) folderRow(c *ui.Context, profile core.Profile, state *fileS
 	}
 }
 
-// fileTable is the right pane: the entries of the selected directory.
+// fileTable is the page's right pane: the entries of the selected directory.
 func (vm *ViewModel) fileTable(c *ui.Context, profile core.Profile, state *fileState) {
+	vm.fileBrowser(c, profile, state, fileBrowserOptions{
+		Label:    "设备文件列表",
+		Unframed: true,
+		Actions: func() {
+			if actionButton(c, lucide.RefreshCw, "刷新", components.ButtonSecondary).Clicked() {
+				vm.reloadDir(profile, state.path)
+			}
+			if actionButton(c, lucide.Upload, "上传到此文件夹…", components.ButtonSecondary).Clicked() {
+				vm.pushInto(profile, state.path)
+			}
+		},
+	})
+}
+
+// fileBrowserOptions says how one caller of the browser differs: the file page
+// offers refresh and upload, the transfer dialog's picker chooses a row.
+type fileBrowserOptions struct {
+	// Label is the table's accessible name.
+	Label string
+	// Actions is drawn to the right of the breadcrumbs.
+	Actions func()
+	// Choose, when non-nil, replaces the page's activation rule: a row click
+	// calls it instead of opening the entry.
+	Choose func(core.RemoteEntry)
+	// Unframed skips tableCard's border: the page draws its own frame.
+	Unframed bool
+}
+
+// fileBrowser draws one folder of a device: breadcrumbs, the caller's actions,
+// the listing of state.path, and what a row activation does. The page and the
+// transfer dialog's picker share it, so the two can never list a folder
+// differently.
+func (vm *ViewModel) fileBrowser(c *ui.Context, profile core.Profile, state *fileState, opts fileBrowserOptions) {
 	theme := c.Theme()
 	key := fileKey(profile.ID, state.path)
+	choose := opts.Choose
+	if choose == nil {
+		choose = func(entry core.RemoteEntry) { vm.activateEntry(profile, state, entry) }
+	}
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(6).Padding(6, 4, 6, 6).Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			// The path is a breadcrumb: every ancestor is a way back, which is
@@ -470,11 +591,8 @@ func (vm *ViewModel) fileTable(c *ui.Context, profile core.Profile, state *fileS
 					vm.showDir(profile, state, remoteTrailPath(trail, state.crumb))
 				}
 			})
-			if actionButton(c, lucide.RefreshCw, "刷新", components.ButtonSecondary).Clicked() {
-				vm.reloadDir(profile, state.path)
-			}
-			if actionButton(c, lucide.Upload, "上传到此文件夹…", components.ButtonSecondary).Clicked() {
-				vm.pushInto(profile, state.path)
+			if opts.Actions != nil {
+				opts.Actions()
 			}
 		})
 
@@ -507,40 +625,93 @@ func (vm *ViewModel) fileTable(c *ui.Context, profile core.Profile, state *fileS
 			components.Text(c, "这个文件夹是空的").FontSize(11).TextColor(theme.TextMuted).Grow(1)
 			return
 		}
-		// The chosen row is the path the page selected: a click on another row
-		// reports Changed, which is what opens it.
-		if state.chosenPath != state.path {
-			// A new directory: the highlight starts on the row the page
-			// selected, if this listing holds it.
-			state.chosenPath = state.path
-			state.chosen = -1
-			for i, entry := range listing.Entries {
-				if entry.Path == state.selected {
-					state.chosen = i
-					break
-				}
-			}
-		}
-		state.table.Selected = &state.chosen
-		// A click opens the entry; the arrow keys only move the highlight, as a
-		// file manager's do. Changed reports both, RowClicked only the
-		// pointer's click.
+		// The table keeps no chosen row: a click opens the entry at once, so a
+		// highlight that stays behind reads as "it selected instead of
+		// entering". The cursor is held at -1 (a click writes the row in, this
+		// puts it back before the row is built), which is what lets the list
+		// paint the pointer's row; RoundRows gives that row the theme's radius.
+		state.noRow = -1
+		state.table.Selected = &state.noRow
+		state.table.RoundRows = true
 		opened := -1
 		tableCard(c, &state.table, fileColumns(), len(listing.Entries), tableOptions{
-			// The pane is already inside the browser's 1 DIP frame.
-			Label: "设备文件列表", Grow: true, Unframed: true,
+			Label: opts.Label, Grow: true, Unframed: opts.Unframed,
 		}, func(row, col int) {
 			entry := listing.Entries[row]
-			cell := ui.Row(c).FillWidth().MinWidth(0).Children(func() {
-				vm.fileCell(c, col, entry)
-			})
+			// RowClicked only reports from the element under the pointer, so
+			// the cell's content has to be as big as the cell: as wide as the
+			// column (Grow, plus the negative margin that takes back the
+			// padding the table puts around a cell) and as tall as the row
+			// (Space(8), the theme's least row height). Otherwise a click
+			// beside the text, or on a row's bottom edge, opens nothing.
+			// Justify centers the icon and name in that height (a Box stacks its
+			// children, so the vertical axis is Justify, not AlignItems), and
+			// Padding keeps them off the row's own edges.
+			cell := ui.Box(c).Grow(1).MinWidth(0).
+				Height(c.Theme().Space(8)).
+				Justify(ui.Center).
+				Margin(-c.Theme().Space(2.5)).
+				Padding(0, c.Theme().Space(2.5)).
+				Children(func() {
+					ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+						vm.fileCell(c, col, entry)
+					})
+				})
 			if cell.RowClicked() && opened < 0 {
 				opened = row
 			}
 		})
 		if opened >= 0 && opened < len(listing.Entries) {
-			vm.activateEntry(profile, state, listing.Entries[opened])
+			choose(listing.Entries[opened])
 		}
+	})
+}
+
+// pickerMode decides what the picker lets the user choose.
+type pickerMode int
+
+const (
+	// pickFolder is an upload destination: only the current folder counts.
+	pickFolder pickerMode = iota
+	// pickEntry is a download source: a file can be chosen directly, or the
+	// current folder.
+	pickEntry
+)
+
+// pickerPane draws the device browser inside the transfer dialog: the same tree
+// and the same table as the page, with its own state and its own activation
+// rule. onChoose receives the entry a click landed on; nil leaves clicks inert.
+func (vm *ViewModel) pickerPane(c *ui.Context, profile core.Profile, state *fileState, mode pickerMode, onChoose func(core.RemoteEntry)) {
+	theme := c.Theme()
+	ui.Column(c).FillWidth().Height(380).Padding(1).
+		Radius(theme.Radius).Border(1, theme.Border).Clip().Children(func() {
+		choose := func(entry core.RemoteEntry) {
+			// A folder is a step, not an answer: both callers walk into it the
+			// same way the page does. Only a file is a choice, and only a
+			// download's picker takes one.
+			if entry.Folder() {
+				vm.showDir(profile, state, entry.Path)
+				return
+			}
+			if mode == pickEntry && onChoose != nil {
+				onChoose(entry)
+			}
+		}
+		components.Split(c, &state.treeWidth,
+			func() { vm.folderTree(c, profile, state) },
+			func() {
+				vm.fileBrowser(c, profile, state, fileBrowserOptions{
+					Label:  "选择设备路径列表",
+					Choose: choose,
+					Actions: func() {
+						if actionButton(c, lucide.RefreshCw, "刷新", components.ButtonSecondary).Clicked() {
+							vm.reloadDir(profile, state.path)
+						}
+					},
+				})
+			},
+			components.SplitOptions{FirstMin: 160, SecondMin: 300, Default: 220},
+		).FillWidth().Height(376)
 	})
 }
 
@@ -599,7 +770,6 @@ func (vm *ViewModel) fileCell(c *ui.Context, col int, entry core.RemoteEntry) {
 // activateEntry is what clicking a row does: a folder opens, a file shows its
 // attributes and the two transfers.
 func (vm *ViewModel) activateEntry(profile core.Profile, state *fileState, entry core.RemoteEntry) {
-	state.selected = entry.Path
 	if entry.Folder() {
 		vm.showDir(profile, state, entry.Path)
 		return
@@ -648,16 +818,18 @@ func (vm *ViewModel) pushInto(profile core.Profile, remoteDir string) {
 	if err != nil || len(paths) == 0 {
 		return
 	}
+	var locals []string
 	for _, local := range paths {
-		if local == "" {
-			continue
-		}
-		if _, err := vm.Manager.BeginADBTask(context.Background(), profile.ID, "上传 "+fileName(local),
-			[]string{"push", local, remoteDir}, pullTimeout); err != nil {
-			vm.Fail(err)
-			return
+		if local != "" {
+			locals = append(locals, local)
 		}
 	}
+	if len(locals) == 0 {
+		return
+	}
+	// Both paths are already answered here, so the dialog opens on its running
+	// stage: the batch needs somewhere to show its progress.
+	vm.beginTransferFromPage(profile.ID, true, locals, remoteDir)
 }
 
 // pullEntry downloads one entry: a save dialog for a file, a folder picker for
@@ -690,10 +862,7 @@ func (vm *ViewModel) startPull(profile core.Profile, entry core.RemoteEntry, loc
 		vm.Fail(err)
 		return
 	}
-	if _, err := vm.Manager.BeginADBTask(context.Background(), profile.ID, "下载 "+entry.Name,
-		[]string{"pull", entry.Path, local}, pullTimeout); err != nil {
-		vm.Fail(err)
-	}
+	vm.beginTransferFromPage(profile.ID, false, []string{local}, entry.Path)
 }
 
 // FileDetailView draws the entry dialog: the attributes Android can report, and

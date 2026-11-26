@@ -239,3 +239,22 @@ func TestListRemoteDirExplainsAMissingPermission(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// 重连之后，上一次连接的目录缓存必须失效：否则新连接一进来就显示旧内容。
+func TestReconnectForgetsCachedDirectoryListings(t *testing.T) {
+	f := newManagerFixture(t)
+	f.connect(t)
+	f.runner.setHandler(listFixture(listingFixture))
+	if _, err := f.m.ListRemoteDir(context.Background(), f.id, "/sdcard"); err != nil {
+		t.Fatalf("ListRemoteDir() error: %v", err)
+	}
+	if _, ok := f.m.DirListing(f.id, "/sdcard"); !ok {
+		t.Fatal("the read was not cached")
+	}
+
+	f.connect(t)
+
+	if _, ok := f.m.DirListing(f.id, "/sdcard"); ok {
+		t.Fatal("a new connection reused the previous connection's listing")
+	}
+}

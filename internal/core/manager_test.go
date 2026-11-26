@@ -727,3 +727,24 @@ func TestAppLogDoesNotBlockWhenTheQueueIsFull(t *testing.T) {
 		t.Fatalf("recording 500 lines took %v; a full queue must be dropped, not waited on", elapsed)
 	}
 }
+
+// 一次连接有一个 id：文件页靠它判断手里的目录状态是不是这次连接的。
+func TestConnectStampsTheSessionWithItsConnection(t *testing.T) {
+	f := newManagerFixture(t)
+	f.connect(t)
+	first := f.m.Session(f.id).ConnID
+	if first == uuid.Nil {
+		t.Fatal("a connected session has no connection id")
+	}
+
+	f.connect(t) // 重新连接
+	second := f.m.Session(f.id).ConnID
+	if second == uuid.Nil || second == first {
+		t.Fatalf("reconnect kept the old connection id: %v → %v", first, second)
+	}
+
+	f.m.Disconnect(context.Background(), f.id)
+	if got := f.m.Session(f.id).ConnID; got != uuid.Nil {
+		t.Fatalf("a disconnected session still claims connection %v", got)
+	}
+}

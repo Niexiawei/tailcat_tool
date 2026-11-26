@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -222,5 +223,22 @@ func TestReconnectCancelsOldTasks(t *testing.T) {
 		if task.ID == taskID && task.State == TaskRunning {
 			t.Fatal("the old task survived a reconnect")
 		}
+	}
+}
+
+// 「还没进 device 状态」是过渡态，调用方要能认出来（errors.Is），文案不变。
+func TestOperationTargetReportsNotReadyAsTransient(t *testing.T) {
+	f := newManagerFixture(t)
+	f.connect(t)
+	f.m.ForceSessionStateForTest(f.id, StateConnecting, "")
+
+	_, err := f.m.BeginADBTask(context.Background(), f.id, "上传 a.txt",
+		[]string{"push", "a.txt", "/sdcard/"}, time.Minute)
+
+	if !errors.Is(err, ErrDeviceNotReady) {
+		t.Fatalf("BeginADBTask() error = %v, want ErrDeviceNotReady", err)
+	}
+	if err.Error() != "该设备的 ADB 尚未进入 device 状态" {
+		t.Fatalf("the wording changed: %q", err.Error())
 	}
 }

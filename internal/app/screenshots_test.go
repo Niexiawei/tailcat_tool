@@ -552,6 +552,56 @@ func shotCases() []shotCase {
 			settle: 6,
 		},
 		{
+			// 新连接的起点：右栏是 /，没有任何文件夹被自动打开。
+			name: "05c-device-files-fresh-connection",
+			build: func(t *testing.T) *ViewModel {
+				vm, _ := newConnectedFilesViewModel(t, readFixture)
+				return vm
+			},
+			settle: 20,
+		},
+		{
+			name: "41-upload-dialog-form",
+			build: func(t *testing.T) *ViewModel {
+				vm := shotDevice(t, readFixture, detailFiles)
+				vm.openTransfer(vm.Selection, true)
+				return vm
+			},
+			settle: 12,
+		},
+		{
+			// 选择设备路径：同一个弹窗的浏览阶段，复用文件页的树与表格。
+			name: "41b-upload-dialog-picker",
+			build: func(t *testing.T) *ViewModel {
+				vm := shotDevice(t, readFixture, detailFiles)
+				vm.openTransfer(vm.Selection, true)
+				vm.browseTransferDevice()
+				return vm
+			},
+			settle: 24,
+		},
+		{
+			name: "42-transfer-running",
+			build: func(t *testing.T) *ViewModel {
+				vm := newStreamingViewModel(t, &streamingRunner{
+					progress: "[ 42%] /sdcard/Download/update.zip\n", hold: true,
+				})
+				prepareTransfer(t, vm, true, []string{"/tmp/update.zip"}, "/sdcard/Download/")
+				vm.submitTransfer()
+				return vm
+			},
+			settle: 20,
+		},
+		{
+			name: "43-install-running",
+			build: func(t *testing.T) *ViewModel {
+				vm, _ := apkFixture(t, holdingInstallAnswer)
+				startInstall(t, vm)
+				return vm
+			},
+			settle: 20,
+		},
+		{
 			name: "34-install-apk-dialog",
 			build: func(t *testing.T) *ViewModel {
 				vm := usersFixture(t)

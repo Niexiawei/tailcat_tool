@@ -144,8 +144,18 @@ func TestInstallStartsOneTaskOnly(t *testing.T) {
 	if runs != 1 {
 		t.Fatalf("the APK was installed %d times, want 1: %v", runs, runner.commandLog())
 	}
-	if state, open := vm.installSnapshot(); open {
-		t.Fatalf("a started install left the dialog open: %+v", state)
+	// The dialog stays, showing the batch: a second install cannot be started
+	// from a dialog that has no 安装 button any more.
+	state, open := vm.installSnapshot()
+	if !open {
+		t.Fatal("the started install left no dialog to report itself in")
+	}
+	if state.Stage != transferStageRunning {
+		t.Fatalf("stage = %d, want running", state.Stage)
+	}
+	tt.Frame()
+	if tt.HasText("选择 APK 文件") {
+		t.Fatalf("the form is still on screen, so a second install is reachable; texts = %v", tt.Texts())
 	}
 }
 
@@ -249,4 +259,138 @@ func stubPickAPKFile(fn func(title string) (string, bool)) (restore func()) {
 	previous := pickAPKFile
 	pickAPKFile = fn
 	return func() { pickAPKFile = previous }
+}
+
+// holdingInstallAnswer runs install and then waits for cancellation, so a test
+// can look at the dialog while the task is still going.
+func holdingInstallAnswer(ctx context.Context, c core.Command, emit func(string)) (core.Result, error) {
+	if strings.Contains(strings.Join(c.Args, " "), " install ") {
+		if emit != nil {
+			emit("Performing Streamed Install\n")
+		}
+		<-ctx.Done()
+		return core.Result{Cancelled: true}, nil
+	}
+	return apkAnswer(ctx, c, emit)
+}
+
+// startInstall opens the dialog and presses 安装, returning the task id.
+func startInstall(t *testing.T, vm *ViewModel) string {
+	t.Helper()
+	vm.openInstallDialog(vm.Manager.Profiles()[0].ID, "/tmp/示例.apk")
+	waitUntil(t, "the user list to load", func() bool {
+		state, open := vm.installSnapshot()
+		return open && !state.Loading
+	})
+	// submitInstall compares the pointer it was given with the live dialog, so
+	// the helper hands it the live one rather than a snapshot.
+	vm.installMu.Lock()
+	live := vm.APKInstall
+	vm.installMu.Unlock()
+	vm.submitInstall(live)
+	state, _ := vm.installSnapshot()
+	if len(state.TaskIDs) != 1 {
+		t.Fatalf("the install started %d tasks, want 1", len(state.TaskIDs))
+	}
+	return state.TaskIDs[0].String()
+}
+
+// 点「安装」不再关窗：同一个弹窗切到运行阶段，结束显示结果。
+func TestInstallShowsProgressInItsOwnDialog(t *testing.T) {
+	vm, _ := apkFixture(t, nil)
+	id := startInstall(t, vm)
+	waitUntil(t, "the install to finish", func() bool {
+		return taskStateOf(vm, id) != core.TaskRunning
+	})
+
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	tt.Frame()
+	for _, want := range []string{"安装 APK", "安装 示例.apk", "已完成", "关闭"} {
+		if !tt.HasText(want) {
+			t.Fatalf("the install dialog has no %q; texts = %v", want, tt.Texts())
+		}
+	}
+}
+
+// 运行中时弹窗里就是进度条与两个出口，没有表单按钮。
+func TestInstallProgressShowsWhileItRuns(t *testing.T) {
+	vm, _ := apkFixture(t, holdingInstallAnswer)
+	startInstall(t, vm)
+
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	waitForText(t, tt, "Performing Streamed Install")
+	for _, want := range []string{"操作进度", "取消", "关闭"} {
+		if !tt.HasText(want) {
+			t.Fatalf("the running dialog has no %q; texts = %v", want, tt.Texts())
+		}
+	}
+	if tt.HasText("选择 APK 文件") {
+		t.Fatalf("the form is still on screen while the install runs; texts = %v", tt.Texts())
+	}
+}
+
+// 失败时说清 adb 的原因。
+func TestInstallDialogShowsWhyTheInstallFailed(t *testing.T) {
+	vm, _ := apkFixture(t, func(ctx context.Context, c core.Command, emit func(string)) (core.Result, error) {
+		if strings.Contains(strings.Join(c.Args, " "), " install ") {
+			return core.Result{ExitCode: 1, Output: "Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]\n"}, nil
+		}
+		return apkAnswer(ctx, c, emit)
+	})
+	id := startInstall(t, vm)
+	waitUntil(t, "the install to fail", func() bool {
+		return taskStateOf(vm, id) != core.TaskRunning
+	})
+
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	tt.Frame()
+	if !tt.HasText("安装失败：Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]") {
+		t.Fatalf("the dialog does not say why it failed; texts = %v", tt.Texts())
+	}
+}
+
+// 取消杀任务。
+func TestInstallCancelStopsTheTask(t *testing.T) {
+	vm, _ := apkFixture(t, holdingInstallAnswer)
+	id := startInstall(t, vm)
+
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	waitForText(t, tt, "取消")
+	if err := tt.Click("取消"); err != nil {
+		t.Fatalf("no 取消 button: %v", err)
+	}
+	waitUntil(t, "the install to stop", func() bool {
+		return taskStateOf(vm, id) != core.TaskRunning
+	})
+	if _, open := vm.installSnapshot(); open {
+		t.Fatal("取消 left the dialog open")
+	}
+}
+
+// 关窗不杀任务（D2）。
+func TestInstallCloseWhileRunningKeepsTheTask(t *testing.T) {
+	vm, _ := apkFixture(t, holdingInstallAnswer)
+	id := startInstall(t, vm)
+
+	tt := ui.NewTester(vm.ContentView, 1000, 800)
+	waitForText(t, tt, "关闭")
+	if err := tt.Click("关闭"); err != nil {
+		t.Fatalf("no 关闭 button: %v", err)
+	}
+	if _, open := vm.installSnapshot(); open {
+		t.Fatal("关闭 left the dialog open")
+	}
+	if got := taskStateOf(vm, id); got != core.TaskRunning {
+		t.Fatalf("closing the dialog killed the install: %q", got)
+	}
+}
+
+// 运行中的弹窗把装到哪个用户也带在身边。
+func TestInstallProgressNamesTheChosenUser(t *testing.T) {
+	vm, _ := apkFixture(t, holdingInstallAnswer)
+	startInstall(t, vm)
+	state, _ := vm.installSnapshot()
+	if note := installNote(&state); !strings.HasPrefix(note, "安装到用户 ") {
+		t.Fatalf("installNote() = %q", note)
+	}
 }

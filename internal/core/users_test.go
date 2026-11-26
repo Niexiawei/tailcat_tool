@@ -146,3 +146,32 @@ func TestDeviceUsersUsesOneShellRoundTrip(t *testing.T) {
 		t.Fatalf("the device was asked for its users %d times, want 1: %v", reads, f.runner.commandLog())
 	}
 }
+
+// 断开之后，只有活着的连接才知道的东西（含用户列表）必须一起消失。
+func TestDisconnectForgetsTheDeviceUsers(t *testing.T) {
+	f := newManagerFixture(t)
+	f.connect(t)
+	f.runner.setHandler(func(_ context.Context, c Command) (Result, error) {
+		switch {
+		case contains(c.Args, "get-state"):
+			return Result{Output: "device\n"}, nil
+		case containsSubstring(c.Args, "pm list users"):
+			return Result{Output: "Users:\n\tUserInfo{0:Owner:c13} running\n@@CURRENT\n0\n"}, nil
+		case containsSubstring(c.Args, "getprop ro.product.model"):
+			return Result{Output: "E245\nantora\n11\nSN123\nuid=0(root)\n"}, nil
+		}
+		return Result{}, nil
+	})
+	if err := f.m.RefreshDeviceInformation(context.Background(), f.id); err != nil {
+		t.Fatalf("RefreshDeviceInformation() error: %v", err)
+	}
+	if len(f.m.Session(f.id).Users) == 0 {
+		t.Fatal("the fixture never read a user list")
+	}
+
+	f.m.Disconnect(context.Background(), f.id)
+
+	if users := f.m.Session(f.id).Users; len(users) != 0 {
+		t.Fatalf("a disconnected device still lists %+v", users)
+	}
+}

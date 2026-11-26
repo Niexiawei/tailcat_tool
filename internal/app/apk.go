@@ -290,7 +290,7 @@ func apkTask(tasks []core.Task, id uuid.UUID) (core.Task, bool) {
 // not: adb only prints percentages through some versions and pipes, so the
 // bytes already on disk are the fallback and "nothing known" is not zero.
 func apkProgress(task core.Task, total int64, localPath string) float64 {
-	if percent, ok := core.ParsePullPercent(task.Output); ok {
+	if percent, ok := core.ParseTransferPercent(task.Output); ok {
 		return float64(percent) / 100
 	}
 	if total <= 0 {
@@ -305,7 +305,7 @@ func apkProgress(task core.Task, total int64, localPath string) float64 {
 
 // apkProgressText is the sentence under the bar.
 func apkProgressText(task core.Task, total int64, localPath string) string {
-	if percent, ok := core.ParsePullPercent(task.Output); ok {
+	if percent, ok := core.ParseTransferPercent(task.Output); ok {
 		return strconv.Itoa(percent) + "%"
 	}
 	if total <= 0 {

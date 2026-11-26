@@ -20,3 +20,8 @@ var ErrCancelled = Error("操作已取消")
 
 // ErrUnsupported reports a capability this platform does not provide.
 var ErrUnsupported = Error("当前平台不支持该功能")
+
+// ErrDeviceNotReady means the channel exists but ADB has not reached the
+// `device` state yet: connecting, disconnecting, or still offline. It is
+// transient, and callers must not cache it as a failure.
+var ErrDeviceNotReady = Error("该设备的 ADB 尚未进入 device 状态")

@@ -69,11 +69,11 @@ type ViewModel struct {
 	EditorDraft EditorInput
 	EditorError string
 
-	TransferOpen       bool
-	TransferUpload     bool
-	TransferLocalPath  string
-	TransferRemotePath string
-	TransferError      string
+	// Transfer is the 「上传文件」/「下载文件」 dialog; nil closes it. transferMu
+	// guards it: the path pickers and the device browser write it from the
+	// render thread while tests read it.
+	Transfer   *transferDraft
+	transferMu sync.Mutex
 
 	// APK is the 「保存 APK」 dialog; nil closes it. apkMu guards it because
 	// the path lookup and the pull run on goroutines.
@@ -198,10 +198,11 @@ type ViewModel struct {
 	// together with the reading they were decoded from.
 	appIcons map[string]iconAsset
 
-	// files holds the file page's state per device; fileLoads and fileErrs are
-	// keyed by "device|path" and filled from command goroutines, so they have
-	// a lock of their own rather than riding the manager's.
-	files     map[uuid.UUID]*fileState
+	// files holds each browser's state per device and pane (the file tab, and
+	// the transfer dialog's device picker); fileLoads and fileErrs are keyed by
+	// "device|path" and filled from command goroutines, so they have a lock of
+	// their own rather than riding the manager's.
+	files     map[filePaneKey]*fileState
 	fileMu    sync.Mutex
 	fileLoads map[string]bool
 	fileErrs  map[string]string
