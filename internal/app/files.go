@@ -645,6 +645,9 @@ func (vm *ViewModel) fileBrowser(c *ui.Context, profile core.Profile, state *fil
 			}
 		}
 		state.table.Selected = &state.chosen
+		// The chosen row is a band of the accent color: round it at the
+		// theme's radius instead of running it edge to edge.
+		state.table.RoundRows = true
 		// A click opens the entry; the arrow keys only move the highlight, as a
 		// file manager's do. Changed reports both, RowClicked only the
 		// pointer's click.
@@ -669,8 +672,11 @@ func (vm *ViewModel) fileBrowser(c *ui.Context, profile core.Profile, state *fil
 			cell := ui.Box(c).Grow(1).MinWidth(0).
 				Height(c.Theme().Space(8)).
 				Margin(-c.Theme().Space(2.5)).
+				Padding(0, c.Theme().Space(2.5)).
 				Children(func() {
-					ui.Row(c).FillWidth().Children(func() { vm.fileCell(c, col, entry) })
+					ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+						vm.fileCell(c, col, entry)
+					})
 				})
 			if cell.RowClicked() && opened < 0 {
 				opened = row
