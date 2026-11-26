@@ -63,9 +63,10 @@ directory|4096|755|drwxr-xr-x|1700000000|./storage
 	return core.Result{}, nil
 }
 
-// newFilesViewModel builds a connected device whose directory reads are answered
-// by read. It returns the recorded commands so a test can count them.
-func newFilesViewModel(t *testing.T, read func(dir string) (core.Result, error)) (*ViewModel, func() []string) {
+// newConnectedFilesViewModel builds a connected device whose directory reads are
+// answered by read, positioned on the file page and starting wherever a fresh
+// connection starts.
+func newConnectedFilesViewModel(t *testing.T, read func(dir string) (core.Result, error)) (*ViewModel, func() []string) {
 	t.Helper()
 	vm, commands := newRunnerViewModel(t, func(c core.Command) (core.Result, error) {
 		for _, arg := range c.Args {
@@ -85,6 +86,16 @@ func newFilesViewModel(t *testing.T, read func(dir string) (core.Result, error))
 	}
 	vm.DetailTab = detailFiles
 	vm.OpenDevice(profile.ID)
+	return vm, commands
+}
+
+// newFilesViewModel is the same device parked on /sdcard: most cases here are
+// about what the listing shows, not about where a connection starts.
+func newFilesViewModel(t *testing.T, read func(dir string) (core.Result, error)) (*ViewModel, func() []string) {
+	t.Helper()
+	vm, commands := newConnectedFilesViewModel(t, read)
+	profile := vm.Manager.Profiles()[0]
+	vm.showDir(profile, vm.fileStateFor(profile.ID), "/sdcard")
 	return vm, commands
 }
 
@@ -838,5 +849,42 @@ func TestFileReadDuringAReconnectIsNotAFailure(t *testing.T) {
 	tt.Frame()
 	if joined := strings.Join(tt.Texts(), "\n"); strings.Contains(joined, "读取失败") {
 		t.Fatalf("the page kept a failure from a reconnect; texts = %v", tt.Texts())
+	}
+}
+
+// 一次新连接从设备根开始：没有文件夹被自动打开（这就是"另一台设备打开的
+// sdcard 也在这里打开了"的来源）。
+func TestNewFilePageStartsAtTheDeviceRoot(t *testing.T) {
+	vm, _ := newConnectedFilesViewModel(t, readFixture)
+	profile := vm.Manager.Profiles()[0]
+	if got := vm.fileStateFor(profile.ID).path; got != "/" {
+		t.Fatalf("the page starts on %q, want the device root", got)
+	}
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "system")
+	if tt.HasText("照片.jpg") {
+		t.Fatalf("a fresh connection opened /sdcard by itself; texts = %v", tt.Texts())
+	}
+}
+
+// 同一次连接里目录与展开状态要记住；换了连接就回到根。
+func TestFilePageReturnsToTheRootForANewConnection(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	profile := vm.Manager.Profiles()[0]
+	vm.showDir(profile, vm.fileStateFor(profile.ID), "/sdcard/Download")
+
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "update.zip") // 同一连接内确实记着
+
+	if err := vm.Manager.Connect(context.Background(), profile.ID); err != nil {
+		t.Fatalf("Connect() error: %v", err)
+	}
+	waitForText(t, tt, "system") // 新连接：回到 /
+
+	if got := vm.fileStateFor(profile.ID).path; got != "/" {
+		t.Fatalf("the new connection reused the old folder: %q", got)
+	}
+	if tt.HasText("update.zip") {
+		t.Fatalf("the old folder's rows are still on screen; texts = %v", tt.Texts())
 	}
 }

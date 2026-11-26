@@ -520,8 +520,12 @@ func (m *Manager) Connect(ctx context.Context, id uuid.UUID) error {
 	m.generations[id] = generation
 	m.retryCounts[id] = 0
 	delete(m.nextRetries, id)
+	// A reconnection starts a new browsing session: the folders the previous
+	// channel read must not be served to this one.
+	m.forgetDirListingsLocked(id)
 	m.setStateLocked(id, func(s *Session) {
 		s.State = StateConnecting
+		s.ConnID = generation
 		s.Err = ""
 		// The previous device's identity must not linger while a new
 		// connection is being built.
@@ -684,6 +688,7 @@ func (m *Manager) Disconnect(ctx context.Context, id uuid.UUID) {
 	if m.isCurrentLocked(id, generation) {
 		m.setStateLocked(id, func(s *Session) {
 			s.State = StateDisconnected
+			s.ConnID = uuid.Nil
 			s.Serial = ""
 			s.Port = 0
 			s.Err = ""

@@ -8,8 +8,12 @@ import (
 
 // Session is everything the UI needs to render one device's channel.
 type Session struct {
-	State        ConnectionState
-	Serial       string // "127.0.0.1:<port>", empty when there is no channel
+	State  ConnectionState
+	Serial string // "127.0.0.1:<port>", empty when there is no channel
+	// ConnID is the channel this session's runtime facts belong to. The file
+	// page keys its per-device state on it, so a new connection starts clean
+	// instead of reusing the previous one's folders. Zero means no channel.
+	ConnID       uuid.UUID
 	Port         int
 	Model        string
 	Product      string

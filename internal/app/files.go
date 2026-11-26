@@ -21,6 +21,11 @@ import (
 // rows shared a key and a state, and the tree claimed they were siblings.
 var fileRoots = []string{"/"}
 
+// filePageRoot is where a fresh connection's file page starts. It is the device
+// root on purpose: /sdcard is what a remembered folder looks like, and every
+// device opening it read as "it copied the other device's state".
+const filePageRoot = "/"
+
 // FileDetail is the entry whose attribute dialog is open; nil closes it.
 type FileDetail struct {
 	Device uuid.UUID
@@ -42,6 +47,9 @@ const pullTimeout = 30 * time.Minute
 type fileState struct {
 	// treeWidth is the first pane of the split, in DIPs.
 	treeWidth float32
+	// conn is the connection this state belongs to. A new connection starts
+	// from filePageRoot instead of inheriting the previous one's folder.
+	conn uuid.UUID
 	// path is the directory the right pane lists.
 	path string
 	// selected is the row highlighted in the table.
@@ -71,13 +79,54 @@ func (vm *ViewModel) fileStateFor(device uuid.UUID) *fileState {
 	}
 	state, ok := vm.files[device]
 	if !ok {
-		state = &fileState{treeWidth: 240, path: "/sdcard", selected: "/sdcard", crumb: -1}
+		state = &fileState{treeWidth: 240, path: filePageRoot, selected: filePageRoot, crumb: -1, chosen: -1}
 		// Open the way down to the folder the page starts on, so the tree shows
 		// where that folder lives instead of a single closed row.
 		openTreeTo(state, state.path)
 		vm.files[device] = state
 	}
 	return state
+}
+
+// syncFileState returns the state of the connection now on screen, resetting it
+// when the device reconnected. A state created before its first frame (conn is
+// zero) is adopted rather than reset, so callers may prepare a folder up front.
+func (vm *ViewModel) syncFileState(device uuid.UUID, conn uuid.UUID) *fileState {
+	state := vm.fileStateFor(device)
+	switch {
+	case state.conn != uuid.Nil && state.conn != conn:
+		vm.resetFileState(device, state, conn)
+	default:
+		state.conn = conn
+	}
+	return state
+}
+
+// resetFileState drops everything the previous connection left: the folder, the
+// tree, the table and the cached failures. Its directory listings are dropped
+// by the manager when the new connection starts.
+func (vm *ViewModel) resetFileState(device uuid.UUID, state *fileState, conn uuid.UUID) {
+	width := state.treeWidth
+	*state = fileState{treeWidth: width, conn: conn, path: filePageRoot, selected: filePageRoot, crumb: -1, chosen: -1}
+	openTreeTo(state, state.path)
+	vm.forgetFileEntries(device)
+}
+
+// forgetFileEntries drops the per-path bookkeeping of one device.
+func (vm *ViewModel) forgetFileEntries(device uuid.UUID) {
+	prefix := device.String() + "|"
+	vm.fileMu.Lock()
+	for key := range vm.fileErrs {
+		if strings.HasPrefix(key, prefix) {
+			delete(vm.fileErrs, key)
+		}
+	}
+	for key := range vm.fileLoads {
+		if strings.HasPrefix(key, prefix) {
+			delete(vm.fileLoads, key)
+		}
+	}
+	vm.fileMu.Unlock()
 }
 
 // fileKey names one directory read, for the in-flight and failure maps.
@@ -198,7 +247,7 @@ func (vm *ViewModel) loadDir(profile core.Profile, path string, force bool) {
 
 // prefetchSkip are the pseudo filesystems a file manager has no use for: their
 // listings are huge, change constantly and cannot be opened as files.
-var prefetchSkip = map[string]bool{"/proc": true, "/sys": true, "/dev": true, "/acct": true}
+var prefetchSkip = map[string]bool{"/proc": true, "/sys": true, "/dev": true, "/acct": true, "/data": true}
 
 // prefetchParallel is the ceiling on read-ahead at once. Eight shell round trips
 // fill a tree in a fraction of the sequential time without burying the device's
@@ -311,7 +360,7 @@ func (vm *ViewModel) filesPage(c *ui.Context, profile core.Profile, session core
 		vm.filesOffline(c, session)
 		return
 	}
-	state := vm.fileStateFor(profile.ID)
+	state := vm.syncFileState(profile.ID, session.ConnID)
 	vm.ensureDirs(profile, state.path)
 	theme := c.Theme()
 	// The whole browser sits in one frame, the way the console does: a file
