@@ -198,10 +198,11 @@ type ViewModel struct {
 	// together with the reading they were decoded from.
 	appIcons map[string]iconAsset
 
-	// files holds the file page's state per device; fileLoads and fileErrs are
-	// keyed by "device|path" and filled from command goroutines, so they have
-	// a lock of their own rather than riding the manager's.
-	files     map[uuid.UUID]*fileState
+	// files holds each browser's state per device and pane (the file tab, and
+	// the transfer dialog's device picker); fileLoads and fileErrs are keyed by
+	// "device|path" and filled from command goroutines, so they have a lock of
+	// their own rather than riding the manager's.
+	files     map[filePaneKey]*fileState
 	fileMu    sync.Mutex
 	fileLoads map[string]bool
 	fileErrs  map[string]string

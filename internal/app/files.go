@@ -72,18 +72,50 @@ type fileState struct {
 	chosenPath string
 }
 
-// fileStateFor returns one device's page state, creating it on first use.
+// filePaneKey names one independent browser of one device: the file tab has
+// one, the transfer dialog's device picker has its own, so browsing in either
+// one never moves the other.
+type filePaneKey struct {
+	device uuid.UUID
+	pane   int
+}
+
+const (
+	filePanePage = iota
+	filePanePicker
+)
+
+func filePagePane(device uuid.UUID) filePaneKey {
+	return filePaneKey{device: device, pane: filePanePage}
+}
+func filePickerPane(device uuid.UUID) filePaneKey {
+	return filePaneKey{device: device, pane: filePanePicker}
+}
+
+// fileStateFor returns the file page's state of one device, creating it on
+// first use.
 func (vm *ViewModel) fileStateFor(device uuid.UUID) *fileState {
+	return vm.paneStateFor(filePagePane(device))
+}
+
+// pickerStateFor returns the transfer dialog's device picker of one device. It
+// is a browser of its own: opening a folder in the picker leaves the page where
+// the user was reading.
+func (vm *ViewModel) pickerStateFor(device uuid.UUID) *fileState {
+	return vm.paneStateFor(filePickerPane(device))
+}
+
+func (vm *ViewModel) paneStateFor(key filePaneKey) *fileState {
 	if vm.files == nil {
-		vm.files = map[uuid.UUID]*fileState{}
+		vm.files = map[filePaneKey]*fileState{}
 	}
-	state, ok := vm.files[device]
+	state, ok := vm.files[key]
 	if !ok {
 		state = &fileState{treeWidth: 240, path: filePageRoot, selected: filePageRoot, crumb: -1, chosen: -1}
 		// Open the way down to the folder the page starts on, so the tree shows
 		// where that folder lives instead of a single closed row.
 		openTreeTo(state, state.path)
-		vm.files[device] = state
+		vm.files[key] = state
 	}
 	return state
 }
@@ -92,10 +124,14 @@ func (vm *ViewModel) fileStateFor(device uuid.UUID) *fileState {
 // when the device reconnected. A state created before its first frame (conn is
 // zero) is adopted rather than reset, so callers may prepare a folder up front.
 func (vm *ViewModel) syncFileState(device uuid.UUID, conn uuid.UUID) *fileState {
-	state := vm.fileStateFor(device)
+	return vm.syncPaneState(filePagePane(device), conn)
+}
+
+func (vm *ViewModel) syncPaneState(key filePaneKey, conn uuid.UUID) *fileState {
+	state := vm.paneStateFor(key)
 	switch {
 	case state.conn != uuid.Nil && state.conn != conn:
-		vm.resetFileState(device, state, conn)
+		vm.resetFileState(key.device, state, conn)
 	default:
 		state.conn = conn
 	}
@@ -513,10 +549,47 @@ func (vm *ViewModel) folderRow(c *ui.Context, profile core.Profile, state *fileS
 	}
 }
 
-// fileTable is the right pane: the entries of the selected directory.
+// fileTable is the page's right pane: the entries of the selected directory.
 func (vm *ViewModel) fileTable(c *ui.Context, profile core.Profile, state *fileState) {
+	vm.fileBrowser(c, profile, state, fileBrowserOptions{
+		Label:    "设备文件列表",
+		Unframed: true,
+		Actions: func() {
+			if actionButton(c, lucide.RefreshCw, "刷新", components.ButtonSecondary).Clicked() {
+				vm.reloadDir(profile, state.path)
+			}
+			if actionButton(c, lucide.Upload, "上传到此文件夹…", components.ButtonSecondary).Clicked() {
+				vm.pushInto(profile, state.path)
+			}
+		},
+	})
+}
+
+// fileBrowserOptions says how one caller of the browser differs: the file page
+// offers refresh and upload, the transfer dialog's picker offers 选定.
+type fileBrowserOptions struct {
+	// Label is the table's accessible name.
+	Label string
+	// Actions is drawn to the right of the breadcrumbs.
+	Actions func()
+	// Choose, when non-nil, replaces the page's activation rule: a row click
+	// calls it instead of opening the entry.
+	Choose func(core.RemoteEntry)
+	// Unframed skips tableCard's border: the page draws its own frame.
+	Unframed bool
+}
+
+// fileBrowser draws one folder of a device: breadcrumbs, the caller's actions,
+// the listing of state.path, and what a row activation does. The page and the
+// transfer dialog's picker share it, so the two can never list a folder
+// differently.
+func (vm *ViewModel) fileBrowser(c *ui.Context, profile core.Profile, state *fileState, opts fileBrowserOptions) {
 	theme := c.Theme()
 	key := fileKey(profile.ID, state.path)
+	choose := opts.Choose
+	if choose == nil {
+		choose = func(entry core.RemoteEntry) { vm.activateEntry(profile, state, entry) }
+	}
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(6).Padding(6, 4, 6, 6).Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			// The path is a breadcrumb: every ancestor is a way back, which is
@@ -527,11 +600,8 @@ func (vm *ViewModel) fileTable(c *ui.Context, profile core.Profile, state *fileS
 					vm.showDir(profile, state, remoteTrailPath(trail, state.crumb))
 				}
 			})
-			if actionButton(c, lucide.RefreshCw, "刷新", components.ButtonSecondary).Clicked() {
-				vm.reloadDir(profile, state.path)
-			}
-			if actionButton(c, lucide.Upload, "上传到此文件夹…", components.ButtonSecondary).Clicked() {
-				vm.pushInto(profile, state.path)
+			if opts.Actions != nil {
+				opts.Actions()
 			}
 		})
 
@@ -584,8 +654,7 @@ func (vm *ViewModel) fileTable(c *ui.Context, profile core.Profile, state *fileS
 		// pointer's click.
 		opened := -1
 		tableCard(c, &state.table, fileColumns(), len(listing.Entries), tableOptions{
-			// The pane is already inside the browser's 1 DIP frame.
-			Label: "设备文件列表", Grow: true, Unframed: true,
+			Label: opts.Label, Grow: true, Unframed: opts.Unframed,
 		}, func(row, col int) {
 			entry := listing.Entries[row]
 			cell := ui.Row(c).FillWidth().MinWidth(0).Children(func() {
@@ -596,8 +665,50 @@ func (vm *ViewModel) fileTable(c *ui.Context, profile core.Profile, state *fileS
 			}
 		})
 		if opened >= 0 && opened < len(listing.Entries) {
-			vm.activateEntry(profile, state, listing.Entries[opened])
+			state.selected = listing.Entries[opened].Path
+			choose(listing.Entries[opened])
 		}
+	})
+}
+
+// pickerMode decides what the picker lets the user choose.
+type pickerMode int
+
+const (
+	// pickFolder is an upload destination: only the current folder counts.
+	pickFolder pickerMode = iota
+	// pickEntry is a download source: a file can be chosen directly, or the
+	// current folder.
+	pickEntry
+)
+
+// pickerPane draws the device browser inside the transfer dialog: the same tree
+// and the same table as the page, with its own state and its own activation
+// rule. onChoose receives the entry a click landed on; nil leaves clicks inert.
+func (vm *ViewModel) pickerPane(c *ui.Context, profile core.Profile, state *fileState, mode pickerMode, onChoose func(core.RemoteEntry)) {
+	theme := c.Theme()
+	ui.Column(c).FillWidth().Height(380).Padding(1).
+		Radius(theme.Radius).Border(1, theme.Border).Clip().Children(func() {
+		choose := func(entry core.RemoteEntry) {
+			if mode == pickEntry && onChoose != nil {
+				onChoose(entry)
+			}
+		}
+		components.Split(c, &state.treeWidth,
+			func() { vm.folderTree(c, profile, state) },
+			func() {
+				vm.fileBrowser(c, profile, state, fileBrowserOptions{
+					Label:  "选择设备路径列表",
+					Choose: choose,
+					Actions: func() {
+						if actionButton(c, lucide.RefreshCw, "刷新", components.ButtonSecondary).Clicked() {
+							vm.reloadDir(profile, state.path)
+						}
+					},
+				})
+			},
+			components.SplitOptions{FirstMin: 160, SecondMin: 300, Default: 220},
+		).FillWidth().Height(376)
 	})
 }
 

@@ -888,3 +888,36 @@ func TestFilePageReturnsToTheRootForANewConnection(t *testing.T) {
 		t.Fatalf("the old folder's rows are still on screen; texts = %v", tt.Texts())
 	}
 }
+
+// 同一个设备可以有两个独立浏览器：文件页与「选择设备路径」。
+func TestPickerKeepsItsOwnFolder(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	profile := vm.Manager.Profiles()[0]
+	picker := vm.pickerStateFor(profile.ID)
+	vm.showDir(profile, vm.fileStateFor(profile.ID), "/sdcard/Download")
+	vm.showDir(profile, picker, "/system")
+
+	if got := vm.fileStateFor(profile.ID).path; got != "/sdcard/Download" {
+		t.Fatalf("the file page moved with the picker: %q", got)
+	}
+	if got := picker.path; got != "/system" {
+		t.Fatalf("the picker lost its own folder: %q", got)
+	}
+}
+
+// 文件页与选择器共用一套渲染：选择器里的表格也用同一套列。
+func TestPickerRendersTheSameColumnsAsTheFilePage(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	profile := vm.Manager.Profiles()[0]
+	picker := vm.pickerStateFor(profile.ID)
+	vm.showDir(profile, picker, "/sdcard")
+	tt := ui.NewTester(func(c *ui.Context) {
+		vm.pickerPane(c, profile, picker, pickFolder, nil)
+	}, 760, 420)
+	waitForText(t, tt, "照片.jpg")
+	for _, want := range []string{"名称", "大小", "修改时间", "权限", "sdcard"} {
+		if !tt.HasText(want) {
+			t.Fatalf("the picker has no %q; texts = %v", want, tt.Texts())
+		}
+	}
+}
