@@ -649,17 +649,40 @@ func (vm *ViewModel) fileBrowser(c *ui.Context, profile core.Profile, state *fil
 		// file manager's do. Changed reports both, RowClicked only the
 		// pointer's click.
 		opened := -1
-		tableCard(c, &state.table, fileColumns(), len(listing.Entries), tableOptions{
+		table := tableCard(c, &state.table, fileColumns(), len(listing.Entries), tableOptions{
 			Label: opts.Label, Grow: true, Unframed: opts.Unframed,
 		}, func(row, col int) {
 			entry := listing.Entries[row]
-			cell := ui.Row(c).FillWidth().MinWidth(0).Children(func() {
-				vm.fileCell(c, col, entry)
-			})
+			// RowClicked only reports from the element under the pointer, so
+			// the cell's content has to be as wide as the cell, padding
+			// included: otherwise a click beside the text highlights the row
+			// and nothing else, which reads as "it selected instead of
+			// entering". Grow takes the column's free width; the negative
+			// margin takes back the padding the table puts around a cell.
+			// RowClicked only reports from the element under the pointer, so
+			// the cell's content has to be as big as the cell: as wide as the
+			// column (Grow, plus the padding the table puts around a cell) and
+			// as tall as the row (Space(8), the theme's least row height).
+			// Otherwise a click beside the text, or on a row's bottom edge,
+			// only highlights the row, which reads as "it selected instead of
+			// entering".
+			cell := ui.Box(c).Grow(1).MinWidth(0).
+				Height(c.Theme().Space(8)).
+				Margin(-c.Theme().Space(2.5)).
+				Children(func() {
+					ui.Row(c).FillWidth().Children(func() { vm.fileCell(c, col, entry) })
+				})
 			if cell.RowClicked() && opened < 0 {
 				opened = row
 			}
 		})
+		// A click only reports from the cell's content (mygo asks the element
+		// under the pointer), so a click in the row's padding just chooses the
+		// row. The second click, or Enter, arrives through Submitted: taking it
+		// keeps "clicked the folder, it only selected" from sticking.
+		if opened < 0 && table.Submitted() {
+			opened = state.chosen
+		}
 		if opened >= 0 && opened < len(listing.Entries) {
 			state.selected = listing.Entries[opened].Path
 			choose(listing.Entries[opened])

@@ -921,3 +921,68 @@ func TestPickerRendersTheSameColumnsAsTheFilePage(t *testing.T) {
 		}
 	}
 }
+
+// pickerFixture is a picker on / whose tree shows one folded root, so a click
+// can only land on the table's rows.
+func pickerFixture(t *testing.T) (*ui.Tester, *fileState) {
+	t.Helper()
+	vm, _ := newFilesViewModel(t, readFixture)
+	profile := vm.Manager.Profiles()[0]
+	picker := vm.pickerStateFor(profile.ID)
+	vm.showDir(profile, picker, "/")
+	picker.tree.Open.Remove("/")
+	tt := ui.NewTester(func(c *ui.Context) {
+		vm.pickerPane(c, profile, picker, pickFolder, nil)
+	}, 760, 420)
+	waitForText(t, tt, "system")
+	return tt, picker
+}
+
+// 单击行内任意位置都要进得去，包括文字下沿那片留白：用户点的是「这一行」，
+// 不是「这一行的字」。（曾经点下沿只会选中，看起来像点不动。）
+func TestClickOnTheBottomEdgeOfARowOpensTheFolder(t *testing.T) {
+	for _, dy := range []float32{4, 6, 8, 10} {
+		tt, picker := pickerFixture(t)
+		rect, ok := tt.Find("system")
+		if !ok {
+			t.Fatal("the picker table has no system row")
+		}
+		tt.ClickAt(rect.X+40, rect.Y+rect.H+dy)
+		tt.Frame()
+		tt.Frame()
+		if picker.path != "/system" {
+			t.Fatalf("a click %.0f DIP below the label did not open the folder: path=%q chosen=%d", dy, picker.path, picker.chosen)
+		}
+	}
+}
+
+// 选中一行后按回车也进去：键盘用户没有指针可点。（表格的 Submitted。）
+func TestEnterOpensTheChosenFolder(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	profile := vm.Manager.Profiles()[0]
+	picker := vm.pickerStateFor(profile.ID)
+	vm.showDir(profile, picker, "/sdcard")
+	tt := ui.NewTester(func(c *ui.Context) {
+		vm.pickerPane(c, profile, picker, pickFolder, nil)
+	}, 760, 420)
+	waitForText(t, tt, "照片.jpg")
+
+	// 点一个文件行：它不进入（上传目标只能是目录），但表格拿到焦点并选中该行。
+	file, ok := tt.Find("log.txt")
+	if !ok {
+		t.Fatal("the picker has no log.txt row")
+	}
+	tt.ClickAt(file.X+20, file.Y+file.H/2)
+	tt.Frame()
+	if picker.path != "/sdcard" {
+		t.Fatalf("clicking a file left the folder: %q", picker.path)
+	}
+	// 上移一行到 Download（log.txt 的上一行），回车进入。
+	tt.Key(0, ui.KeyUp)
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	tt.Frame()
+	if picker.path != "/sdcard/Download" {
+		t.Fatalf("Enter on the chosen row did not open it: path=%q chosen=%d", picker.path, picker.chosen)
+	}
+}
