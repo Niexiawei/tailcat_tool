@@ -38,6 +38,25 @@ type installDraft struct {
 	Loading bool
 	// Err is why the last step failed: the read, or the task start.
 	Err string
+	// Stage is the dialog's phase: form, then running. The result is read off
+	// the task list, the way the transfer dialog does it.
+	Stage   int
+	TaskIDs []uuid.UUID
+	Started time.Time
+}
+
+// installNote is the running stage's second line: which user the package goes
+// to, when the dialog knew one.
+func installNote(state *installDraft) string {
+	if state == nil || !state.Chosen {
+		return ""
+	}
+	for _, user := range state.Users {
+		if user.ID == state.UserID {
+			return "安装到用户 " + installUserLabel(user)
+		}
+	}
+	return ""
 }
 
 // openInstallDialog shows the dialog — the file is chosen inside it — and reads
@@ -127,7 +146,7 @@ func (vm *ViewModel) submitInstall(state *installDraft) {
 		vm.requestFrame()
 		return
 	}
-	_, err := vm.Manager.BeginADBTask(context.Background(), state.Device,
+	taskID, err := vm.Manager.BeginADBTask(context.Background(), state.Device,
 		"安装 "+fileName(state.Path), installArgs(state.Path, state.UserID, state.Chosen), installTimeout)
 	vm.installMu.Lock()
 	if vm.APKInstall != state {
@@ -140,7 +159,11 @@ func (vm *ViewModel) submitInstall(state *installDraft) {
 		vm.requestFrame()
 		return
 	}
-	vm.APKInstall = nil
+	// The dialog stays: the install reports itself here, in the same window the
+	// user pressed 安装 in.
+	state.TaskIDs = []uuid.UUID{taskID}
+	state.Started = time.Now()
+	state.Stage = transferStageRunning
 	vm.installMu.Unlock()
 	vm.requestFrame()
 }
@@ -174,6 +197,10 @@ func (vm *ViewModel) InstallView(c *ui.Context) {
 		panel.Padding(20).Gap(10).Width(480)
 		panel.Children(func() {
 			components.Text(c, "安装 APK").FontSize(18).Bold()
+			if state != nil && state.Stage == transferStageRunning {
+				vm.installRunning(c, state)
+				return
+			}
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				components.Text(c, "APK 文件").FontSize(11).Width(70).Shrink(0)
 				if path == "" {
@@ -252,6 +279,64 @@ func (vm *ViewModel) InstallView(c *ui.Context) {
 	if _, live := vm.installSnapshot(); !open && live {
 		vm.closeInstallDialog(state)
 	}
+}
+
+// installRunning draws the batch in the dialog that started it: the same bar
+// the transfer dialog uses, so the two never disagree about progress.
+func (vm *ViewModel) installRunning(c *ui.Context, state *installDraft) {
+	batch := taskBatch{
+		Device:  state.Device,
+		Title:   "安装 " + fileName(state.Path),
+		Note:    installNote(state),
+		Kind:    taskInstall,
+		Tasks:   state.TaskIDs,
+		Started: state.Started,
+	}
+	tasks := vm.Manager.Tasks()
+	view := batchSnapshot(batch, tasks, fileSize)
+	components.Text(c, batch.Title).FontSize(11)
+	if batch.Note != "" {
+		components.Text(c, batch.Note).FontSize(11).TextColor(c.Theme().TextMuted)
+	}
+	switch view.State {
+	case core.TaskSucceeded:
+		components.Text(c, "已完成").FontSize(11)
+	case core.TaskFailed:
+		components.Text(c, "安装失败："+orPlaceholder(view.Reason, "任务失败")).FontSize(11)
+	case core.TaskCancelled:
+		components.Text(c, "已取消").FontSize(11)
+	default:
+		progressBlock(c, batch, tasks, fileSize)
+	}
+	ui.Row(c).FillWidth().Gap(8).Children(func() {
+		if view.State == core.TaskRunning {
+			if components.Button(c, "取消", components.ButtonOutline).Clicked() {
+				vm.cancelInstall(state)
+			}
+			if components.Button(c, "关闭", components.ButtonOutline).Clicked() {
+				vm.closeInstallDialog(state)
+			}
+			return
+		}
+		if components.Button(c, "关闭", components.ButtonPrimary).Clicked() {
+			vm.closeInstallDialog(state)
+		}
+	})
+}
+
+// cancelInstall stops the install and closes the dialog; closing without 取消
+// leaves the task running, which the log page's task list shows.
+func (vm *ViewModel) cancelInstall(state *installDraft) {
+	vm.installMu.Lock()
+	ids := append([]uuid.UUID(nil), state.TaskIDs...)
+	if vm.APKInstall == state {
+		vm.APKInstall = nil
+	}
+	vm.installMu.Unlock()
+	for _, id := range ids {
+		vm.Manager.CancelTask(id)
+	}
+	vm.requestFrame()
 }
 
 // installUserChoiceLabel is the picker's closed state: the label of the chosen
