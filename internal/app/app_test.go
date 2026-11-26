@@ -451,6 +451,13 @@ func (r *recordingRunner) commandLog() []string {
 func newRunnerViewModel(t *testing.T, fn func(core.Command) (core.Result, error), opts ...func(*core.ManagerOptions)) (*ViewModel, func() []string) {
 	t.Helper()
 	runner := &recordingRunner{fn: fn}
+	return newViewModelWithRunner(t, runner, opts...), runner.commandLog
+}
+
+// newViewModelWithRunner builds a view model whose manager answers adb with
+// runner, so a test can script progress lines and hold a task open.
+func newViewModelWithRunner(t *testing.T, runner core.Runner, opts ...func(*core.ManagerOptions)) *ViewModel {
+	t.Helper()
 	creds := core.NewMemoryCredentialStore()
 	profile := core.Profile{ID: uuid.New(), Name: "E245", RemotePort: 5555}
 	if err := creds.Write(testAddress, profile.ID); err != nil {
@@ -471,8 +478,7 @@ func newRunnerViewModel(t *testing.T, fn func(core.Command) (core.Result, error)
 		opt(&mo)
 	}
 	m := core.NewManager(mo)
-	vm := NewViewModel(m, func(string) (string, bool) { return "", false })
-	return vm, runner.commandLog
+	return NewViewModel(m, func(string) (string, bool) { return "", false })
 }
 
 func TestTaskPanelIsGone(t *testing.T) {

@@ -69,11 +69,11 @@ type ViewModel struct {
 	EditorDraft EditorInput
 	EditorError string
 
-	TransferOpen       bool
-	TransferUpload     bool
-	TransferLocalPath  string
-	TransferRemotePath string
-	TransferError      string
+	// Transfer is the 「上传文件」/「下载文件」 dialog; nil closes it. transferMu
+	// guards it: the path pickers and the device browser write it from the
+	// render thread while tests read it.
+	Transfer   *transferDraft
+	transferMu sync.Mutex
 
 	// APK is the 「保存 APK」 dialog; nil closes it. apkMu guards it because
 	// the path lookup and the pull run on goroutines.

@@ -20,7 +20,7 @@ func TestDialogsCloseWithoutPanic(t *testing.T) {
 		close func(*ViewModel)
 	}{
 		{"device editor", func(vm *ViewModel) { vm.openEditor(&EditorRequest{}) }, func(vm *ViewModel) { vm.PendingEditor = nil }},
-		{"transfer", func(vm *ViewModel) { vm.TransferOpen = true }, func(vm *ViewModel) { vm.TransferOpen = false }},
+		{"transfer", func(vm *ViewModel) { vm.openTransfer(vm.Selection, true) }, func(vm *ViewModel) { vm.closeTransfer() }},
 		{"reachability", func(vm *ViewModel) { vm.ReachabilityOpen = true }, func(vm *ViewModel) { vm.ReachabilityOpen = false }},
 		{"attention", func(vm *ViewModel) {
 			vm.Manager.ForceAttentionForTest(vm.Manager.Profiles()[0].ID, core.AttentionSerialDetached, "本地 ADB 入口已被外部移除")

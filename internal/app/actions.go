@@ -50,41 +50,15 @@ var pickAPKFile = func(title string) (string, bool) {
 	return paths[0], true
 }
 
-// chooseUpload asks for a local path and uploads it.
+// chooseUpload opens the upload dialog: the files are chosen inside it, so the
+// local picks and the device folder are visible together before anything runs.
 func (vm *ViewModel) chooseUpload(profile core.Profile) {
-	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-		Title:     "选择上传到 " + profile.Name + " 的文件或文件夹",
-		Directory: true,
-	})
-	if err != nil || len(paths) == 0 {
-		return
-	}
-	vm.TransferOpen = true
-	vm.TransferUpload = true
-	vm.TransferLocalPath = paths[0]
-	vm.TransferRemotePath = "/sdcard/Download/"
-	vm.TransferError = ""
+	vm.openTransfer(profile.ID, true)
 }
 
-// startDownload asks for the remote path and a local folder, then pulls.
+// startDownload opens the download dialog: both paths are chosen inside it.
 func (vm *ViewModel) startDownload(profile core.Profile) {
-	vm.TransferOpen = true
-	vm.TransferUpload = false
-	vm.TransferLocalPath = ""
-	vm.TransferRemotePath = "/sdcard/Download/"
-	vm.TransferError = ""
-}
-
-// chooseDownloadFolder asks where to put a pulled file or directory.
-func (vm *ViewModel) chooseDownloadFolder() {
-	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-		Title:     "选择保存目录",
-		Directory: true,
-	})
-	if err != nil || len(paths) == 0 {
-		return
-	}
-	vm.TransferLocalPath = paths[0]
+	vm.openTransfer(profile.ID, false)
 }
 
 func fileName(path string) string {

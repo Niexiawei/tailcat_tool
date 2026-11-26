@@ -38,10 +38,6 @@ var (
 	saveLocalPath  = mygo.Dialog.Save
 )
 
-// pullTimeout bounds one download; a folder of photos through a relay is not
-// fast, and the task stays cancellable meanwhile.
-const pullTimeout = 30 * time.Minute
-
 // fileState is one device's file page state. Everything that is not device data
 // lives here, so the page stays a function of state.
 type fileState struct {
@@ -566,7 +562,7 @@ func (vm *ViewModel) fileTable(c *ui.Context, profile core.Profile, state *fileS
 }
 
 // fileBrowserOptions says how one caller of the browser differs: the file page
-// offers refresh and upload, the transfer dialog's picker offers 选定.
+// offers refresh and upload, the transfer dialog's picker chooses a row.
 type fileBrowserOptions struct {
 	// Label is the table's accessible name.
 	Label string
@@ -690,6 +686,13 @@ func (vm *ViewModel) pickerPane(c *ui.Context, profile core.Profile, state *file
 	ui.Column(c).FillWidth().Height(380).Padding(1).
 		Radius(theme.Radius).Border(1, theme.Border).Clip().Children(func() {
 		choose := func(entry core.RemoteEntry) {
+			// A folder is a step, not an answer: both callers walk into it the
+			// same way the page does. Only a file is a choice, and only a
+			// download's picker takes one.
+			if entry.Folder() {
+				vm.showDir(profile, state, entry.Path)
+				return
+			}
 			if mode == pickEntry && onChoose != nil {
 				onChoose(entry)
 			}
@@ -816,16 +819,18 @@ func (vm *ViewModel) pushInto(profile core.Profile, remoteDir string) {
 	if err != nil || len(paths) == 0 {
 		return
 	}
+	var locals []string
 	for _, local := range paths {
-		if local == "" {
-			continue
-		}
-		if _, err := vm.Manager.BeginADBTask(context.Background(), profile.ID, "上传 "+fileName(local),
-			[]string{"push", local, remoteDir}, pullTimeout); err != nil {
-			vm.Fail(err)
-			return
+		if local != "" {
+			locals = append(locals, local)
 		}
 	}
+	if len(locals) == 0 {
+		return
+	}
+	// Both paths are already answered here, so the dialog opens on its running
+	// stage: the batch needs somewhere to show its progress.
+	vm.beginTransferFromPage(profile.ID, true, locals, remoteDir)
 }
 
 // pullEntry downloads one entry: a save dialog for a file, a folder picker for
@@ -858,10 +863,7 @@ func (vm *ViewModel) startPull(profile core.Profile, entry core.RemoteEntry, loc
 		vm.Fail(err)
 		return
 	}
-	if _, err := vm.Manager.BeginADBTask(context.Background(), profile.ID, "下载 "+entry.Name,
-		[]string{"pull", entry.Path, local}, pullTimeout); err != nil {
-		vm.Fail(err)
-	}
+	vm.beginTransferFromPage(profile.ID, false, []string{local}, entry.Path)
 }
 
 // FileDetailView draws the entry dialog: the attributes Android can report, and
