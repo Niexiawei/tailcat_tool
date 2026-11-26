@@ -1116,7 +1116,7 @@ func (m *Manager) validateTargetLocked(ctx context.Context, id uuid.UUID, serial
 	m.notify()
 	m.mu.Unlock()
 	if state == StateOffline {
-		return Error("该设备的 ADB 尚未进入 device 状态")
+		return ErrDeviceNotReady
 	}
 	return nil
 }

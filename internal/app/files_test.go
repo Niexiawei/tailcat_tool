@@ -816,3 +816,27 @@ func TestFileTreePrefetchesInParallel(t *testing.T) {
 		t.Fatalf("peak %d folder reads in flight, want at most %d", got, prefetchParallel)
 	}
 }
+
+// 重连来临时正在进行的目录读取会撞上「还没进 device 状态」。那是过渡态：
+// 页面不许留下「读取失败」，连接恢复后自己重读。
+func TestFileReadDuringAReconnectIsNotAFailure(t *testing.T) {
+	vm, _ := newFilesViewModel(t, readFixture)
+	profile := vm.Manager.Profiles()[0]
+	tt := ui.NewTester(vm.ContentView, 1000, 760)
+	waitForText(t, tt, "照片.jpg")
+
+	vm.Manager.ForceSessionStateForTest(profile.ID, core.StateConnecting, "")
+	vm.loadDir(profile, "/sdcard", true)
+	waitUntil(t, "the blocked read to finish", func() bool {
+		return !vm.fileLoading(fileKey(profile.ID, "/sdcard"))
+	})
+	if reason := vm.fileFailure(fileKey(profile.ID, "/sdcard")); reason != "" {
+		t.Fatalf("a transition state was cached as a failure: %q", reason)
+	}
+
+	vm.Manager.ForceSessionStateForTest(profile.ID, core.StateOnline, "")
+	tt.Frame()
+	if joined := strings.Join(tt.Texts(), "\n"); strings.Contains(joined, "读取失败") {
+		t.Fatalf("the page kept a failure from a reconnect; texts = %v", tt.Texts())
+	}
+}

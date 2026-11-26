@@ -85,6 +85,13 @@ func fileKey(device uuid.UUID, path string) string {
 	return device.String() + "|" + path
 }
 
+// transientFileError reports a read that failed only because the channel was
+// changing: a cancelled read, or one that arrived before ADB reached `device`.
+// Neither is the folder's fault, so neither is cached as a failure.
+func transientFileError(err error) bool {
+	return errors.Is(err, core.ErrCancelled) || errors.Is(err, core.ErrDeviceNotReady)
+}
+
 // beginFileLoad claims one directory read, reporting false when one is already
 // running: expanding a node twice must not send the command twice.
 func (vm *ViewModel) beginFileLoad(key string) bool {
@@ -174,9 +181,10 @@ func (vm *ViewModel) loadDir(profile core.Profile, path string, force bool) {
 	vm.clearFileFailure(key)
 	go func() {
 		listing, err := vm.Manager.ListRemoteDir(context.Background(), profile.ID, path)
-		// A cancelled read means the device went away mid-listing, which the
-		// page already says with its own state; it is not a failure to report.
-		if errors.Is(err, core.ErrCancelled) {
+		// A read that only lost the channel is not the folder's fault: the page
+		// says so with its own state, and reading again once the device is back
+		// is the fix. Caching it as a failure would pin the pane on 「读取失败」.
+		if transientFileError(err) {
 			err = nil
 		}
 		vm.endFileLoad(key, err)
@@ -241,9 +249,9 @@ func (vm *ViewModel) prefetchDir(profile core.Profile, path string) {
 		return
 	}
 	_, err := vm.Manager.ListRemoteDir(context.Background(), profile.ID, path)
-	// A cancelled read means the device went away mid-listing, which the page
-	// already says with its own state; it is not a failure to report.
-	if errors.Is(err, core.ErrCancelled) {
+	// Same rule as loadDir: a channel that changed under a read-ahead is not a
+	// failure of the folder.
+	if transientFileError(err) {
 		err = nil
 	}
 	vm.endFileLoad(key, err)

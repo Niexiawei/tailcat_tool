@@ -106,14 +106,14 @@ func (m *Manager) operationTarget(ctx context.Context, id uuid.UUID) (operationT
 	}
 	session := m.sessionLocked(id)
 	if session.State.Busy() {
-		return operationTarget{}, Error("该设备的 ADB 尚未进入 device 状态")
+		return operationTarget{}, ErrDeviceNotReady
 	}
 	runtime, ok := m.runtimes[id]
 	if !ok || runtime.serial == "" {
 		return operationTarget{}, Error("设备通道已结束，请重新连接")
 	}
 	if session.State != StateOnline {
-		return operationTarget{}, Error("该设备的 ADB 尚未进入 device 状态")
+		return operationTarget{}, ErrDeviceNotReady
 	}
 	return operationTarget{Serial: runtime.serial, ADB: runtime.adb, Generation: runtime.generation}, nil
 }
